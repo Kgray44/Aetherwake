@@ -67,6 +67,11 @@ function unique(items, identity) {
   return { items: [...retained.values()], conflicts: rejected.size };
 }
 
+export function uniqueEngineeringEvents(events) {
+  return unique(events, event => typeof event.event_id === 'string' && event.event_id ?
+    JSON.stringify([event.task_id, event.event_id]) : null);
+}
+
 function githubGroup(group, kind) {
   const status = FEED_STATES.has(group?.status) && Array.isArray(group.items) ? group.status : 'unavailable';
   const { items, conflicts } = unique(status === 'unavailable' ? [] : group.items, item => activityId(kind, item));
@@ -175,7 +180,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
   const traceSource = Array.isArray(events);
   const recordData = unique(recordSource ? records : [], record => typeof record.id === 'string' && record.id ?
     JSON.stringify([record.record_type, record.id]) : null);
-  const eventData = unique(traceSource ? events : [], event => typeof event.event_id === 'string' && event.event_id ? event.event_id : null);
+  const eventData = uniqueEngineeringEvents(traceSource ? events : []);
   const byType = type => recordData.items.filter(record => record.record_type === type);
   const tasks = byType('task'), attempts = byType('attempt'), evidence = byType('evidence');
   const attemptsById = new Map(attempts.map(attempt => [attempt.id, attempt]));

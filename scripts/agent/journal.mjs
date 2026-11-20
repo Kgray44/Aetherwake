@@ -125,9 +125,9 @@ export async function readJournal(directory, { maxEvents, maxBytes, missingOk = 
 }
 const phases = new Set(['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other']);
 const states = new Set(['created','ready','assigned','started','blocked','verifying','integrated','completed','accepted','failed','interrupted','cancelled','restarted','resumed']);
-export function traceEvent({task, attemptId, traceId, spanId, parentSpanId, kind, phase='other', state, measurements=[], eventId=randomUUID(), occurredAt=new Date().toISOString()}) {
+export function traceEvent({task, attemptId, sessionId, traceId, spanId, parentSpanId, kind, phase='other', state, measurements=[], eventId=randomUUID(), occurredAt=new Date().toISOString()}) {
   if (!task?.id || !['lifecycle','span_start','span_end','measurement'].includes(kind) || !phases.has(phase) || state && !states.has(state)) throw Error('Invalid trace event');
-  return {trace_version:1,event_id:eventId,task_id:task.id,...attemptId?{attempt_id:attemptId}:{},trace_id:traceId||task.id,span_id:spanId||eventId,...parentSpanId?{parent_span_id:parentSpanId}:{},repository:task.repository,revision:task.revision,occurred_at:occurredAt,kind,phase,...state?{state}:{},measurements};
+  return {trace_version:1,event_id:eventId,task_id:task.id,...attemptId?{attempt_id:attemptId}:{},...sessionId?{session_id:sessionId}:{},trace_id:traceId||task.id,span_id:spanId||eventId,...parentSpanId?{parent_span_id:parentSpanId}:{},repository:task.repository,revision:task.revision,occurred_at:occurredAt,kind,phase,...state?{state}:{},measurements};
 }
 export function summarize(events) {
   const starts = new Map(), phaseMs = {}, incomplete = new Set();

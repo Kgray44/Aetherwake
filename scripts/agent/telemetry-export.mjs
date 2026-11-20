@@ -3,7 +3,7 @@ const hash = v => typeof v==='string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/
 const safeRef = (ref,index=0) => ({kind:'artifact',uri:'private-ref:'+index,...(hash(ref.revision)?{revision:ref.revision}:{})});
 const token = (v) => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(v);
 const pick = (v, keys) => Object.fromEntries(keys.filter(k=>v[k]!==undefined).map(k=>[k,v[k]]));
-const eventKeys = ['trace_version','event_id','task_id','attempt_id','trace_id','span_id','parent_span_id','repository','revision','occurred_at','kind','phase','state','measurements'];
+const eventKeys = ['trace_version','event_id','task_id','attempt_id','session_id','trace_id','span_id','parent_span_id','repository','revision','occurred_at','kind','phase','state','measurements'];
 export function sanitizeExport({ repository, records=[], events=[] }) {
  const safeRecords = records.map(r => {
    if(r.record_type==='task'&&r.state==='accepted')throw Error('Accepted Task requires independent owner evidence; not exportable by this adapter');
@@ -37,6 +37,7 @@ export function validateExport(e) {
  for(const event of e.events) {
   if(event.state==='accepted')throw Error('Accepted trace requires independent owner evidence');
   if(Object.keys(event).some(k=>!eventKeys.includes(k))||event.trace_version!==1||!token(event.event_id)||!token(event.task_id)||!token(event.trace_id)||!token(event.span_id)||event.repository!==e.repository||!hash(event.revision)||!['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other'].includes(event.phase)||(event.state!==undefined&&!['created','ready','assigned','started','blocked','verifying','integrated','completed','accepted','failed','interrupted','cancelled','restarted','resumed'].includes(event.state))||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(event.occurred_at)||!Number.isFinite(Date.parse(event.occurred_at))||!['lifecycle','span_start','span_end','measurement'].includes(event.kind)) throw Error('Invalid trace');
+  if(event.session_id!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(event.session_id))throw Error('Unsafe executor session identifier');
   for(const key of ['attempt_id','parent_span_id'])if(event[key]!==undefined&&!token(event[key]))throw Error('Unsafe optional trace identifier');
   event.measurements.forEach(sanitizeMeasurement);
  }

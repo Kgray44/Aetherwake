@@ -29,6 +29,10 @@
       "type": "string",
       "minLength": 1
     },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    },
     "trace_id": {
       "type": "string",
       "minLength": 1

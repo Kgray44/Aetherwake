@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { taskEngineeringActivity } from './src/task-activity.mjs';
 import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
 import { taskReportDefinition } from './src/task-report.mjs';
+import { taskUsageAccounting } from './src/task-usage-accounting.mjs';
 
 test('linked work before and after execution is shared by the chronology and report', () => {
   const task={id:'task_activity',created_at:'2026-01-02T00:00:00Z',title:'Review changes',objective:'Review linked activity'};
@@ -274,6 +275,48 @@ test('App Server totals populate the same attempt token rows without adding to C
   assert.deepEqual(build(cli,[receipt]),[cli]);
   assert.deepEqual(build(empty,[receipt,receipt]),[empty]);
   assert.deepEqual(build(empty,[{...receipt,revision:'different'}]),[empty]);
+});
+
+test('Task usage deduplicates attempt and session scopes and keeps unknown billing', () => {
+  const task = {id:'task_usage',repository:'Kgray44/Aetherwake',title:'Usage fixture',objective:'Compare scopes'};
+  const revision = 'a'.repeat(40);
+  const managed = '10000000-0000-4000-8000-000000000001';
+  const dedicated = '10000000-0000-4000-8000-000000000002';
+  const unknown = '10000000-0000-4000-8000-000000000003';
+  const attempt = {id:'failed-first',task_id:task.id,revision,state:'failed',attempt_number:1,session_id:managed};
+  const resumed = {...attempt,id:'retry',state:'succeeded',attempt_number:2,resume_session_id:managed};
+  const link = session => ({kind:'executor_session',uri:'https://chatgpt.com/c/'+session,revision});
+  const canonical = {task,attempts:[attempt,resumed],lifecycle:{state:'verifying',links:[link(managed),link(dedicated),link(unknown)]}};
+  const now = Date.parse('2026-02-01T00:00:00Z');
+  const make = (id,session,fields,extra={}) => {
+    const {prefix='desktop',source='codex_desktop_session_usage',method='task_dedicated_session_total',...rest}=extra;
+    return {task_id:task.id,repository:task.repository,revision,event_id:id,session_id:session,kind:'measurement',
+      occurred_at:'2026-01-02T00:00:00Z',measurements:Object.entries(fields).map(([name,value])=>({
+        name:prefix+'_'+name+'_tokens',value,unit:'tokens',availability:'observed',source,method,
+      })),...rest};
+  };
+  const app = {prefix:'provider',source:'codex_app_server_token_usage_updated',method:'fresh_thread_total'};
+  const first = make('attempt-receipt',managed,{total:80,input:70,cached_input:50,output:10},{...app,attempt_id:attempt.id});
+  const stale = make('old-session',dedicated,{total:10}, {occurred_at:'2026-01-01T00:00:00Z'});
+  const latest = make('latest-session',dedicated,{total:20,input:15,cached_input:10,output:5});
+  const events = [first,latest,stale,{...first},make('managed-overlap',managed,{total:80}),
+    make('resume-history',managed,{total:500},{...app,attempt_id:resumed.id}),
+    make('unscoped',undefined,{total:200}),make('different-revision',unknown,{total:999},{revision:'b'.repeat(40)})];
+  const input = {task,canonical,attempts:[attempt,resumed],events,now};
+  const model = taskUsageAccounting(input);
+  assert.deepEqual(model.observed,{totalTokens:100,cachedInputTokens:60,uncachedInputTokens:25,outputTokens:15});
+  assert.equal(model.billing,'Unknown');
+  assert.deepEqual(model.coverage,{attemptTotals:1,attempts:2,sessionTotals:2,sessions:3,conflicts:0});
+  assert.equal(model.desktop[0].value,200);
+  assert.equal(model.sessionRows.find(row=>row.id===dedicated).receiptId,latest.event_id);
+  const report=JSON.stringify(taskReportDefinition(input).content);
+  assert.match(report,/"Task","100","60","25","15"/);
+  assert.match(report,/Attempt totals 1 of 2 · Session totals 2 of 3 · Conflicts 0 · Billing Unknown/);
+  assert.match(report,/latest-session/);
+  const conflict = make('conflicting',dedicated,{total:21});
+  const disputed = taskUsageAccounting({...input,events:[...events,conflict]});
+  assert.equal(disputed.observed.totalTokens,80);
+  assert.equal(disputed.coverage.conflicts,1);
 });
 
 test('heartbeat receipts update one executor indicator and stay out of the Timeline', () => {

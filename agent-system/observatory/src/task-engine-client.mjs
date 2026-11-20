@@ -50,8 +50,10 @@ const appServerSource = 'codex_app_server_token_usage_updated';
 const appServerMethods = new Set(['single_ephemeral_thread_total','fresh_thread_total']);
 
 function appServerTokenRow(taskId, repository, attempt, events) {
+  if (attempt.resume_session_id) return null;
   const receipts = events.filter(event => event.kind === 'measurement' && event.task_id === taskId &&
     event.attempt_id === attempt.id && event.revision === attempt.revision && event.repository === repository &&
+    (!event.session_id || event.session_id === attempt.session_id) &&
     (event.measurements ?? []).some(metric => metric.source === appServerSource && appServerMethods.has(metric.method)));
   if (receipts.length !== 1) return null;
   const tokens = name => {
@@ -70,7 +72,7 @@ function appServerTokenRow(taskId, repository, attempt, events) {
     taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
     provider:attempt.execution_identity?.provider ?? attempt.provider ?? attempt.executor ?? 'codex',
     model:attempt.execution_identity?.model ?? attempt.model, identitySource:attempt.execution_identity?.source, state:attempt.state,
-    coverage:'observed', source:'Codex App Server',
+    coverage:'observed', source:'Codex App Server', receiptId:receipts[0].event_id,
     observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
       cacheWriteInputTokens:tokens('cache_write_input'),
       uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:1 },

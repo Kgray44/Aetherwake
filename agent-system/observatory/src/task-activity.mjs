@@ -17,9 +17,13 @@ export function taskLinkedHref(uri) {
   return taskActivityHref(uri) ?? safeActivityUrl(uri);
 }
 
+export function linkedCodexSessionId(uri) {
+  return /^https:\/\/chatgpt\.com\/c\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/?$/i.exec(uri)?.[1].toLowerCase();
+}
+
 function sessionKey(uri) {
-  const codex=/^https:\/\/chatgpt\.com\/c\/([a-f0-9-]{36})\/?$/i.exec(uri);
-  return codex ? 'codex:'+codex[1].toLowerCase() : uri;
+  const id = linkedCodexSessionId(uri);
+  return id ? 'codex:'+id : uri;
 }
 
 function linkedReferences(task, canonical, audits, evidence) {

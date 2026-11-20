@@ -390,6 +390,14 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
   assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
     document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
+  const sessionId = '10000000-0000-4000-8000-000000000002';
+  await page.getByRole('button',{name:'Attach evidence link'}).click();
+  const sessionLink = page.getByRole('form',{name:'Attach evidence link'});
+  await sessionLink.getByLabel('Reference type').selectOption('executor_session');
+  await sessionLink.getByLabel('Evidence URL').fill('https://chatgpt.com/c/' + sessionId);
+  await sessionLink.getByLabel('Revision').fill(candidate);
+  await sessionLink.getByRole('button',{name:'Confirm'}).click();
+  await evidence.getByRole('link',{name:'executor session',exact:true}).waitFor();
   const telemetryHeaders = { 'x-observatory-verification': namespace };
   const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
   const { telemetry_scope: scope } = await overview.json();
@@ -400,8 +408,11 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       events: [{
         trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
         trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
-        revision: execution.task.revision, occurred_at: '2026-01-01T08:00:00.000Z',
-        kind: 'measurement', phase: 'verification', measurements: [],
+        revision: candidate, occurred_at: '2026-01-01T08:00:00.000Z', session_id: sessionId,
+        kind: 'measurement', phase: 'verification', measurements: [{
+          name:'desktop_total_tokens',value:137,unit:'tokens',availability:'observed',
+          source:'codex_desktop_session_usage',method:'task_dedicated_session_total',
+        }],
       }],
     },
   });
@@ -487,6 +498,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await page.locator('#task-timeline-details').evaluate(node=>getComputedStyle(node).position),'static');
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
+  await telemetry.getByRole('heading',{name:'Observed Task token usage'}).waitFor();
+  await telemetry.getByText('Billing',{exact:true}).waitFor();
+  await telemetry.getByText('Unknown',{exact:true}).waitFor();
+  const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
+  await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
+  await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
   await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

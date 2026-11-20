@@ -240,6 +240,7 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   const generated = Date.now() - 1000;
   const event = {
     trace_version: 1, event_id: 'telemetry-probe-event', task_id: task.id, trace_id: 'trace-probe',
+    session_id: '10000000-0000-4000-8000-000000000001',
     span_id: 'span-probe', repository: task.repository, revision: task.revision,
     occurred_at: new Date(generated).toISOString(), kind: 'measurement', phase: 'verification',
     measurements: [{ name: 'elapsed_wall_ms', availability: 'observed', value: 45, unit: 'ms', source: 'fixture', method: 'fixture' }],
@@ -268,6 +269,7 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.equal(replay.status, 200);
   const overview = await (await call('/api/overview', { headers })).json();
   assert.equal(overview.execution.events.length, 2);
+  assert.equal(overview.execution.events.find(item=>item.event_id===event.event_id).session_id,event.session_id);
   assert.equal(overview.execution.sources[0].task_id, task.id);
   assert.deepEqual(overview.execution.sources[0].event_receipts, {
     [event.event_id]: firstReceipt.received_at,

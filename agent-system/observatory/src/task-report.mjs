@@ -1,7 +1,6 @@
 import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-status.mjs';
 import { buildTaskTimeline } from './task-timeline.mjs';
-import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
-import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
+import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
@@ -71,13 +70,12 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
     engineeringEvents:activity.events,telemetrySource});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
-  const tokenAccounting=buildEngineeringAnalytics({records:[task,...taskRecords],events:taskEvents}).tokenAccounting;
-  const tokens=taskTokenRows(tokenAccounting,task.id,taskAttempts,taskEvents,task.repository);
+  const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents});
+  const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
   const latestCoverage=diagnostics.coverage.at(-1);
   const latestTokens=tokens.at(-1)?.observed;
   const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
-  const desktop=desktopSessionTokens(task.id,taskEvents);
 
   return {
     pageSize:'A4',pageMargins:[44,47,44,46],
@@ -140,6 +138,19 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         words(phase.phase),phase.coveredMs,trace.spans.filter(span=>span.complete&&span.phase===phase.phase).length,
       ]),['*','*','*']),
       section('Model and token accounting',tokens.length),
+      subhead('Observed Task token usage'),
+      {text:usage.scope,style:'muted'},
+      grid(['Scope',...usageFields.map(([,label])=>label)],[
+        ['Task',...usageFields.map(([key])=>usage.observed[key])],
+      ],['*','*','*','*','*']),
+      {text:'Attempt totals '+usage.coverage.attemptTotals+' of '+usage.coverage.attempts+
+        ' · Session totals '+usage.coverage.sessionTotals+' of '+usage.coverage.sessions+
+        ' · Conflicts '+usage.coverage.conflicts+' · Billing '+usage.billing,style:'muted'},
+      ...blocks(usage.sessionRows,row=>'Executor session '+row.id,row=>[
+        ['Receipt scope',row.basis],['Linked attempts',row.attemptIds.join(', ')||'None'],
+        ...usageFields.map(([key,label])=>[label,display(row.observed[key])]),
+        ...(row.receiptId?[['Source event',row.receiptId],['Observed at',row.observedAt]]:[]),
+      ]),
       ...blocks(tokens,item=>'Attempt '+(item.attemptNumber??item.attemptId)),
       ...blocks(desktop,item=>words(item.name)),
       section('Recorded telemetry and measurement samples',measurements.length),

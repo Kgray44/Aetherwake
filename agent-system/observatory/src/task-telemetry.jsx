@@ -1,10 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useCardMotion } from './card-motion.jsx';
-import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
-import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
+import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 
 const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
@@ -43,12 +42,8 @@ function available(metric) {
 export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
-  const accounting = useMemo(() => records ? buildEngineeringAnalytics({
-    records: records.filter(record => record.id === task.id || record.task_id === task.id), events,
-  }).tokenAccounting : null, [task.id, records, events]);
-  const tokens = useMemo(() => taskTokenRows(accounting, task.id, attempts, events, task.repository),
-    [accounting, task.id, attempts, events, task.repository]);
-  const desktop = desktopSessionTokens(task.id,events);
+  const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events}), [task,canonical,attempts,events]);
+  const {rows:tokens,desktop} = usage;
   const diagnostics = useMemo(() => taskExecutionDiagnostics({
     task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
   }), [task,canonical,attempts,timeline,tokens,records]);
@@ -58,7 +53,6 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
   ]);
   const measurements = useMemo(() => measurementRows(telemetry, events), [telemetry, events]);
   const measurable = measurements.filter(available);
-  const linkedTokenAttempts = new Set(tokens.filter(row => row.observed.turns > 0).map(row => row.attemptId));
   const timeRows = timeline.phases.slice(0, 8).map(phase => ({ label: words(phase.phase), value: phase.coveredMs, display: time(phase.coveredMs) }));
   const durationRows = attempts.flatMap(attempt => {
     const duration = Date.parse(attempt.finished_at) - Date.parse(attempt.started_at);
@@ -82,7 +76,7 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       <div><dt>Observed trace time</dt><dd>{time(timeline.coveredMs)}</dd></div>
       <div><dt>Linked execution events</dt><dd>{events.length}</dd></div>
       <div><dt>Recorded metrics with values</dt><dd>{measurable.length}</dd></div>
-      <div><dt>Attempts with token receipts</dt><dd>{linkedTokenAttempts.size} of {attempts.length}</dd></div>
+      <div><dt>Attempts with token receipts</dt><dd>{usage.coverage.attemptTotals} of {usage.coverage.attempts}</dd></div>
     </dl>
     <div className="task-telemetry-grid">
       <MeasurementChart title="Time by phase" rows={timeRows} empty="No matched trace intervals were supplied."/>
@@ -98,6 +92,24 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
     </section>}
     <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
     <h3>Model and token accounting</h3>
+    <h4>Observed Task token usage</h4>
+    <dl className="github-facts task-telemetry-coverage">
+      {usageFields.map(([key,label])=><div key={key}><dt>{label}</dt><dd>{usage.observed[key]?.toLocaleString()??'Unavailable'}</dd></div>)}
+      <div><dt>Sessions with token totals</dt><dd>{usage.coverage.sessionTotals} of {usage.coverage.sessions}</dd></div>
+      <div><dt>Billing</dt><dd>{usage.billing}</dd></div>
+    </dl>
+    <p className="low">{usage.scope}</p>
+    {usage.coverage.conflicts>0&&<p>Conflicting usage records excluded from the affected totals.</p>}
+    {usage.sessionRows.length>0&&<div className="analytics-table"><table>
+      <caption>Token usage by executor session</caption>
+      <thead><tr><th scope="col">Session</th><th scope="col">Basis</th>
+        {usageFields.map(([key,label])=><th key={key} scope="col">{label}</th>)}</tr></thead>
+      <tbody>{usage.sessionRows.map(row=><tr key={row.id}>
+        <th scope="row">{row.id}<small className="row-meta">{row.attemptIds.length} linked attempts</small></th>
+        <td>{row.basis}{row.receiptId&&<small className="row-meta">Source event {row.receiptId}</small>}</td>
+        {usageFields.map(([key])=><td key={key}>{row.observed[key]?.toLocaleString()??'Unavailable'}</td>)}
+      </tr>)}</tbody>
+    </table></div>}
     <TaskTokenAccounting rows={tokens}/>
     <h3>Recorded measurements</h3>
     {measurements.length ? <>
