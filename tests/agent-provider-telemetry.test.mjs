@@ -218,9 +218,14 @@ test('claimed execution journals usage against its immutable revision without pu
   const attempt = {id:'attempt_engine',revision:'d'.repeat(40)};
   const collector = createClaimTelemetry({journal:journalPath,task,attempt});
   await collector.start();
+  const note={itemId:'private-item',sessionId:'11111111-1111-4111-8111-111111111111',
+    occurredAt:'2026-11-20T00:00:00.000Z',note:{category:'finding',text:'The checksum matched.'}};
+  await collector.onDevelopmentNote(note);
+  await collector.onDevelopmentNote(note);
   const summary = await observeCodexStream(stream([usageFrames]), {onUsage:collector.onUsage});
   let events = await readJournal(journalPath);
-  assert.deepEqual(events.map(event => event.kind).sort(), ['measurement','span_start']);
+  assert.deepEqual(events.map(event => event.kind).sort(), ['development_note','measurement','span_start']);
+  assert.deepEqual(events.find(event=>event.kind==='development_note')?.development_note,note.note);
   assert.equal(events.every(event => event.attempt_id === attempt.id && event.revision === attempt.revision), true);
   assert.doesNotMatch(JSON.stringify(events), /private-thread|private-item|secret-path/);
   await collector.finish({measurements:summary,state:'completed'});
@@ -230,10 +235,10 @@ test('claimed execution journals usage against its immutable revision without pu
   assert.equal(findings(close.measurements).elapsed_wall_ms.availability, 'observed');
   const exported = JSON.parse(await projectJournal({task,directory:journalPath}));
   assert.deepEqual(exported.records.map(record => record.record_type), ['task']);
-  assert.equal(exported.events.length, 3);
+  assert.equal(exported.events.length, 4);
   const retry = createClaimTelemetry({journal:journalPath,task,attempt});
   await assert.rejects(retry.start(), /already exists|Conflicting/);
-  assert.equal((await readJournal(journalPath)).length, 3);
+  assert.equal((await readJournal(journalPath)).length, 4);
 });
 
 test('default engine hooks use the dedicated checkout journal with no connection required', async t => {
