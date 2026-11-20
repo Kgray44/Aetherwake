@@ -67,11 +67,18 @@ async function start(t, { canonical = false } = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = 'http://127.0.0.1:' + server.address().port;
   t.after(() => new Promise(resolve => server.close(resolve)));
-  return origin;
+  async function executor(body) {
+    const { taskOperation } = await import('./sites/task-engine.mjs');
+    const result = await taskOperation({ db: DB, owner, namespace: 'verification:' + namespace,
+      body, access: 'worker', validate, revision: () => revision });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    return result.body;
+  }
+  return { origin, executor };
 }
 
 test('keyboard, reduced motion, versioned edits, dependency admission and reload in the real workspace', { timeout: 120_000 }, async t => {
-  const origin = await start(t);
+  const { origin } = await start(t);
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
@@ -151,13 +158,14 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
 test('owner schedules an engine Task, observes blockers and controls the queue', {
   timeout: 120_000, skip: !process.env.OBSERVATORY_ENGINE_E2E,
 }, async t => {
-  const origin = await start(t, { canonical: true });
+  const { origin, executor } = await start(t, { canonical: true });
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
   });
   t.after(() => browser.close());
   const page = await browser.newPage({ reducedMotion: 'reduce' });
+  await page.clock.install();
   const send = async body => {
     const response = await fetch(origin + '/api/task-engine/v1', {
       method: 'POST', headers: { origin, 'content-type': 'application/json', 'x-observatory-verification': namespace },
@@ -207,4 +215,30 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   detail = await send({ op: 'get', task_id: id });
   assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'resume', 'cancel']);
   assert.equal(detail.task.owner_acceptance, 'not_reviewed');
+
+  const execution = await send({ op: 'register', operation_id: crypto.randomUUID(), fields: {
+    title: 'Candidate review verification', objective: 'Verify real worker lifecycle transitions and owner review from the front end.',
+    primary: 'integration', profile_id: 'integration', criteria: ['Review the candidate result'],
+  } });
+  await page.goto(origin + '/?verification=' + namespace + '#tasks/' + execution.task.id);
+  await page.reload();
+  await page.getByRole('button', { name: 'Admit to Codex queue', exact: true }).click();
+  await page.getByRole('form', { name: 'Admit to Codex queue' }).getByRole('button', { name: 'Confirm' }).click();
+  await page.getByText(/Stored state admitted/).waitFor();
+  const { claim } = await executor({ op: 'claim', operation_id: crypto.randomUUID(), task_ids: [execution.task.id] });
+  assert.equal(claim.task.id, execution.task.id);
+  await page.clock.fastForward(31_000);
+  await page.getByText(/Stored state running/).waitFor();
+  const candidate = 'b'.repeat(40);
+  await executor({ op: 'report', task_id: execution.task.id, operation_id: crypto.randomUUID(),
+    attempt_id: claim.attempt.id, lease: claim.lease, report: { type: 'finished', result: 'candidate', revision: candidate } });
+  await page.clock.fastForward(31_000);
+  await page.getByRole('button', { name: 'Record owner acceptance', exact: true }).click();
+  const review = page.getByRole('form', { name: 'Record owner acceptance' });
+  await review.getByLabel('Review the candidate result').fill('https://example.test/reviewed-artifact');
+  await review.getByRole('button', { name: 'Confirm' }).click();
+  await page.getByText(/Stored state completed/).waitFor();
+  detail = await send({ op: 'get', task_id: execution.task.id });
+  assert.equal(detail.task.owner_acceptance, 'accepted');
+  assert.equal(detail.lifecycle.evidence[0].revision, candidate);
 });

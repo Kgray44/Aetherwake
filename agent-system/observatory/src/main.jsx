@@ -177,14 +177,16 @@ const total=s=>tasks.filter(t=>t.state===s).length;
 const chart=useMemo(()=>Array.from({length:14},(_,i)=>{const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-13+i);return tasks.filter(t=>String(t.created_at).slice(0,10)===d.toISOString().slice(0,10)).length}),[tasks]);
 const durations=telemetry.flatMap(r=>r.measurements||[]).filter(m=>m.availability==='observed'&&['duration_seconds','elapsed_seconds'].includes(m.name)&&typeof m.value==='number');
 const duration=durations.length?Math.round(durations.reduce((s,m)=>s+m.value,0)/60).toLocaleString()+' min':'Unavailable';
-const privateControls=!demo ? {...proposals?.controls,...Object.fromEntries(engine.tasks.filter(item=>!proposals?.publication?.[item.task.id])
-  .map(item=>[item.task.id,{priority:item.priority,version:item.version}]))} : {};
+const privateControls=!demo ? {...proposals?.controls,...Object.fromEntries(engine.tasks.filter(item=>proposals?.publication?.[item.task.id]!=='pending')
+  .map(item=>[item.task.id,{priority:item.priority,version:item.version,source:proposals?.publication?.[item.task.id]==='published'?'published':'private'}]))} : {};
 const activityFor=task=>taskActivity(task,related(task.id,'attempt'),execution?.events??[],demo?null:summaries.get(task.id)?.lifecycle);
 const current=tasks.find(t=>t.id===taskRoute?.id);
-const engineSummary=!demo&&current&&!proposals?.publication?.[current.id]?summaries.get(current.id):null;
+const publication=current?proposals?.publication?.[current.id]:null;
+const engineSummary=!demo&&current&&publication!=='pending'?summaries.get(current.id):null;
 const engineTask=useTaskEngineDetail({summary:engineSummary,headers:verificationHeaders,onRefresh:()=>refresh(false,{quiet:true})});
 const canonical=engineTask.detail;
-const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&!proposals?.publication?.[task.id]);
+const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
+const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
 const scopedAccounting=useMemo(()=>current&&!demo?buildEngineeringAnalytics({
   records:records.filter(record=>record.id===current.id||record.task_id===current.id),
   events:(execution?.events??[]).filter(event=>event.task_id===current.id),
@@ -279,9 +281,9 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 {page==='detail'&&(current?<><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 {engineSummary&&<Rise><Panel title="Execution controls">
   {engineTask.error&&<p role="alert">{engineTask.error}</p>}
-  {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
+  {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} publishedIntake={publishedIntake} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
 </Panel></Rise>}
-{canonical&&<Rise><Panel title="Task editor">
+{canonical&&!publishedIntake&&<Rise><Panel title="Task editor">
   <ProposalControls key={current.id} task={canonical.task} control={canonical} tasks={canonicalTasks} classes={types}
     headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false,{quiet:true})}
     manageable={task=>Object.hasOwn(privateControls,task.id)} engineCommand={engineTask.command}

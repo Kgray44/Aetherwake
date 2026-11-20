@@ -19,8 +19,9 @@ export function commandForTask(detail, action, operationId) {
   };
 }
 
-export function executionActions({ lifecycle, attempts = [] }) {
+export function executionActions({ lifecycle, attempts = [] }, { publishedIntake = false } = {}) {
   const state = lifecycle.stored_state;
+  if (publishedIntake) return ['proposed', 'blocked'].includes(state) ? ['admit'] : [];
   const result = [];
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
@@ -29,6 +30,10 @@ export function executionActions({ lifecycle, attempts = [] }) {
   if (state === 'verifying') result.push('accept', 'reject');
   if (!['completed', 'failed', 'cancelled', 'superseded', 'archived', 'cancelling'].includes(state)) result.push('cancel');
   return result;
+}
+
+export function reviewRevision(attempt) {
+  return attempt?.candidate_revision ?? attempt?.revision ?? null;
 }
 
 export function taskTokenRows(accounting, id) {

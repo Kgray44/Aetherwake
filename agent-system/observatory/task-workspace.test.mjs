@@ -34,13 +34,14 @@ test('direct dependency edges preserve direction and unknown evidence', () => {
   assert.deepEqual(graph.downstream.map(({ id }) => id), ['next']);
 });
 
-import { commandForTask, executionActions, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
+import { commandForTask, executionActions, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
 
 test('canonical operation choices use stored state and the current attempt count', () => {
   assert.deepEqual(executionActions({ lifecycle: { state: 'blocked', stored_state: 'admitted', executor: 'codex' } }), ['pause', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'paused', stored_state: 'paused' }, attempts: [{}] }), ['resume', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'failed', stored_state: 'failed' }, attempts: [{}, {}, {}] }), []);
   assert.deepEqual(executionActions({ lifecycle: { state: 'verifying', stored_state: 'verifying' } }), ['accept', 'reject', 'cancel']);
+  assert.deepEqual(executionActions({ lifecycle: { stored_state: 'proposed' } }, { publishedIntake: true }), ['admit']);
   assert.deepEqual(commandForTask({ task: { id: 'task_a' }, version: 4 }, { type: 'pause' }, 'operation'),
     { op: 'command', task_id: 'task_a', expected_version: 4, operation_id: 'operation', action: { type: 'pause' } });
 });
@@ -72,4 +73,12 @@ test('registry activity distinguishes intake, reported attempts and authoritativ
   assert.deepEqual(taskActivity(task, [attempt], [], { state: 'scheduled', start_at: 1795200000000 }),
     { label: 'Engine scheduled', at: '2026-11-20T18:40:00.000Z' });
   assert.equal(task.state, 'proposed');
+});
+
+test('owner evidence pins the candidate revision rather than the attempt base', () => {
+  const base = 'a'.repeat(40);
+  const candidate = 'b'.repeat(40);
+  assert.equal(reviewRevision({ revision: base, candidate_revision: candidate }), candidate);
+  assert.equal(reviewRevision({ revision: base }), base);
+  assert.equal(reviewRevision(undefined), null);
 });

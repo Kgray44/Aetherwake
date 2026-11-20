@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { executionActions, taskTokenRows } from './task-engine-client.mjs';
+import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
 const actionLabels = {
   admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
@@ -9,7 +9,7 @@ const actionLabels = {
 const humanize = value => String(value ?? 'unavailable').replaceAll('_', ' ');
 const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
 
-export function TaskEngineControls({ detail, onCommand, tasks, Status }) {
+export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, Status }) {
   const reduce = useReducedMotion();
   const [action, setAction] = useState('');
   const [actionVersion, setActionVersion] = useState(detail.version);
@@ -18,10 +18,13 @@ export function TaskEngineControls({ detail, onCommand, tasks, Status }) {
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const { task, lifecycle, attempts, events } = detail;
-  const options = executionActions(detail);
-  if (['proposed', 'blocked', 'paused', 'failed'].includes(lifecycle.stored_state)) options.push('supersede');
-  options.push('associate');
+  const options = executionActions(detail, { publishedIntake });
+  if (!publishedIntake) {
+    if (['proposed', 'blocked', 'paused', 'failed'].includes(lifecycle.stored_state)) options.push('supersede');
+    options.push('associate');
+  }
   const candidate = attempts.at(-1);
+  const candidateRevision = reviewRevision(candidate);
   const blocker = lifecycle.blockers ?? [];
   const unsatisfiedCapabilities = blocker.filter(item => item.type === 'capability');
 
@@ -73,7 +76,7 @@ export function TaskEngineControls({ detail, onCommand, tasks, Status }) {
       if (action === 'retry') change.changed_assumption = fields.get('reason');
       if (action === 'reject') change.reason = fields.get('reason');
       if (action === 'accept') change.evidence = task.acceptance.criteria.map(criterion => ({
-        criterion_id: criterion.id, uri: fields.get(criterion.id), revision: candidate?.revision,
+        criterion_id: criterion.id, uri: fields.get(criterion.id), revision: candidateRevision,
       }));
       if (action === 'supersede') change.successor = fields.get('successor');
       if (action === 'satisfy') change.prerequisite = fields.get('prerequisite');
@@ -130,7 +133,7 @@ export function TaskEngineControls({ detail, onCommand, tasks, Status }) {
         {unsatisfiedCapabilities.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}
       </select></label>}
       {action === 'accept' && <>
-        <p>Record an owner review based on the linked evidence at revision {candidate?.revision ?? 'unavailable'}.</p>
+        <p>Record an owner review based on the linked evidence at revision {candidateRevision ?? 'unavailable'}.</p>
         {task.acceptance.criteria.map(criterion => <label key={criterion.id}>{criterion.description}
           <input name={criterion.id} type="url" placeholder="https://…" required maxLength={1000}/>
         </label>)}
@@ -139,7 +142,7 @@ export function TaskEngineControls({ detail, onCommand, tasks, Status }) {
         <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation']
           .map(kind => <option key={kind} value={kind}>{humanize(kind)}</option>)}</select></label>
         <label>Evidence URL <input name="uri" type="url" required maxLength={1000}/></label>
-        <label>Revision <input name="revision" pattern="[a-f0-9]{40}" defaultValue={candidate?.revision ?? task.revision} required/></label>
+        <label>Revision <input name="revision" pattern="[a-f0-9]{40}" defaultValue={candidateRevision ?? task.revision} required/></label>
       </>}
       <div className="form-actions">
         <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Submitting…' : 'Confirm'}</button>

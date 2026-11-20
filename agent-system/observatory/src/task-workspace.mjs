@@ -19,7 +19,7 @@ export function organizeTasks(tasks, filters, controls = {}) {
     return index < 0 ? priorities.length : index;
   };
   const visible = tasks.filter(task =>
-    (filters.source !== 'private' || hasControl(task)) &&
+    (filters.source !== 'private' || hasControl(task) && controls[task.id].source !== 'published') &&
     (!filters.state || filters.state === 'all' || task.state === filters.state) &&
     [task.title, task.objective, task.id, task.classification?.primary].join(' ').toLowerCase().includes(query));
   visible.sort((a, b) => {
