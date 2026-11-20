@@ -1,20 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { Activity, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, Pause, Play, RotateCcw, Square, XCircle } from 'lucide-react';
+import { Activity, Archive, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, Pause, Play, RotateCcw, Square, XCircle } from 'lucide-react';
+import {taskActivityHref} from './github-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
 const actionLabels = {
   admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
-  accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
+  archive:'Archive Task', reopen:'Reopen with feedback', accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
 const actionIcons = { admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
-  reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
+  archive:Archive, reopen:RotateCcw, reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
 const actionHints = { admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
   resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
   reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
-  supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
-const featuredActions = ['admit','resume','accept','retry','pause'];
+  archive:'Move the Task out of active views', reopen:'Queue a new attempt with owner feedback', supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
+const featuredActions = ['admit','resume','accept','reopen','retry','pause'];
 
 const humanize = value => String(value ?? 'unavailable').replaceAll('_', ' ');
 const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
@@ -30,7 +31,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
   const pending = useRef(false);
   const formHeading = useRef(null);
   useEffect(() => { if (action) formHeading.current?.focus(); }, [action]);
-  const { task, lifecycle, attempts, events } = detail;
+  const { task, lifecycle, attempts } = detail;
   const options = executionActions(detail, { publishedIntake });
   if (!publishedIntake) {
     if (['proposed', 'blocked', 'paused', 'failed'].includes(lifecycle.stored_state)) options.push('supersede');
@@ -88,6 +89,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
         if (date) change.start_at = new Date(date).toISOString();
       }
       if (action === 'retry') change.changed_assumption = fields.get('reason');
+      if (action === 'reopen') change.feedback = fields.get('feedback');
       if (action === 'reject') change.reason = fields.get('reason');
       if (action === 'accept') change.evidence = task.acceptance.criteria.map(criterion => ({
         criterion_id: criterion.id, uri: fields.get(criterion.id), revision: candidateRevision,
@@ -147,6 +149,9 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
       {['retry', 'reject'].includes(action) && <label>{action === 'retry' ? 'Changed assumption' : 'Review reason'}
         <textarea name="reason" required maxLength={500}/>
       </label>}
+      {action === 'archive' && <p>Move this Task to Archived. Its timeline, attempts, and evidence remain available there.</p>}
+      {action === 'reopen' && <><p>Queue a new Codex attempt from the last accepted revision. Previous approval remains in the timeline.</p>
+        <label>Feedback for the next attempt<textarea name="feedback" required maxLength={2000}/></label></>}
       {action === 'cancel' && <p>Confirm cancellation. If an executor is active, the request waits for it to confirm that it stopped.</p>}
       {action === 'supersede' && <label>Replacement Task <select name="successor" required>
         <option value="">Choose a Task</option>
@@ -176,24 +181,19 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
     {result && <p role="status">{result}</p>}
       </div>
     </div>
-    <details className="proposal-disclosure"><summary>Task audit history</summary>
-      {events.length ? <ol>{[...events].reverse().map((event, index) => <li key={event.operation_id ?? index}>
-        {stamp(event.at)} · {humanize(event.kind ?? event.type)} · {humanize(event.state)}
-      </li>)}</ol> : <p>No Task operations recorded.</p>}
-    </details>
-    <TaskDeliveryEvidence task={task} lifecycle={lifecycle} attempts={attempts} Status={Status}/>
   </>;
 }
 
 function EvidenceReference({ uri, label, revision }) {
-  const href = safeLink(uri);
+  const internal = taskActivityHref(uri);
+  const href = internal ?? safeLink(uri);
   return <>
-    {href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : <strong>{label}</strong>}
+    {href ? <a href={href} target={internal?undefined:"_blank"} rel={internal?undefined:"noreferrer"}>{label}</a> : <strong>{label}</strong>}
     {revision && <small>Revision <code>{revision}</code></small>}
   </>;
 }
 
-function TaskDeliveryEvidence({ task, lifecycle, attempts, Status }) {
+export function TaskDeliveryEvidence({ task, lifecycle, attempts, Status }) {
   const criteria = new Map(task.acceptance.criteria.map(criterion => [criterion.id, criterion.description]));
   const links = lifecycle.links ?? [];
   const reviewed = lifecycle.evidence ?? [];

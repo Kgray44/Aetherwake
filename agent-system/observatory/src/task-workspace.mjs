@@ -20,7 +20,7 @@ export function organizeTasks(tasks, filters, controls = {}) {
   };
   const visible = tasks.filter(task =>
     (filters.source !== 'private' || hasControl(task) && controls[task.id].source !== 'published') &&
-    (!filters.state || filters.state === 'all' || task.state === filters.state) &&
+    ((!filters.state || filters.state === 'all') ? task.state !== 'archived' : task.state === filters.state) &&
     [task.title, task.objective, task.id, task.classification?.primary].join(' ').toLowerCase().includes(query));
   visible.sort((a, b) => {
     const newest = String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''));

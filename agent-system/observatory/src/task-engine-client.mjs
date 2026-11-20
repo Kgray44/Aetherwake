@@ -21,14 +21,17 @@ export function commandForTask(detail, action, operationId) {
 
 export function executionActions({ lifecycle, attempts = [] }, { publishedIntake = false } = {}) {
   const state = lifecycle.stored_state;
+  const attemptsThisCycle = lifecycle.cycle_attempts ?? attempts.length;
   if (publishedIntake) return ['proposed', 'blocked'].includes(state) ? ['admit'] : [];
   const result = [];
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
-  if (state === 'paused' && attempts.length < 3) result.push('resume');
-  if (state === 'failed' && attempts.length > 0 && attempts.length < 3) result.push('retry');
+  if (state === 'paused' && attemptsThisCycle < 3) result.push('resume');
+  if (state === 'failed' && attemptsThisCycle > 0 && attemptsThisCycle < 3) result.push('retry');
   if (state === 'verifying') result.push('accept', 'reject');
   if (!['completed', 'failed', 'cancelled', 'superseded', 'archived', 'cancelling'].includes(state)) result.push('cancel');
+  if (['completed','proposed','blocked','failed','cancelled','superseded'].includes(state)) result.push('archive');
+  if (state === 'completed' || state === 'archived' && lifecycle.evidence?.length) result.unshift('reopen');
   return result;
 }
 

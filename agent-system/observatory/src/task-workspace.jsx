@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
+import {taskActivityHref} from './github-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { attemptEvents, dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
@@ -54,7 +55,7 @@ export function TaskExplorer({ tasks, controls, related, activityFor, Status, Pa
         <option value="all">All Tasks</option><option value="private">Manageable private proposals</option>
       </select></div>
       <div className="task-filter"><label htmlFor="task-filter-state">State</label><select id="task-filter-state" name="state" value={filters.state} onChange={field}>
-        <option value="all">All states</option>
+        <option value="all">Current Tasks</option>
         {[...new Set([...states, ...(filters.state === 'all' ? [] : [filters.state])])].map(state =>
           <option key={state} value={state}>{labels(state)}</option>)}
       </select></div>
@@ -155,6 +156,8 @@ export function TaskAttemptHistory({ attempts, events, Status }) {
 function EvidenceArtifact({ artifact }) {
   const uri = artifact?.uri;
   if (!uri) return <span>No artifact reference was recorded.</span>;
+  const internal = taskActivityHref(uri);
+  if (internal) return <a href={internal}>Open linked activity</a>;
   try {
     const url = new URL(uri);
     if (url.protocol === 'https:' && !url.username && !url.password && !url.search) {

@@ -6,7 +6,7 @@ import { dependencyGraph } from './task-workspace.mjs';
 
 const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({ task, version: control.version, priority: control.priority, editable });
 
-export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable }) {
+export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable, onHistory }) {
   const reduce = useReducedMotion();
   const [snapshot, setSnapshot] = useState(() => takeSnapshot(task, control, engineEditable));
   const [draft, setDraft] = useState(null);
@@ -38,6 +38,10 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     }).catch(() => { if (!controller.signal.aborted) setHistory(false); });
     return () => controller.abort();
   }, [endpoint, headers, control.version, Boolean(engineCommand)]);
+
+  useEffect(() => {
+    if (history!==null) onHistory?.({ taskId:task.id, receipts:history||[], unavailable:history===false });
+  }, [history,onHistory,task.id]);
 
   function reset(next) {
     setSnapshot(next);

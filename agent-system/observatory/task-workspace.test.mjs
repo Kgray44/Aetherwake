@@ -39,7 +39,7 @@ import { commandForTask, desktopSessionTokens, executionActions, reviewRevision,
 test('canonical operation choices use stored state and the current attempt count', () => {
   assert.deepEqual(executionActions({ lifecycle: { state: 'blocked', stored_state: 'admitted', executor: 'codex' } }), ['pause', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'paused', stored_state: 'paused' }, attempts: [{}] }), ['resume', 'cancel']);
-  assert.deepEqual(executionActions({ lifecycle: { state: 'failed', stored_state: 'failed' }, attempts: [{}, {}, {}] }), []);
+  assert.deepEqual(executionActions({ lifecycle: { state: 'failed', stored_state: 'failed' }, attempts: [{}, {}, {}] }), ['archive']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'verifying', stored_state: 'verifying' } }), ['accept', 'reject', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { stored_state: 'proposed' } }, { publishedIntake: true }), ['admit']);
   assert.deepEqual(commandForTask({ task: { id: 'task_a' }, version: 4 }, { type: 'pause' }, 'operation'),
@@ -100,4 +100,29 @@ test('desktop session counters select the latest observed Task reading without s
   const metric={name:'desktop_total_tokens',unit:'tokens',source:'codex_desktop_session_usage',availability:'observed',value:10};
   const event={task_id:'a',occurred_at:'2',measurements:[metric]};
   assert.deepEqual(desktopSessionTokens('a',[event,{...event,occurred_at:'1',measurements:[{...metric,value:3}]},{...event,task_id:'b',occurred_at:'3',measurements:[{...metric,value:99}]}]),[{name:metric.name,value:10,at:'2'}]);
+});
+
+import { taskActivityHref } from './src/github-activity.mjs';
+import { buildTaskTimeline } from './src/task-timeline.mjs';
+
+test('Task PR and CI references resolve to Observatory routes', () => {
+  assert.equal(taskActivityHref('https://github.com/Kgray44/Aetherwake/pull/319/files'), '#pull-requests/319');
+  assert.equal(taskActivityHref('https://github.com/Kgray44/Aetherwake/actions/runs/44121052124/job/123?x=1'), '#ci-runs/44121052124');
+  assert.equal(taskActivityHref('https://github.com/someone/else/pull/319'), null);
+  assert.equal(taskActivityHref('https://github.com.example.test/Kgray44/Aetherwake/pull/319'), null);
+  assert.equal(taskActivityHref('https://github.com/Kgray44/Aetherwake/pull/9999999999999999999'), null);
+});
+
+test('Task Timeline orders dated source events and excludes records belonging to other Tasks', () => {
+  const base = { id:'a',task_id:'task_a',revision:'r',attempt_number:1,started_at:'2026-11-19T20:01:00Z',finished_at:'2026-11-19T20:02:00Z',state:'failed' };
+  const timeline = buildTaskTimeline({
+    task: {id:'task_a',title:'Task A',created_at:'2026-11-19T20:00:00Z'},
+    attempts: [base,{...base,id:'other',task_id:'other'}],
+    audits: [{operation_id:'operation',type:'admit',state:'ready',at:'2026-11-19T20:00:30Z'}],
+    events: [{event_id:'phase',task_id:'task_a',attempt_id:'a',revision:'r',phase:'verification',kind:'span_start',occurred_at:'2026-11-19T20:01:30Z'},
+      {event_id:'outside',task_id:'other',occurred_at:'2026-11-19T20:03:00Z'}],
+  });
+  assert.deepEqual(timeline.map(item=>item.id),['end:a','trace:phase','start:a','audit:operation','task:task_a']);
+  assert.equal(timeline[1].description,'Attempt 1');
+  assert.ok(timeline[0].details.some(([name,value])=>name==='Outcome'&&value==='failed'));
 });
