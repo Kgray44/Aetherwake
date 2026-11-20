@@ -45,9 +45,18 @@ export async function appendEventLocked(directory, event, { maxEvents = 10000, m
   const destination = join(directory, digest(event.event_id) + '.json');
   try { const previous = await readFile(destination, 'utf8'); if (previous !== body) throw Error('Conflicting event identity'); return false; } catch(e) { if(e.code !== 'ENOENT') throw e; }
   const names = (await readdir(directory)).filter(n => n.endsWith('.json') || n.startsWith('.pending-'));
-  let bytes = 0; for (const name of names) bytes += (await lstat(join(directory,name))).size;
   // Fail closed instead of deleting historical evidence automatically.
-  if (names.length >= maxEvents || bytes + Buffer.byteLength(body) > maxBytes) throw Error('Journal retention limit: explicitly archive before continuing');
+  const limitMessage = 'Journal retention limit: explicitly archive before continuing';
+  if (names.length >= maxEvents) throw Error(limitMessage);
+  let bytes = Buffer.byteLength(body);
+  if (bytes > maxBytes) throw Error(limitMessage);
+  // Bound outstanding filesystem work while avoiding one event-loop round trip per file.
+  const batchSize = 16;
+  for (let offset = 0; offset < names.length; offset += batchSize) {
+    const files = await Promise.all(names.slice(offset, offset + batchSize).map(name => lstat(join(directory, name))));
+    for (const file of files) bytes += file.size;
+    if (bytes > maxBytes) throw Error(limitMessage);
+  }
   const temporary = join(directory, '.pending-' + randomUUID());
   const handle = await open(temporary, 'wx', 0o600);
   try { await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }

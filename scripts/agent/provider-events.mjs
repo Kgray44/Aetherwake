@@ -5,13 +5,16 @@ import { Buffer } from 'node:buffer';
 const SOURCE = 'codex_exec_jsonl';
 const MAX_LINE_BYTES = 256 * 1024;
 const MAX_USAGE_RECORDS = 32;
+const subsets = { cached_input_tokens: 'input_tokens', reasoning_output_tokens: 'output_tokens' };
 const tokenFields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
 
 export function codexUsage(event) {
   if (event?.type !== 'turn.completed') return [];
   const tokens = tokenFields.map(name => {
     const value = event.usage?.[name];
-    const observed = Number.isSafeInteger(value) && value >= 0;
+    const parent = event.usage?.[subsets[name]];
+    const observed = Number.isSafeInteger(value) && value >= 0 &&
+      !(Number.isSafeInteger(parent) && parent >= 0 && value > parent);
     return {
       name: 'provider_' + name,
       availability: observed ? 'observed' : 'unavailable',
@@ -42,6 +45,7 @@ export async function observeCodexStream(stream, { onUsage, forward, maxLineByte
   let discard = false;
   let open = false;
   let fullyObservedUsage = true;
+  let coreUsage = true;
   let dropped = 0;
   let gaps = 0;
   let completed = 0;
@@ -81,6 +85,8 @@ export async function observeCodexStream(stream, { onUsage, forward, maxLineByte
         open = false;
         completed++;
         const usage = codexUsage(event);
+        coreUsage &&= ['provider_input_tokens', 'provider_output_tokens'].every(name =>
+          usage.some(metric => metric.name === name && metric.availability === 'observed'));
         fullyObservedUsage &&= usage.slice(0, tokenFields.length).every(metric => metric.availability === 'observed');
         if (!onUsage || completed > MAX_USAGE_RECORDS) {
           fullyObservedUsage = false;
@@ -154,6 +160,7 @@ export async function observeCodexStream(stream, { onUsage, forward, maxLineByte
     observation('stream_dropped_line_count', dropped),
     observation('stream_gap_count', gaps + Number(open)),
     observation('stdout_forwarding_failed', Number(forwardingFailed), 'boolean'),
+    observation('core_usage_complete', Number(complete && !failed && coreUsage && recorded === completed), 'boolean'),
     observation('usage_complete', Number(complete && !failed && fullyObservedUsage), 'boolean'),
     observation('usage_recorded_turn_count', recorded),
     observation('usage_write_failure_count', writeFailures),

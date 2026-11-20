@@ -1,3 +1,4 @@
+import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { activityId } from './github-activity.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
@@ -238,6 +239,9 @@ export function buildEngineeringAnalytics({records, events, github, now = Date.n
       events:eventData.items.length, complete:complete.length, incomplete:timeline.incomplete, coveredMs:timeline.coveredMs,
       byPhase:timeline.phases.map(phase => ({...phase, spans:spanCounts[phase.phase]})),
     },
+    tokenAccounting:accountEngineeringTokens({
+      tasks, attempts, events:eventData.items, days, cutoff, sourceConflicts:recordData.conflicts + eventData.conflicts
+    }),
     usage:summarizeMetrics(byType('telemetry'), eventData.items),
   };
 }

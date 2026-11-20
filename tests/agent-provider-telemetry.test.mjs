@@ -142,23 +142,25 @@ test('command wrapper journals selected usage and preserves the child stdout and
 
 test('completed usage survives observer interruption without claiming the Attempt completed', async t => {
   const {cwd, journalPath, argv} = await wrapperFixture(t);
-  const command = 'process.stdout.write(' + JSON.stringify(usageFrames) + ');setTimeout(()=>{},3000)';
-  const wrapper = spawn(process.execPath, argv(command), {cwd,stdio:'ignore',windowsHide:true});
+  const command = 'process.stdout.write(' + JSON.stringify(usageFrames) + ');process.stdin.resume()';
+  const wrapper = spawn(process.execPath, argv(command), {cwd,stdio:['pipe','ignore','ignore'],windowsHide:true});
   const closed = once(wrapper, 'close');
   let saved = false;
   try {
-    for (let i=0; i<150; i++) {
+    const deadline = performance.now() + 30_000;
+    while (performance.now() < deadline && wrapper.exitCode === null && wrapper.signalCode === null) {
       const events = await readJournal(journalPath).catch(error => {
         if (error.code === 'ENOENT') return [];
         throw error;
       });
       saved = events.some(event => event.kind === 'measurement');
       if (saved) break;
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 25));
     }
     assert.equal(saved, true, 'provider measurement persisted before child exit');
   } finally {
     wrapper.kill('SIGKILL');
+    wrapper.stdin.destroy();
     await closed;
   }
   const rebuilt = await reconstructAttempts(journalPath);
@@ -168,4 +170,21 @@ test('completed usage survives observer interruption without claiming the Attemp
   const events = await readJournal(journalPath);
   assert.equal(findings(events.find(event => event.kind === 'measurement').measurements).provider_input_tokens.value, 15);
   assert.equal(events.some(event => event.kind === 'span_end'), false);
+});
+
+test('core coverage tolerates absent optional fields and rejects invalid token subsets', async () => {
+  const persisted = [];
+  const frames = usage => [line({type:'turn.started'}),line({type:'turn.completed',usage})];
+  const observe = usage => observeCodexStream(stream(frames(usage)), {onUsage: async rows => { persisted.push(findings(rows)); }});
+  const valid = findings(await observe({input_tokens:12,output_tokens:3,cached_input_tokens:0}));
+  assert.equal(valid.provider_core_usage_complete?.value, 1);
+  assert.equal(valid.provider_usage_complete.value, 0);
+  const invalid = findings(await observe({
+    input_tokens:12,output_tokens:3,cached_input_tokens:13,reasoning_output_tokens:4
+  }));
+  assert.equal(invalid.provider_core_usage_complete?.value, 1);
+  assert.equal(persisted[1].provider_cached_input_tokens.availability, 'unavailable');
+  assert.equal(persisted[1].provider_reasoning_output_tokens.availability, 'unavailable');
+  const missing = findings(await observe({output_tokens:3}));
+  assert.equal(missing.provider_core_usage_complete?.value, 0);
 });

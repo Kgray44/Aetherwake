@@ -135,3 +135,79 @@ test('legacy GitHub rows without lifecycle timestamps preserve rows and mark tre
   assert.equal(result.ci.createdDated, 0);
   assert.equal(result.days.at(-1).ciRuns, null);
 });
+
+test('attributes durable Codex turns to their attempt, keeps failed usage and reports partial coverage', () => {
+  const codex = (name, unit, value, source = 'codex_exec_json_turn_completed') => ({
+    ...obs(name, unit, value), source, method: source === 'codex_exec_jsonl' ? 'observed_stdout_frames' : 'explicit_event_allowlist'
+  });
+  const turn = (id, span, attemptId, input, output, cache, seconds = 2) => ({
+    ...event(id,span,'measurement','implementation',seconds,[
+      codex('provider_input_tokens','tokens',input),
+      codex('provider_output_tokens','tokens',output),
+      codex('provider_cached_input_tokens','tokens',cache),
+    ]), attempt_id:attemptId,
+  });
+  const summary = (id, span, attemptId, core, count) => ({
+    ...event(id,span,'span_end','implementation',5,[
+      codex('provider_core_usage_complete','boolean',core,'codex_exec_jsonl'),
+      codex('provider_usage_recorded_turn_count','count',count,'codex_exec_jsonl')
+    ]),attempt_id:attemptId,
+  });
+  const start = (id, span, attemptId) => ({...event(id,span,'span_start','implementation',0),attempt_id:attemptId});
+  const retry = {...attempt, id:'retry', attempt_number:2, state:'succeeded', failure_category:'none'};
+  const first = turn('turn-1','s1','attempt',20,4,6);
+  const result = buildEngineeringAnalytics({now, records:[task,{...attempt,attempt_number:1},retry], events:[
+    start('start-1','s1','attempt'),first,first,summary('end-1','s1','attempt',1,1),
+    start('start-2','s2','retry'),turn('turn-2','s2','retry',10,1,0),
+    turn('orphan','s3','unlinked',90,10,15),
+    turn('future','s1','attempt',80,10,15,10000),
+  ]});
+  const accounting = result.tokenAccounting;
+  assert.equal(accounting.schemaVersion, 1);
+  assert.equal(accounting.unattributedTurns, 1);
+  assert.equal(accounting.observed.totalTokens, 35);
+  assert.equal(accounting.observed.cachedInputTokens, 6);
+  assert.equal(accounting.observed.uncachedInputTokens, 24);
+  assert.equal(accounting.byAttempt.find(row => row.attemptId === 'attempt').coverage, 'complete');
+  assert.equal(accounting.byAttempt.find(row => row.attemptId === 'retry').coverage, 'partial');
+  assert.equal(accounting.byTask[0].observed.totalTokens, 35);
+  assert.equal(accounting.byTask[0].attempts, 2);
+  assert.equal(accounting.byTask[0].verified, false);
+  assert.equal(accounting.daily.at(-1).observed.totalTokens, 35);
+});
+
+test('class throughput includes failed attempts and withholds ratios for incomplete or disputed cohorts', () => {
+  const accepted = {...task,state:'accepted',owner_acceptance:'not_required'};
+  const owner = {repository:'example/repo'};
+  const failedAttempt = {...attempt,...owner,attempt_number:1};
+  const successfulAttempt = {...failedAttempt,id:'success',attempt_number:2,state:'succeeded'};
+  const token = (name, value) => ({...obs(name,'tokens',value),source:'codex_exec_json_turn_completed'});
+  const receipt = (name, unit, value) => ({...obs(name,unit,value),source:'codex_exec_jsonl'});
+  const span = (id, input, output) => [
+    event(id+'-start',id,'span_start','implementation',1),
+    // The wrapper may log a terminal provider receipt after the process has exited.
+    event(id+'-turn',id,'measurement','implementation',4,[
+      token('provider_input_tokens',input),token('provider_output_tokens',output)
+    ]),
+    event(id+'-end',id,'span_end','implementation',3,[
+      receipt('provider_core_usage_complete','boolean',1),
+      receipt('provider_usage_recorded_turn_count','count',1)
+    ]),
+  ].map(row => ({ ...row, ...owner, attempt_id:id }));
+  const records = [{...accepted,...owner},failedAttempt,successfulAttempt];
+  const events = [...span('attempt',10,2),...span('success',16,2)];
+  const query = (suppliedRecords, suppliedEvents) => buildEngineeringAnalytics({
+    now,records:suppliedRecords,events:suppliedEvents
+  }).tokenAccounting.byClass[0];
+  assert.equal(query(records, events).tokensPerVerifiedTask, 30);
+  assert.equal(query(records, events).verifiedTasksPerMillionTokens, 1e6 / 30);
+  assert.equal(query(records, events.slice(0,-1)).tokensPerVerifiedTask, null);
+  const conflict = {...successfulAttempt,state:'failed'};
+  assert.equal(query([...records,conflict], events).tokensPerVerifiedTask, null);
+  const interrupted = {
+    ...event('interrupted','another-span','span_start','implementation',5,[
+      receipt('provider_stream_requested','boolean',1)
+    ]), ...owner
+  };
+  assert.equal(query(records, [...events,interrupted]).tokensPerVerifiedTask, null);
+});

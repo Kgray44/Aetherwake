@@ -26,7 +26,8 @@ const spanTime = value => {
 const trends = {
   delivery: { label: 'Pull requests', series: [['prsCreated', 'Opened'], ['prsMerged', 'Merged']] },
   ci: { label: 'CI outcomes', series: [['ciSucceeded', 'Passed'], ['ciFailed', 'Failed']] },
-  work: { label: 'Engineering Tasks', series: [['tasks', 'Tasks registered'], ['attempts', 'Attempts started']] }
+  work: { label: 'Engineering Tasks', series: [['tasks', 'Tasks registered'], ['attempts', 'Attempts started']] },
+  tokens: { label: 'Codex tokens', series: [['codexInput', 'Observed input'], ['codexOutput', 'Observed output']] }
 };
 
 function TrendChart({ days }) {
@@ -61,7 +62,9 @@ function TrendChart({ days }) {
         </span>)}
       </div>
       <p className="low">{mode === 'ci' ? 'CI outcomes are grouped by run creation date.'
-        : mode === 'delivery' ? 'Each series follows the observed opening or merge date.' : 'Task creation and attempt start dates are shown separately.'}</p>
+        : mode === 'delivery' ? 'Each series follows the observed opening or merge date.'
+        : mode === 'tokens' ? 'Daily sums use attributable Codex turn receipts. Days without data remain unavailable.'
+        : 'Task creation and attempt start dates are shown separately.'}</p>
       <details><summary>Daily values</summary><div className="analytics-table">
         <table><thead><tr><th scope="col">UTC date</th>{series.map(([key,title]) => <th key={key} scope="col">{title}</th>)}</tr></thead>
           <tbody>{days.map(row => <tr key={row.date}><th scope="row">{day(row.date)}</th>
@@ -124,6 +127,37 @@ function Usage({ usage }) {
   </div>;
 }
 
+function TokenAccounting({ accounting }) {
+  const [taskId, setTaskId] = useState('');
+  const selected = accounting.byTask.find(row => row.taskId === taskId);
+  const usage = selected?.observed ?? accounting.observed;
+  const attempts = selected
+    ? accounting.byAttempt.filter(row => row.taskId === selected.taskId)
+    : accounting.byAttempt.filter(row => row.coverage !== 'unavailable');
+  return <>
+    <label>Task <select value={selected?.taskId ?? ''} onChange={event => setTaskId(event.target.value)}>
+      <option value="">All loaded Tasks</option>
+      {accounting.byTask.map(row => <option key={row.taskId} value={row.taskId}>{row.taskId}</option>)}
+    </select></label>
+    <MetricRows fields={[
+      ['Input and output total', count(usage.totalTokens)], ['Input tokens', count(usage.inputTokens)],
+      ['Output tokens', count(usage.outputTokens)], ['Cached input tokens', count(usage.cachedInputTokens)],
+      ['Uncached input tokens', count(usage.uncachedInputTokens)], ['Recorded turns', count(usage.turns)],
+      ['Unattributed turns in this projection', count(accounting.unattributedTurns)]
+    ]}/>
+    <p className="low">Totals cover recorded Codex turns. Partial attempts can include additional usage.</p>
+    {attempts.length > 0 && <details><summary>Attempt breakdown</summary><div className="analytics-table">
+      <table><thead><tr><th scope="col">Attempt</th><th scope="col">State</th><th scope="col">Configured model</th>
+        <th scope="col">Core usage coverage</th><th scope="col">Observed total tokens</th></tr></thead>
+        <tbody>{attempts.map(row => <tr key={row.attemptId}>
+          <th scope="row">{row.attemptNumber === null ? row.attemptId : row.attemptId + ' · #' + row.attemptNumber}</th>
+          <td>{label(row.state)}</td><td>{row.model ?? 'Unavailable'}</td>
+          <td>{label(row.coverage)}</td><td>{count(row.observed.totalTokens)}</td>
+        </tr>)}</tbody></table>
+    </div></details>}
+  </>;
+}
+
 export function EngineeringAnalyticsPage({ records, events, github, execution, ready, ui }) {
   const { Metric, Panel, Rise, Status } = ui;
   const data = useMemo(() => buildEngineeringAnalytics({
@@ -149,7 +183,11 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
     <div className="metrics analytics-metrics">{stats.map(([name,value,meta,Icon], index) =>
       <Metric key={name} name={name} value={value} meta={meta} Icon={Icon} index={index}/>)}</div>
     <Rise><Panel title="Engineering activity" right={<span className="panel-meta">14 UTC days · loaded records</span>}>
-      <TrendChart days={data.days}/>
+      <TrendChart days={data.days.map((day, index) => ({
+        ...day,
+        codexInput:data.tokenAccounting.daily[index].observed.inputTokens,
+        codexOutput:data.tokenAccounting.daily[index].observed.outputTokens
+      }))}/>
     </Panel></Rise>
     <div className="analytics-grid">
       <Rise><Panel title="Delivery and reliability" right={<BarChart3 size={18} className="muted-icon"/>}>
@@ -195,6 +233,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         ]}/>
       </Panel></Rise>
     </div>
+    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting}/></Panel></Rise>
     <Rise><Panel title="Provider and resource observations" right={<Cpu size={18} className="muted-icon"/>}><Usage usage={data.usage}/></Panel></Rise>
   </>;
 }
