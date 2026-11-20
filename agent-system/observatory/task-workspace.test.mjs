@@ -51,6 +51,27 @@ const current = { id: 'task_a', title: 'Build editor', objective: 'Landing works
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
 
+test('linked PRs expose only confirmed GitHub merge commits and keep existing explicit links unique',()=>{
+  const task={id:'task-merge',title:'Merge activity',objective:'Inspect the linked merge'};
+  const prefix='https://github.com/Kgray44/Aetherwake';
+  const merged_at='2026-01-04T00:00:00Z';
+  const sha='a'.repeat(40),preview='b'.repeat(40);
+  const refs=[{kind:'pull_request',uri:prefix+'/pull/12'},{kind:'pull_request',uri:prefix+'/pull/13'}];
+  const explicit={kind:'commit',uri:prefix+'/commit/'+sha,revision:sha};
+  const canonical={task,lifecycle:{state:'verifying',links:refs},engineering_snapshots:[
+    {cache_key:'pulls:12',number:12,merged_at,merge_commit_sha:sha},
+    {cache_key:'pulls:13',number:13,state:'open',merge_commit_sha:preview},
+    {cache_key:'pulls:14',number:14,merged_at,merge_commit_sha:'c'.repeat(40)},
+  ]};
+  const activity=taskEngineeringActivity({task,canonical});
+  const merges=activity.references.filter(ref=>ref.kind==='commit');
+  assert.deepEqual(merges.map(ref=>[ref.url,ref.provenance]),[[explicit.uri,'GitHub merge of linked pull request #12']]);
+  assert.equal(activity.events.find(event=>event.outcome==='merged').mergeCommitHref,explicit.uri);
+  assert.match(JSON.stringify(taskReportDefinition({task,canonical}).content),/GitHub merge of linked pull request #12/);
+  assert.equal(taskEngineeringActivity({task,canonical:{...canonical,lifecycle:{links:[...refs,explicit]}}})
+    .references.filter(ref=>ref.kind==='commit').length,1);
+});
+
 test('cached review and CI detail stay revision bound across Workspace and PDF',()=>{
   const task={id:'t',title:'Activity fixture',objective:'Link source activity'};
   const revision='a'.repeat(40);

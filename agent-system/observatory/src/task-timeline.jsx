@@ -144,7 +144,10 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
           <h3 ref={heading} tabIndex={-1}>{event.title}</h3>
           <p>Recorded occurrence <time dateTime={event.at} title={event.at}>{new Date(event.at).toLocaleString()}</time></p>
           {event.description&&<p>{event.description}</p>}
-          {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+          {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label}>
+            <dt>{label}</dt><dd>{label==='Merge commit'&&value===event.mergeCommitHref
+              ?<a href={event.mergeCommitHref}>{value.slice(-40)}</a>:value}</dd>
+          </div>)}</dl>}
           {event.measurements?.length>0&&<ul className="task-timeline-measurements">{event.measurements.map((metric,index)=><li key={index}>
             {human(metric.name)} · {metric.availability==='unavailable'?'Unavailable':metric.value??'Unavailable'} {metric.unit} · {metric.availability}
           </li>)}</ul>}
@@ -161,6 +164,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
       <summary>Linked engineering references ({known.references.length})</summary>
       <ul>{known.references.map(ref=><li key={ref.id}>
         <a href={taskLinkedHref(ref.url)}>{ref.label}</a>{' · '}{ref.revisions.map(revision=>revision.slice(0,10)).join(', ')}
+        {ref.provenance&&<small className="row-meta">{ref.provenance}</small>}
       </li>)}</ul>
     </details>}
   </section>;

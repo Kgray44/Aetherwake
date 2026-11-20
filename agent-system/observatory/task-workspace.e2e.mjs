@@ -515,8 +515,10 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('button',{name:'Attach evidence link'}).click();
   const association=page.getByRole('form',{name:'Attach evidence link'});
   const observedAt = new Date().toISOString();
+  const mergeCommit = 'c'.repeat(40);
   await seedGithubDetail('pulls:319',{
-    kind:'pull',number:319,title:'Review fixture',state:'open',created_at:observedAt,
+    kind:'pull',number:319,title:'Review fixture',state:'closed',created_at:observedAt,
+    merged_at:observedAt,merge_commit_sha:mergeCommit,
     reviews:[{id:81,state:'APPROVED',submitted_at:observedAt}],reviews_observed_at:observedAt,reviews_status:'available',
   },observedAt);
   await association.getByLabel('Reference type').selectOption('pull_request');
@@ -541,6 +543,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await run.getAttribute('href'),'#ci-runs/5321');
   await timeline.getByRole('button',{name:'Engineering',exact:true}).click();
   await timeline.getByRole('button',{name:/Review submitted on pull request #319/}).waitFor();
+  await timeline.getByRole('button',{name:/Pull request #319 merged/}).click();
+  assert.equal(await selected.getByRole('link',{name:mergeCommit,exact:true}).getAttribute('href'),
+    'https://github.com/Kgray44/Aetherwake/commit/'+mergeCommit);
   await timeline.getByRole('button',{name:/Reported deployment validation · succeeded/}).click();
   await timeline.getByText('Reported by the source journal',{exact:true}).waitFor();
   await timeline.getByRole('button',{name:/CI job finished.*Observatory browser tests/}).click();

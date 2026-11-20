@@ -67,6 +67,7 @@ function githubEvents(references, github, snapshots) {
     links.set(route,list);
   }
   const events = new Map();
+  const mergeCommits = new Map();
   const add = (id,at,fields) => {
     if (Number.isFinite(Date.parse(at))) events.set(id,{id,at,type:'Engineering',...fields});
   };
@@ -93,9 +94,19 @@ function githubEvents(references, github, snapshots) {
       const closed = !merged&&detail?.state==='closed'?detail.closed_at:null;
       const latest = [pull?.updated_at,detail?.updated_at].filter(Boolean).sort().at(-1);
       const linkedPull = refs.some(ref=>ref.kind==='pull_request');
+      const mergeSha = detail?.merge_commit_sha;
+      const confirmedMerge = linkedPull&&detail?.number===id&&Number.isFinite(Date.parse(detail.merged_at))&&
+        (!pull?.merged_at||Date.parse(pull.merged_at)===Date.parse(detail.merged_at))&&
+        /^[a-f0-9]{40}$/.test(mergeSha??'');
+      const mergeUrl = confirmedMerge?'https://github.com/Kgray44/Aetherwake/commit/'+mergeSha:null;
+      if (mergeUrl&&!mergeCommits.has(mergeSha)) {
+        mergeCommits.set(mergeSha,{id:'merge-commit:'+mergeSha,kind:'commit',label:'Merge commit',
+          url:mergeUrl,revisions:[mergeSha],provenance:'GitHub merge of linked pull request #'+id});
+      }
       if (linkedPull) add(prefix+'opened',opened,{...common,title:'Pull request #'+id+' opened',outcome:'opened'});
       if (linkedPull) add(prefix+'merged',merged,{...common,title:'Pull request #'+id+' merged',outcome:'merged',
-        details:[...common.details,...(detail?.merge_commit_sha?[['Merge commit',detail.merge_commit_sha]]:[])]});
+        mergeCommitHref:mergeUrl,
+        details:[...common.details,...(mergeUrl?[['Merge commit',mergeUrl]]:[])]});
       if (linkedPull) add(prefix+'closed',closed,{...common,title:'Pull request #'+id+' closed',outcome:'closed'});
       if (linkedPull && latest && ![opened,merged,closed].some(at=>Date.parse(at)===Date.parse(latest))) {
         add(prefix+'latest-update',latest,{...common,title:'Pull request #'+id+' last update',outcome:'updated'});
@@ -147,7 +158,7 @@ function githubEvents(references, github, snapshots) {
       details:[['Source','GitHub workflow snapshot'],['Association','GitHub-linked pull request #'+pullNumber+' at the Task-linked revision'],
         ['Run revision',run.revision],...(github?.ci?.observed_at?[['Snapshot observed',github.ci.observed_at]]:[])]});
   }
-  return [...events.values()];
+  return {events:[...events.values()],mergeCommits:[...mergeCommits.values()]};
 }
 
 function reportedEvents(task, events, attempts, telemetrySource) {
@@ -175,7 +186,10 @@ function reportedEvents(task, events, attempts, telemetrySource) {
 
 export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],evidence=[],events=[],github,telemetrySource}) {
   const authoritative=canonical?.task?.id===task.id?canonical:null;
-  const references=linkedReferences(task,authoritative,audits,evidence);
+  const explicitReferences=linkedReferences(task,authoritative,audits,evidence);
+  const githubActivity=githubEvents(explicitReferences,github,authoritative?.engineering_snapshots??[]);
+  const explicitCommits=new Set(explicitReferences.filter(ref=>ref.kind==='commit').map(ref=>ref.url.toLowerCase().replace(/\/$/,'')));
+  const references=[...explicitReferences,...githubActivity.mergeCommits.filter(ref=>!explicitCommits.has(ref.url.toLowerCase()))];
   const operations=references.filter(ref=>!['executor_session','artifact','branch'].includes(ref.kind));
   const sessions=new Set(references.filter(ref=>ref.kind==='executor_session').map(ref=>sessionKey(ref.url)));
   for (const attempt of authoritative?.attempts??[]) {
@@ -188,7 +202,7 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
     .filter(item=>verificationKinds.has(item.activityType)&&item.outcome!=='started').map(item=>[item.id,item])).values()]
     .sort((a,b)=>Date.parse(b.at)-Date.parse(a.at)||a.id.localeCompare(b.id));
   const reportedOperations=kind=>new Set(reported.filter(event=>!kind||event.activityType===kind).map(event=>event.operationId)).size;
-  const engineeringEvents=[...githubEvents(references,github,authoritative?.engineering_snapshots??[]),...reported];
+  const engineeringEvents=[...githubActivity.events,...reported];
   return {
     references, events:engineeringEvents, verificationReports,
     counts:[
