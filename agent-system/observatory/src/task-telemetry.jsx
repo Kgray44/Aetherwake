@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
+import { useCardMotion } from './card-motion.jsx';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
@@ -10,15 +11,16 @@ const time = value => value == null ? 'Unavailable' : format.format(value / 1000
 
 function MeasurementChart({ title, rows, empty }) {
   const reduced = useReducedMotion();
+  const interaction = useCardMotion();
   const max = Math.max(1, ...rows.map(row => row.value));
-  return <section className="task-telemetry-chart">
+  return <motion.section className="task-telemetry-chart" {...interaction}>
     <h3>{title}</h3>
     {rows.length ? <ul>{rows.map(row => <li key={row.label}>
       <span>{row.label}</span><strong>{row.display}</strong>
       <span className="task-telemetry-track" aria-hidden="true"><motion.span
         initial={false} animate={{ scaleX: row.value / max }} transition={{ duration: reduced ? 0 : .24 }}/></span>
     </li>)}</ul> : <p>{empty}</p>}
-  </section>;
+  </motion.section>;
 }
 
 function measurementRows(records, events) {

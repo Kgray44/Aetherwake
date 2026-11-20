@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Activity, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, Pause, Play, RotateCcw, Square, XCircle } from 'lucide-react';
+import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
 const actionLabels = {
@@ -20,6 +21,7 @@ const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
 
 export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, Status }) {
   const reduce = useReducedMotion();
+  const interaction = useCardMotion(true);
   const [action, setAction] = useState('');
   const [actionVersion, setActionVersion] = useState(detail.version);
   const [error, setError] = useState('');
@@ -126,7 +128,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
               const featured=featuredAction===type;
               return <motion.button key={type} type="button" aria-label={title} aria-pressed={action===type}
                 className={'task-command-button'+(featured?' featured':'')+(type==='cancel'?' destructive':'')}
-                whileTap={reduce?undefined:{scale:.98}} disabled={busy} onClick={()=>choose(type)}>
+                {...(!busy ? interaction : {})} disabled={busy} onClick={()=>choose(type)}>
                 <Icon size={17} aria-hidden="true"/><span><strong>{title}</strong><small>{actionHints[type]}</small></span><ArrowRight size={14} aria-hidden="true"/>
               </motion.button>;
             })}
