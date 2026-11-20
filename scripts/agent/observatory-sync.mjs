@@ -10,6 +10,7 @@ import { projectJournal, readTask } from './export-journal.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
 
 const maxStateBytes = 3 * 1024 * 1024 + 16384;
+const finalDeliveryWindowMs = 30_000;
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const key = value => createHash('sha256').update(value).digest('hex');
 const identity = value => typeof value === 'string' && telemetryTaskId.test(value);
@@ -202,14 +203,16 @@ export async function startObservatorySync({ task, journal, directory = observat
           if (id === name && report) await status(report);
         }
         failures = 0;
+        return true;
       } catch (error) {
-        if (control.signal.aborted) return;
+        if (control.signal.aborted) return false;
         failures = Math.min(failures + 1, 5);
         retryAt = Date.now() + Math.min(120000, 4000 * 2 ** failures);
         await status({ error: Number.isInteger(error.status) ? 'site_http_' + error.status : 'delivery_unavailable',
           checked_at: new Date().toISOString(), retry_at: new Date(retryAt).toISOString() });
         if (!managedConnection) connector?.close();
         connector = undefined;
+        return false;
       }
     })();
     try { await current; } finally { current = null; }
@@ -225,9 +228,12 @@ export async function startObservatorySync({ task, journal, directory = observat
       const timeout = new AbortController();
       const finishing = (async () => {
         await current;
-        await flush(true);
+        for (let attempt = 0; attempt < 3 && !control.signal.aborted; attempt += 1) {
+          if (await flush(true)) break;
+          if (attempt < 2) await delay(400 * (attempt + 1), undefined, { signal: control.signal }).catch(() => {});
+        }
       })();
-      await Promise.race([finishing, delay(8000, undefined, { signal: timeout.signal }).catch(() => {})]);
+      await Promise.race([finishing, delay(finalDeliveryWindowMs, undefined, { signal: timeout.signal }).catch(() => {})]);
       timeout.abort();
       control.abort();
       if (!managedConnection) connector?.close();

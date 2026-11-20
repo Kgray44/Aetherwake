@@ -134,27 +134,29 @@ test('managed telemetry can deliver for a new checkout using the admitted worker
   const event = traceEvent({task,attemptId:attempt.id,kind:'measurement'});
   await appendEvent(directory,event);
   const scope = '11111111-1111-4111-8111-111111111111';
-  let baseline, closed = false, unavailableOnce = true;
+  let baseline, closed = false, transientFailures = 2;
   const managedConnection = {
     async call({task_id,change,verification}) {
       assert.equal(task_id,task.id);
       assert.equal(verification,scope);
-      if (unavailableOnce) {
-        unavailableOnce = false;
+      if (transientFailures > 0) {
+        transientFailures -= 1;
         throw Error('The managed connection was temporarily busy');
       }
       if (!change) return {baseline:baseline??null};
       const projection = applyTelemetryDelta(baseline?.projection??null,change);
       baseline = {projection,digest:createHash('sha256').update(JSON.stringify(projection)).digest('hex'),
         received_at:new Date().toISOString()};
-      return baseline;
+      return {...baseline,generated_at:projection.generated_at,events:projection.events.length,records:projection.records.length};
     },
     close() { closed = true; },
   };
   const delivery = await startObservatorySync({task,journal:directory,directory:join(root,'observatory-sync'),
     verificationNamespace:scope,managedConnection});
-  await delivery.finish();
+  const receipt = await delivery.finish();
   assert.equal(closed,false);
+  assert.equal(receipt?.error,null);
+  assert.equal(receipt.events,1);
   assert.deepEqual(baseline?.projection.events.map(item=>item.event_id),[event.event_id]);
 });
 

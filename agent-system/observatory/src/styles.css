@@ -391,6 +391,7 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .panel[id^="task-"] { scroll-margin-top:1rem; }
 .panel[id^="task-"] h2:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
 .task-detail-toolbar .back { margin:0; }
+.task-detail-toolbar a.primary-button { text-decoration:none; }
 .task-report-export { display:flex; align-items:center; flex-wrap:wrap; gap:.65rem; }
 .task-report-export button { display:inline-flex; gap:.4rem; align-items:center; }
 .task-report-export span { color:var(--muted); font-size:.8rem; }

@@ -227,17 +227,22 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let identity;
   let desired;
   let leaseLost = false;
-  const report = async (type, fields = {}) => {
-    const request = { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
-      operation_id: randomUUID(), report: { type, ...fields,
-        ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
-        ...(identity ? { branch: identity.branch } : {}) } };
-    // Reconcile an ambiguous response by replaying the same operation, never the execution.
-    try { return await send(request); }
-    catch (error) {
-      if (error.status && error.status < 500) throw error;
-      return send(request);
-    }
+  let reports = Promise.resolve();
+  const report = (type, fields = {}) => {
+    const pending = reports.then(async () => {
+      const request = { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
+        operation_id: randomUUID(), report: { type, ...fields,
+          ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
+          ...(identity ? { branch: identity.branch } : {}) } };
+      // Replay the same operation if a report's outcome is ambiguous.
+      try { return await send(request); }
+      catch (error) {
+        if (error.status && error.status < 500) throw error;
+        return send(request);
+      }
+    });
+    reports=pending.catch(()=>{});
+    return pending;
   };
   const confirmControl = async () => {
     const state = (await report('heartbeat')).lifecycle.state;
@@ -296,7 +301,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     await measureStage('checkout_validation','context',async () => {
       identity = await identify(workspace, attempt.revision);
       lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
-      if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
+      if (identity.revision !== attempt.revision || ((!attempt.resume_session_id||attempt.resume_requires_clean)&&identity.dirty)) {
         throw Error('Workspace must match the attempt revision and cleanliness policy');
       }
       await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
@@ -308,7 +313,20 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     telemetryStarted = true;
     await telemetry(onTelemetryStart, { verificationNamespace, ...(providerStream ? {providerStream} : {}) });
     outcome = await execute({ executable, cwd: workspace, task, attempt,
-      onSession: (value,observedIdentity) => { sessionId = value; executionIdentity=observedIdentity; },
+      onSession: async (value,observedIdentity) => {
+        if (attempt.resume_session_id&&value!==attempt.resume_session_id) {
+          controller.abort();
+          throw Error('The provider returned a different conversation');
+        }
+        sessionId=value;
+        executionIdentity=observedIdentity;
+        try { await confirmControl(); }
+        catch (error) {
+          leaseLost=true;
+          controller.abort();
+          throw error;
+        }
+      },
       onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
       signal: workerSignal });
   } catch {
@@ -436,7 +454,7 @@ async function main(configPath) {
       if (active.size < 2) {
         try {
           await admitStorage();
-          const request = { op:'claim', operation_id:randomUUID(), ...(scope ? { task_ids:scope } : {}) };
+          const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:true, ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
             if (error.status && error.status < 500) throw error;
             return send(request);
@@ -446,7 +464,13 @@ async function main(configPath) {
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
               verificationNamespace:verification ?? null,managedConnection,
               ...(config.executor_transport==='app_server' ? {
-                execute:options=>executeAppServer(getConnector(),options),providerStream:'codex_app_server',
+                  execute:async options=>{
+                    // The persistent conversation belongs to this attempt process.
+                    // Release its Desktop session when the turn exits.
+                    const executor=openObservatoryConnector({cwd:options.cwd,executable:config.codex_bin});
+                    try { return await executeAppServer(executor,options); }
+                    finally { executor.close(); }
+                  },providerStream:'codex_app_server',
               } : {}),
               ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
               admitStorage }).catch(() => {
