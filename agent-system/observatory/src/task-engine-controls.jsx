@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Activity, Archive, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, Pause, Play, RotateCcw, Square, XCircle } from 'lucide-react';
 import {taskActivityHref} from './github-activity.mjs';
+import { PrerequisiteChecks } from './task-workspace.jsx';
+import { dependencyGraph } from './task-workspace.mjs';
 import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
@@ -163,8 +165,9 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
         </label>}
         <label className="task-check"><input name="cancel_with_dependency" type="checkbox"
           defaultChecked={action==='configure_execution'&&lifecycle.cancel_with_dependency}/> Cancel if a dependency is cancelled</label>
+        {action==='admit'&&<PrerequisiteChecks graph={dependencyGraph(task,tasks,{lifecycle})} Status={Status}/>}
         {action==='admit'&&task.prerequisites.capabilities.map(capability => <label className="task-check" key={capability}>
-          <input name="verified_capability" type="checkbox" value={capability}/> Verify {capability}
+          <input name="verified_capability" type="checkbox" value={capability}/> Attest {capability} on admission
         </label>)}
       </>}
       {['retry', 'reject'].includes(action) && <label>{action === 'retry' ? 'Changed assumption' : 'Review reason'}

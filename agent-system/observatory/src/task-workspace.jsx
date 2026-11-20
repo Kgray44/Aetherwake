@@ -84,8 +84,15 @@ export function useTaskFilters() {
   return useState(defaultFilters);
 }
 
-export function TaskDependencies({ task, tasks, Status }) {
-  const graph = dependencyGraph(task, tasks);
+export function PrerequisiteChecks({graph,Status}) {
+  const nodes=[...graph.upstream.map(node=>({...node,type:'Task'})),...graph.capabilities.map(node=>({...node,type:'Capability'}))];
+  return nodes.length>0&&<ul className="dependency-nodes" aria-label="Prerequisite checks">{nodes.map(node=>
+    <li key={node.type+':'+node.id}><span><small>{node.type}</small> {node.task?.title??node.id}</span><Status value={node.status}/></li>
+  )}</ul>;
+}
+
+export function TaskDependencies({task,tasks,lifecycle,summaries,Status}) {
+  const graph=dependencyGraph(task,tasks,{lifecycle,summaries});
   const renderNodes = (nodes, empty, showStatus) => nodes.length ? <ul className="dependency-nodes">
     {nodes.map(node => <li key={node.id}>
       {node.task ? <a href={taskHref(node.id)}>{node.task.title}</a> : <span className="mono">{node.id}</span>}
@@ -101,8 +108,9 @@ export function TaskDependencies({ task, tasks, Status }) {
       <div><h3>Dependent Tasks</h3>{renderNodes(graph.downstream, 'None in the current feed', false)}</div>
     </div>
     <h3 className="subheading">Required capabilities</h3>
-    {task.prerequisites?.capabilities?.length ? <ul className="dependency-nodes">
-      {task.prerequisites.capabilities.map((capability, index) => <li key={index}><span>{capability}</span><Status value="unverified"/></li>)}
+    {graph.capabilities.length>0 ? <ul className="dependency-nodes" aria-label="Required capabilities">
+      {graph.capabilities.map(node=><li key={node.id}><span>{node.id}{node.reason==='attested'&&<small> · Owner attested</small>}</span>
+        <Status value={node.status}/></li>)}
     </ul> : <p className="low">None declared</p>}
   </>;
 }

@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {commandForTask, taskEngineRequest} from './task-engine-client.mjs';
 
-export function useTaskEngineDetail({ summary, headers, onRefresh }) {
+export function useTaskEngineDetail({ summary, dependencyRevision, headers, onRefresh }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const pending = useRef(null);
@@ -20,7 +20,7 @@ export function useTaskEngineDetail({ summary, headers, onRefresh }) {
       }
     }).catch(cause => { if (!controller.signal.aborted) setError(cause.message); });
     return () => controller.abort();
-  }, [id, readRevision, summary?.lifecycle.state, blockers, headers]);
+  }, [id, readRevision, summary?.lifecycle.state, blockers, dependencyRevision, headers]);
   const current = detail?.task.id === id ? detail : null;
   async function command(action, attemptVersion = current?.version) {
     if (!current) throw Error('Task details are unavailable.');

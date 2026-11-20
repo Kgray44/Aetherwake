@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Save } from 'lucide-react';
 import { proposalChecks } from '../intake.mjs';
+import { PrerequisiteChecks } from './task-workspace.jsx';
 import { TaskScopeFields } from './task-scope.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
 
 const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({ task, version: control.version, priority: control.priority, editable });
 
-export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable, onHistory }) {
+export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable, onHistory, summaries, Status }) {
   const reduce = useReducedMotion();
   const [snapshot, setSnapshot] = useState(() => takeSnapshot(task, control, engineEditable));
   const [draft, setDraft] = useState(null);
@@ -22,12 +23,13 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
   const endpoint = '/api/tasks/' + encodeURIComponent(task.id) + '/control';
   const stored = snapshot.task;
   const changed = control.version > snapshot.version;
-  const dependencies = dependencyGraph({
-    ...task, prerequisites: { task_ids: draft?.dependencies ?? stored.prerequisites.task_ids },
-  }, tasks).upstream;
+  const graph=dependencyGraph({...task,prerequisites:{
+    task_ids:draft?.dependencies??stored.prerequisites.task_ids,
+    capabilities:draft?.capabilities??stored.prerequisites.capabilities,
+  }},tasks,{lifecycle:control.lifecycle,summaries});
   const checks = draft ? proposalChecks(draft) : {};
   const missing = Object.entries(checks).filter(([, valid]) => !valid).map(([name]) => name);
-  const selfDependency = dependencies.some(node => node.id === task.id);
+  const selfDependency = graph.upstream.some(node => node.id === task.id);
   const replacements = tasks.filter(other =>
     other.id !== task.id && manageable(other) && ['proposed', 'blocked'].includes(other.state));
 
@@ -149,11 +151,8 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
         {selfDependency && <p role="alert">A Task cannot be its own prerequisite.</p>}
         {missing.length > 0 && <p role="status">Incomplete: {missing.join(', ')}.</p>}
         {!missing.length && !selfDependency && <p>Required proposal fields are complete.</p>}
-        {dependencies.length > 0 && <ul>{dependencies.map(node => <li key={node.id}>
-          {node.task?.title ?? node.id} · {node.id === task.id ? 'unsatisfied' : node.status}
-        </li>)}</ul>}
-        {(draft?.capabilities ?? stored.prerequisites.capabilities).length > 0 && <p>Required capabilities are unverified.</p>}
-        <p>Execution admission is unverified.</p>
+        <PrerequisiteChecks graph={graph} Status={Status}/>
+        <p>{control.lifecycle?.executor?'Execution settings are managed under Execution controls.':'Task admission is a separate step from saving this proposal.'}</p>
       </section>
       <div className="form-actions">
         <motion.button className="primary-button" type="submit" disabled={busy || !draft || changed || missing.length > 0 || selfDependency}

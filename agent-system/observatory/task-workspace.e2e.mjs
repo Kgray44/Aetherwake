@@ -244,6 +244,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByLabel('Task title').fill('Canonical schedule verification');
   await page.getByLabel('Tangible objective').fill('Use the existing engine API to register, schedule and control a genuine isolated Task.');
   await page.getByLabel('Prerequisite task IDs').fill(prerequisite.task.id);
+  await page.getByLabel('Required capabilities').fill('Scoped verification workspace');
   await page.getByLabel('Acceptance criteria').fill('Observe the canonical schedule and audit receipts.');
   await page.getByLabel('Input artifacts').fill('private-artifact:scope-input');
   await page.getByLabel('Planned deliverables').fill('Schedule verification receipt');
@@ -257,8 +258,13 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const admission = page.getByRole('form', { name: 'Admit to Codex queue' });
   await admission.getByLabel('Start at').fill('2050-01-01T13:00');
   await admission.getByLabel('Maximum minutes per attempt').fill('7');
+  await admission.getByRole('list',{name:'Prerequisite checks'}).getByText('unverified',{exact:true}).waitFor();
+  await admission.getByRole('checkbox',{name:'Attest Scoped verification workspace on admission'}).check();
   await admission.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.getByRole('list', { name: 'Admission blockers' }).getByText(/Canonical prerequisite/).waitFor();
+  const capability=page.getByRole('list',{name:'Required capabilities'});
+  await capability.getByText(/Owner attested/).waitFor();
+  await capability.getByText('satisfied',{exact:true}).waitFor();
   const id = new URL(page.url()).hash.split('/').at(-1);
   let detail = await send({ op: 'get', task_id: id });
   assert.deepEqual(detail.task.requirements,[{kind:'artifact',uri:'private-artifact:scope-input'}]);
