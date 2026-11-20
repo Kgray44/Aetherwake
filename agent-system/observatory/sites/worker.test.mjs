@@ -737,3 +737,23 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   assert.equal(overview.records.find(item => item.id === task.id).state, 'running');
   assert.equal(overview.records.find(item => item.id === leased.attempt.id).task_id, task.id);
 });
+
+test('owner admission activates a published proposal without rewriting its intake document', async t => {
+  const { call, post, writes } = fixture(t, { token: 'proposal-test-token' });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const creation = await post({ 'x-observatory-publish': 'github' });
+  const { task, github } = await creation.json();
+  assert.equal(github.state, 'published');
+  assert.equal(writes.length, 1);
+  const response = await call('/api/task-engine/v1', { method: 'POST', headers, body: JSON.stringify({
+    op: 'command', task_id: task.id, expected_version: 1, operation_id: crypto.randomUUID(),
+    action: { type: 'admit', executor: 'codex' },
+  }) });
+  const activated = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(activated.task.id, task.id);
+  assert.equal(activated.lifecycle.state, 'ready');
+  const publish = await call('/api/tasks/' + task.id + '/publish', { method: 'POST', headers, body: '{}' });
+  assert.equal((await publish.json()).github.state, 'published');
+  assert.equal(writes.length, 1);
+});

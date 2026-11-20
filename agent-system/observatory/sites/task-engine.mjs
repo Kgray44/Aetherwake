@@ -313,8 +313,8 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     const args = fenceGraph ? snapshotArgs() : [row.version];
     const updated = await query(`
       UPDATE proposals SET record = ?, engine = ?, version = ?, priority = ?
-      WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL AND ${guard}
-    `, JSON.stringify(task), JSON.stringify(next), version, priority, owner, namespace, row.task_id, ...args).run();
+      WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS ? AND ${guard}
+    `, JSON.stringify(task), JSON.stringify(next), version, priority, owner, namespace, row.task_id, row.github_state, ...args).run();
     if (Number(updated.meta.changes) !== 1) return null;
     const result = { ...row, record: JSON.stringify(task), engine: JSON.stringify(next), version, priority };
     rows.set(row.task_id, result);
@@ -362,7 +362,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     }
     const running = [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running');
 
-    const admitted = [...rows.values()].filter(row => row.github_state === null && details(row).executor === 'codex' &&
+    const admitted = [...rows.values()].filter(row => row.engine && details(row).executor === 'codex' &&
       claimStates.has(details(row).state));
     for (const row of admitted) {
       const lifecycle = details(row);
@@ -395,7 +395,11 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     return success({ claim: { task: record(rows.get(candidate.task_id)), attempt: exposeAttempt(attempt), lease: attempt.lease } });
   }
 
-  if (!currentRow || currentRow.github_state !== null) return failure(404, 'Private Task not found');
+  if (!currentRow) return failure(404, 'Task not found');
+  if (currentRow.github_state && !currentRow.engine &&
+      (currentRow.github_state !== 'published' || body.action?.type !== 'admit')) {
+    return failure(409, 'Published proposal must be admitted before execution controls are available');
+  }
   if (body.op === 'command' && body.expected_version !== currentRow.version) return conflict();
   const task = record(currentRow);
   const lifecycle = details(currentRow);
