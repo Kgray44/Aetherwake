@@ -56,3 +56,22 @@ The focused commands supply early feedback. The existing acceptance profile, sec
 Every route requires governance coverage, source-owner review and affected-scope review. Empty, unknown or incomplete path sets are not safe classifications. Supply the complete changed-path inventory (including renamed/deleted paths), inspect the current-state and ownership indexes, and add any cross-domain obligations through existing governance. `scope_coverage` explicitly does not claim exhaustive coverage. Paths must be unambiguous repository-relative paths; unsafe aliases fail closed.
 
 Root `AGENTS.md` is the repository instruction entry point, and `.agents/skills/*/SKILL.md` contains discoverable, narrowly scoped skill files. Selected risk classes add skills even when not explicitly named as secondary classes. This filesystem layout is verified, not a claim that a Codex session was launched.
+
+## Scoped execution route proposals
+
+The router accepts an optional private evidence bundle with
+`--execution-evidence <private.json> --json`. The result's `execution_route`
+reports a candidate or retains the configured route. It cannot launch a process
+or authorize a change. The configuration owner verifies provenance and approves a
+policy separately under the normal execution controls.
+
+A version-1 bundle supplies the configured provider/model/effort/client, a fresh
+matching capability catalog, the declared difficulty and context profile, and
+independently reviewed held-out comparisons. Scope must match the same
+repository and revision, affected paths, class, risks, verification checklist,
+acceptance profile, prerequisites and previous-failure condition. An observed
+quality or cost regression vetoes the candidate for that scope. A proposal needs
+at least two verified matched pairs with lower observed token use and no observed
+cost increase; missing tokens cannot establish an improvement. When all eligible
+candidates have observed costs, prefer the best relative cost first. Otherwise
+rank by observed relative token use.
