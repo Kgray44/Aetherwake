@@ -5,9 +5,9 @@ import {taskActivityHref} from './github-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
 import { attemptMatchesEvidence, criterionEvidenceStatus, evidenceClaimStatus } from './evidence-status.mjs';
 import { attemptJournal } from './task-attempts.mjs';
-import { dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
+import { dependencyGraph, organizeTasks, taskHref, workLabels } from './task-workspace.mjs';
 
-const defaultFilters = { query: '', source: 'all', state: 'all', sort: 'newest', group: 'none' };
+export const defaultTaskFilters = { query: '', source: 'all', state: 'all', sort: 'newest', group: 'none' };
 const labels = value => value.replaceAll('_', ' ');
 const date = value => value ? new Date(value).toLocaleDateString() : 'Unavailable';
 
@@ -37,8 +37,11 @@ export function TaskRows({ tasks, controls, related, activityFor, Status }) {
   </ul>;
 }
 
-export function TaskExplorer({ tasks, controls, related, activityFor, Status, Panel, onCreate, loading, filters, setFilters }) {
-  const groups = useMemo(() => organizeTasks(tasks, filters, controls), [tasks, filters, controls]);
+export function TaskExplorer({tasks,controls,related,activityFor,Status,Panel,onCreate,loading,filters,setFilters,work,workActivity}) {
+  const interaction=useCardMotion(true);
+  const groups=useMemo(()=>organizeTasks(tasks,{...filters,work},controls,workActivity.byTask),[tasks,filters,controls,work,workActivity]);
+  const queueViews=['all','active','waiting','review','issues','accepted','archived'];
+  if(work!=='all'&&!queueViews.includes(work))queueViews.splice(-1,0,work);
   const states = [...new Set(tasks.map(task => task.state).filter(Boolean))].sort();
   const count = groups.reduce((sum, [, items]) => sum + items.length, 0);
   const field = event => {
@@ -48,6 +51,14 @@ export function TaskExplorer({ tasks, controls, related, activityFor, Status, Pa
   return <Panel title="Task explorer" right={<button className="primary-button" type="button" onClick={onCreate}>
     <Plus size={16} aria-hidden="true"/> Create proposal
   </button>}>
+    <nav className="task-work-filters" aria-label="Task activity views">
+      {queueViews.map(view=><motion.a key={view} className="quiet-button task-work-filter" href={taskHref(undefined,view)}
+        aria-current={work===view?'page':undefined} {...interaction}
+        onClick={event=>{if(!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey)setFilters(previous=>({...previous,state:'all'}));}}>
+        {view==='all'?'Current Tasks':workLabels[view]}
+        <span>{view==='all'?tasks.length-workActivity.counts.archived:workActivity.counts[view]}</span>
+      </motion.a>)}
+    </nav>
     <div className="task-filters">
       <label>Search <span className="search"><Search size={16} aria-hidden="true"/>
         <input name="query" type="search" value={filters.query} onChange={field} placeholder="Title, objective, or ID"/>
@@ -56,7 +67,7 @@ export function TaskExplorer({ tasks, controls, related, activityFor, Status, Pa
         <option value="all">All Tasks</option><option value="private">Manageable private proposals</option>
       </select></div>
       <div className="task-filter"><label htmlFor="task-filter-state">State</label><select id="task-filter-state" name="state" value={filters.state} onChange={field}>
-        <option value="all">Current Tasks</option>
+        <option value="all">{work==='all'?'Current Tasks':'Any state in view'}</option>
         {[...new Set([...states, ...(filters.state === 'all' ? [] : [filters.state])])].map(state =>
           <option key={state} value={state}>{labels(state)}</option>)}
       </select></div>
@@ -70,7 +81,7 @@ export function TaskExplorer({ tasks, controls, related, activityFor, Status, Pa
     </div>
     <div className="task-result-bar">
       <span role="status"><Filter size={14} aria-hidden="true"/> {count} of {tasks.length} Tasks</span>
-      {filters !== defaultFilters && <button className="text-button" type="button" onClick={() => setFilters(defaultFilters)}>Reset filters</button>}
+      {(filters!==defaultTaskFilters||work!=='all')&&<a className="text-button" href={taskHref()} onClick={()=>setFilters(defaultTaskFilters)}>Reset filters</a>}
     </div>
     {!loading && !count && <p>{tasks.length ? 'No Tasks match these filters.' : 'No Tasks in the current feed.'}</p>}
     {groups.map(([label, items]) => <section key={label} className="task-group" aria-label={labels(label)}>
@@ -81,7 +92,7 @@ export function TaskExplorer({ tasks, controls, related, activityFor, Status, Pa
 }
 
 export function useTaskFilters() {
-  return useState(defaultFilters);
+  return useState(defaultTaskFilters);
 }
 
 export function PrerequisiteChecks({graph,Status}) {

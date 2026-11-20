@@ -462,4 +462,15 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     const node = document.querySelector('.metric:hover');
     return node && Math.abs(new DOMMatrix(getComputedStyle(node).transform).m42 + 1) < .05;
   });
+  await page.getByRole('link',{name:/queued, scheduled, or paused Tasks/}).click();
+  await page.waitForURL(url=>url.hash==='#tasks?work=waiting');
+  const workViews=page.getByRole('navigation',{name:'Task activity views'});
+  const waitingView=workViews.getByRole('link',{name:/Queued or paused/});
+  assert.equal(await waitingView.getAttribute('aria-current'),'page');
+  await page.getByRole('link',{name:/Candidate review verification.*Manage/}).waitFor();
+  assert.equal(await page.getByRole('link',{name:/Canonical prerequisite.*Manage/}).count(),0);
+  await page.reload();
+  await waitingView.waitFor();
+  assert.equal(await waitingView.getAttribute('aria-current'),'page');
+  await page.getByRole('link',{name:/Candidate review verification.*Manage/}).waitFor();
 });

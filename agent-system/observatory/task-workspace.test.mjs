@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attemptEvents, dependencyGraph, organizeTasks, parseTaskHref, taskActivity, taskHref, workspaceCounts } from './src/task-workspace.mjs';
+import { attemptEvents, dependencyGraph, organizeTasks, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
 
 const accepted = { id: 'accepted', title: 'Ready input', state: 'accepted', classification: { primary: 'integration' } };
 const blocked = { id: 'blocked', title: 'Build runtime', state: 'blocked', classification: { primary: 'integration' } };
@@ -10,6 +10,8 @@ const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prer
 
 test('task links preserve the registry and direct detail routes', () => {
   assert.deepEqual(parseTaskHref('#tasks'), { id: null });
+  assert.deepEqual(parseTaskHref(taskHref(undefined,'active')),{id:null,work:'active'});
+  assert.equal(parseTaskHref('#tasks?work=unknown'),null);
   assert.deepEqual(parseTaskHref(taskHref('roadmap:task.1')), { id: 'roadmap:task.1' });
   assert.equal(parseTaskHref('#tasks/../../private'), null);
   assert.equal(parseTaskHref('#tasks/a%2Fb'), null);
@@ -100,11 +102,13 @@ test('work counters separate live execution, historical attempts and explicit ac
   const tasks = ['active','old','done','bad','none','reported','review'].map(id=>({id,state:id==='done'?'accepted':'proposed',owner_acceptance:id==='done'?'accepted':'not_reviewed'}));
   const attempts = [{task_id:'old',state:'succeeded'},{task_id:'bad',state:'failed'},{task_id:'reported',state:'running'}];
   const summaries = new Map([['active',{lifecycle:{state:'running'}}], ['review',{lifecycle:{state:'verifying'}}]]);
-  assert.deepEqual(workspaceCounts(tasks,attempts,summaries),{active:1,accepted:1,succeeded:1,review:1,waiting:0,issues:1,unlinked:1,reportedRunning:1});
+  assert.deepEqual(workspaceActivity(tasks,attempts,summaries).counts,{active:1,accepted:1,succeeded:1,review:1,waiting:0,issues:1,unlinked:1,reportedRunning:1,archived:0});
   summaries.set('old',{lifecycle:{state:'queued'}});
   summaries.set('bad',{lifecycle:{state:'archived'}});
   attempts.push({task_id:'review',state:'failed'});
-  assert.deepEqual(workspaceCounts(tasks,attempts,summaries),{active:1,accepted:1,succeeded:0,review:1,waiting:1,issues:0,unlinked:1,reportedRunning:1});
+  const activity=workspaceActivity(tasks,attempts,summaries);
+  assert.deepEqual(activity.counts,{active:1,accepted:1,succeeded:0,review:1,waiting:1,issues:0,unlinked:1,reportedRunning:1,archived:1});
+  assert.deepEqual(organizeTasks(tasks,{work:'waiting'},{},activity.byTask).flatMap(([,items])=>items.map(item=>item.id)),['old']);
 });
 
 import { attemptJournal, mergeTaskAttempts } from './src/task-attempts.mjs';
