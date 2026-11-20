@@ -9,6 +9,9 @@
         "op": {
           "const": "list"
         },
+        "include_archived": {
+          "type": "boolean"
+        },
         "state": {
           "$ref": "#/$defs/state"
         }
@@ -482,6 +485,14 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "reopen" },
+            "feedback": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          },
+          "required": ["type", "feedback"]
         },
         {
           "type": "object",
