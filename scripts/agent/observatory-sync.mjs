@@ -159,8 +159,10 @@ export async function readObservatoryConnection(directory) {
   return config;
 }
 
-export async function startObservatorySync({ task, journal, directory = observatoryDirectory(), verificationNamespace }) {
-  const config = await readObservatoryConnection(directory);
+export async function startObservatorySync({ task, journal, directory = observatoryDirectory(), verificationNamespace,
+  managedConnection }) {
+  const config = await readObservatoryConnection(directory) ??
+    (managedConnection ? { version:1,verification:verificationNamespace ?? undefined } : null);
   if (!config || task.repository !== 'Kgray44/Aetherwake') return null;
   if (!identity(task.id) || (verificationNamespace !== undefined && (config.verification ?? null) !== verificationNamespace)) {
     throw Error('Invalid Observatory telemetry namespace or Task identity');
@@ -185,7 +187,7 @@ export async function startObservatorySync({ task, journal, directory = observat
     if (current || control.signal.aborted || Date.now() < retryAt) return current;
     current = (async () => {
       try {
-        connector ??= openObservatoryConnector({ signal: control.signal });
+        connector ??= managedConnection ?? openObservatoryConnector({ signal: control.signal });
         // Keep the current Task first and revisit older offline journals in bounded batches.
         const names = (await readdir(queue)).filter(file => /^[a-f0-9]{64}\.source$/.test(file)).map(file => file.slice(0, -7));
         const rotate = names.filter(other => other !== name);
@@ -206,7 +208,7 @@ export async function startObservatorySync({ task, journal, directory = observat
         retryAt = Date.now() + Math.min(120000, 4000 * 2 ** failures);
         await status({ error: Number.isInteger(error.status) ? 'site_http_' + error.status : 'delivery_unavailable',
           checked_at: new Date().toISOString(), retry_at: new Date(retryAt).toISOString() });
-        connector?.close();
+        if (!managedConnection) connector?.close();
         connector = undefined;
       }
     })();
@@ -228,7 +230,7 @@ export async function startObservatorySync({ task, journal, directory = observat
       await Promise.race([finishing, delay(8000, undefined, { signal: timeout.signal }).catch(() => {})]);
       timeout.abort();
       control.abort();
-      connector?.close();
+      if (!managedConnection) connector?.close();
       return jsonFile(statusPath).catch(() => null);
     },
   };

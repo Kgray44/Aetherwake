@@ -52,7 +52,7 @@ function gitProvisioningIdentity(settings) {
 // Only worker-approved claims can reach this provisioner. The Task controls the
 // pinned revision; the worker owns the origin and every filesystem destination.
 export async function provisionTaskWorkspace({ root, task, attempt, author, signal,
-  cloneOrigin = provisionOrigin }) {
+  cloneOrigin = provisionOrigin, observe = (_name, action) => action() }) {
   if (!taskIdPattern.test(task?.id ?? '') || task.repository !== 'Kgray44/Aetherwake' ||
       !provisionRevision.test(attempt?.revision ?? '')) throw Error('Invalid Task checkout identity');
   const { name, email } = gitProvisioningIdentity(author);
@@ -83,12 +83,12 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   try {
     await run('init', '--quiet');
     await run('remote', 'add', 'origin', cloneOrigin);
-    await run('fetch', '--quiet', '--depth=1', '--no-tags', 'origin', attempt.revision);
+    await observe('checkout_fetch',() => run('fetch', '--quiet', '--depth=1', '--no-tags', 'origin', attempt.revision));
     await run('remote', 'set-url', 'origin', provisionOrigin);
     await run('config', '--local', 'user.name', name);
     await run('config', '--local', 'user.email', email);
-    await run('-c', 'core.hooksPath=' + join(staging, '.git', 'aads-disabled-hooks'),
-      'switch', '--quiet', '-c', branch, attempt.revision);
+    await observe('checkout_materialization',() => run('-c', 'core.hooksPath=' + join(staging, '.git', 'aads-disabled-hooks'),
+      'switch', '--quiet', '-c', branch, attempt.revision));
     const candidate = await checkoutIdentity(staging, attempt.revision);
     if (candidate.revision !== attempt.revision || candidate.dirty) throw Error('Provisioned checkout is not clean and pinned');
     signal?.throwIfAborted();
@@ -197,7 +197,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage,
-  verificationNamespace, prepareWorkspace, interval = 12_000 }) {
+  verificationNamespace, prepareWorkspace, managedConnection, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -266,7 +266,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     if (prepareWorkspace) {
       provisioning = true;
       workspace = await measureStage('checkout_provisioning','context',
-        () => prepareWorkspace({ task, attempt, signal:workerSignal }));
+        () => prepareWorkspace({ task, attempt, signal:workerSignal,
+          observe:(name,action) => measureStage(name,'context',action) }));
       provisioning = false;
     }
     workerSignal.throwIfAborted();
@@ -279,7 +280,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
     });
     if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
-      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage } = createClaimTelemetryHooks(workspace));
+      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage } = createClaimTelemetryHooks(workspace,
+        managedConnection ? { managedConnection } : undefined));
     }
     telemetryStarted = true;
     await telemetry(onTelemetryStart, { verificationNamespace });
@@ -391,13 +393,15 @@ async function main(configPath) {
     cwd: root, windowsHide: true, timeout: 5000, maxBuffer: 8192,
   });
   let connector;
-  function send(request) {
-    connector ??= openObservatoryConnector({ cwd: root, tool, executable: config.codex_bin });
-    return connector.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }).catch(error => {
-      if (!error.status) { connector?.close(); connector = undefined; }
+  function call(args, toolName) {
+    const current = connector ??= openObservatoryConnector({ cwd: root, tool, executable: config.codex_bin });
+    return current.call(args,toolName).catch(error => {
+      if (!error.status && connector === current) { current.close(); connector = undefined; }
       throw error;
     });
   }
+  const send = request => call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
+  const managedConnection = { call:args => call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   try {
     while (!signal.aborted) {
       if (active.size < 2) {
@@ -411,7 +415,7 @@ async function main(configPath) {
           if (result.claim && !signal.aborted) {
             const workspace = workspaces.get(result.claim.task.id);
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
-              verificationNamespace:verification ?? null,
+              verificationNamespace:verification ?? null,managedConnection,
               ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
               admitStorage }).catch(() => {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');

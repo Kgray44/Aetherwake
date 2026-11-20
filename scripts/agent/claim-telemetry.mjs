@@ -13,7 +13,7 @@ const streamSource = 'codex_exec_jsonl';
 
 /** Observe a claimed execution without owning its lifecycle or making an executor call. */
 export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory, verificationNamespace },
-  { startDelivery = startObservatorySync } = {}) {
+  { startDelivery = startObservatorySync, managedConnection } = {}) {
   if (!isAbsolute(journal) || (deliveryDirectory !== undefined && !isAbsolute(deliveryDirectory)) ||
       task?.record_type !== 'task' || validateRecord(task).length || !identity.test(task.id) || !identity.test(attempt?.id ?? '') ||
       !revision.test(attempt?.revision ?? '')) throw Error('Invalid claim telemetry configuration');
@@ -41,7 +41,8 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
       // The worker's credential stays with the engine. Only the configured
       // Observatory connection can deliver a projection.
       if (deliveryDirectory) {
-        delivery = await startDelivery({task,journal,directory:deliveryDirectory,verificationNamespace}).catch(() => null);
+        delivery = await startDelivery({task,journal,directory:deliveryDirectory,verificationNamespace,
+          ...(managedConnection ? { managedConnection } : {})}).catch(() => null);
       }
     },
     async onUsage(measurements) {
