@@ -18,7 +18,7 @@ function fixture(command, changed = async () => {}) {
   return { dom, view, calls, action: name => dom.root.querySelector(`[data-connection-action="${name}"]`), status: () => dom.root.querySelector('[role="status"]').textContent, get chats() { return chats; }, get codex() { return codex; }, close() { view.dispose(); restore(); } };
 }
 
-test("successful sign-in followed by rejected model discovery keeps ready identity and reads safe diagnostic once without OAuth/session retry", async () => {
+test("successful sign-in waits for an explicit model discovery gesture and keeps ready identity on rejection", async () => {
   let connected = false, modelsFailed = false, changed = 0;
   const f = fixture(async input => {
     if (input.type === "connect") { connected = true; return { ...baseStatus(), pending: true }; }
@@ -27,8 +27,10 @@ test("successful sign-in followed by rejected model discovery keeps ready identi
   }, async () => { changed++; });
   try {
     await f.view.ready; f.action("connect").onclick(); await until(() => !f.action("cancel").hidden); await f.view.refresh();
+    assert.deepEqual(f.calls.map(c => c.type), ["status", "connect", "status"]); assert.equal(f.action("refreshModels").disabled, false); assert.equal(f.action("chat").disabled, true);
+    f.action("refreshModels").onclick(); await until(() => f.status().includes("not permitted")); await until(() => !f.action("refreshModels").disabled);
     assert.deepEqual(f.calls.map(c => c.type), ["status", "connect", "status", "refreshModels", "status"]);
-    assert.equal(f.dom.root.dataset.connectionState, "ready"); assert.equal(f.action("connect").hidden, true); assert.equal(f.action("chat").disabled, true); assert.equal(changed, 1);
+    assert.equal(f.dom.root.dataset.connectionState, "ready"); assert.equal(f.action("connect").hidden, true); assert.equal(f.action("chat").disabled, true); assert.equal(changed, 2);
     assert.equal(f.status(), "Signed in. Model discovery was not permitted."); assert.equal(f.dom.root.textContent.includes("PRIVATE"), false); assert.equal(f.dom.root.textContent.includes("connection could not be completed"), false); assert.equal(f.chats, 0); assert.equal(f.codex, 0);
     const details = f.dom.root.querySelector(".connection-catalog-diagnostic"); assert.equal(details.open, false); assert.equal(details.hidden, false); details.open = true;
     assert.deepEqual(details.querySelectorAll("dd").map(n => n.textContent), ["403", "error", "subscription_sharing_user_not_eligible", "req_fixture123"]);
@@ -46,10 +48,10 @@ test("explicit refresh failure reports HTTP200 parse failure independently and n
   } finally { f.close(); }
 });
 
-test("the one discovery following explicit sign-in holds the busy guard through the actual catalog result", async () => {
+test("explicit discovery after sign-in holds the busy guard through the actual catalog result", async () => {
   const pending = deferred(); let connected = false;
   const f = fixture(async input => { if (input.type === "connect") { connected = true; return { ...baseStatus(), pending: true }; } if (input.type === "refreshModels") return pending.promise; return connected ? signedIn() : baseStatus(); });
-  try { await f.view.ready; f.action("connect").onclick(); await until(() => !f.action("cancel").hidden); const completion = f.view.refresh(); await until(() => f.calls.length === 4); assert.equal(f.action("refreshModels").disabled, true); f.action("refreshModels").onclick(); f.action("connect").onclick(); assert.equal(f.calls.length, 4); pending.resolve(catalogReady()); await completion; assert.equal(f.action("chat").disabled, false); assert.deepEqual(f.calls.map(c => c.type), ["status", "connect", "status", "refreshModels"]); }
+  try { await f.view.ready; f.action("connect").onclick(); await until(() => !f.action("cancel").hidden); await f.view.refresh(); assert.deepEqual(f.calls.map(c => c.type), ["status", "connect", "status"]); f.action("refreshModels").onclick(); await until(() => f.calls.length === 4); assert.equal(f.action("refreshModels").disabled, true); f.action("refreshModels").onclick(); f.action("connect").onclick(); assert.equal(f.calls.length, 4); pending.resolve(catalogReady()); await until(() => !f.action("chat").disabled); assert.deepEqual(f.calls.map(c => c.type), ["status", "connect", "status", "refreshModels"]); }
   finally { pending.resolve(catalogReady()); f.close(); }
 });
 
@@ -104,7 +106,7 @@ test("host view-refresh failure cannot relabel a known model restriction as fail
   finally { f.close(); }
 });
 
-test("expired ChatGPT sessions offer refresh first and discover models after successful renewal", async () => {
+test("expired ChatGPT sessions require separate renewal and model discovery gestures", async () => {
   const expired = { ...signedIn(), state: "expired", planUsageEnabled: false, sessionRefreshAvailable: true };
   let changed = 0;
   const f = fixture(async input => {
@@ -124,9 +126,13 @@ test("expired ChatGPT sessions offer refresh first and discover models after suc
     assert.equal(refresh.disabled, false);
     assert.deepEqual(f.calls.map(c => c.type), ["status"]);
     refresh.onclick();
+    await until(() => !f.action("refreshModels").disabled);
+    assert.deepEqual(f.calls.map(c => c.type), ["status", "refreshSession"]);
+    assert.equal(f.action("chat").disabled, true);
+    f.action("refreshModels").onclick();
     await until(() => !f.action("chat").disabled);
     assert.deepEqual(f.calls.map(c => c.type), ["status", "refreshSession", "refreshModels"]);
-    assert.equal(changed, 1);
+    assert.equal(changed, 2);
     assert.equal(refresh.parentElement.tagName, "DETAILS");
     assert.equal(f.chats, 0);
   } finally { f.close(); }

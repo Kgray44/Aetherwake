@@ -1287,3 +1287,87 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
  }finally{await chat?.dispose();f.restore();}
 });
+
+test('incomplete explicit memory search retains draft and never falls back to ordinary send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;try{
+  const port={command:async(name:string,input:any)=>{if(name==='send'){f.calls.push({name,input});assert.equal(input.useMemory,true);throw Error('personal_memory_search_incomplete');}return (f.port.command as any)(name,input);}} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,onRememberMessage:async()=>true});await chat.ready;
+  const form=f.view.root.querySelector('form');form.fire('submit',{submitter:named(form,'Send with memory')});
+  await until(()=>f.view.root.querySelector('.cp-chat-status').textContent.includes('Memory search reached its limit'));
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('Remember message uses only eligible local sources and refreshes scope after a project move', async () => {
+  const f = fixture();
+  const original = f.detail.messages.items[0];
+  f.detail.messages.items.push(
+    { ...original, id: 'message:sensitive', sensitivity: 'sensitive' },
+    { ...original, id: 'message:inherited', inherited: true },
+    { ...original, id: 'message:foreign', resourceId: 'chat:foreign' },
+    { ...original, id: 'message:empty', content: '  ' },
+  );
+  let chat;
+  try {
+    chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+      async onRememberMessage() { throw Error('unexpected memory submission'); } });
+    await chat.ready;
+    const row = (id: string) => f.view.root.querySelector(`[data-message-id="${id}"]`);
+    const remember = (id: string) => named(row(id), 'Remember message');
+    assert.ok(remember(original.id));
+    for (const id of ['message:sensitive', 'message:inherited', 'message:foreign', 'message:empty', 'message:assistant']) {
+      assert.ok(row(id), id);
+      assert.equal(remember(id), undefined, id);
+    }
+    remember(original.id)!.fire('click');
+    assert.ok(row(original.id).querySelector('.cp-memory-editor'));
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await chat.refresh();
+    assert.equal(row(original.id).querySelector('.cp-memory-editor'), null);
+    remember(original.id)!.fire('click');
+    const scope = row(original.id).querySelector('.cp-memory-editor').querySelector('select');
+    assert.ok(Array.from(scope.options).some((option: any) => option.value === 'project'));
+  } finally {
+    await chat?.dispose();
+    f.restore();
+  }
+});
+
+
+test('Remember editor is replaced on project reassignment/removal and source edits, retaining exact current binding', async () => {
+  const f = fixture(); const original = f.detail.messages.items[0]; const requests: any[] = [];
+  f.detail.conversation.projectId = 'project:first'; f.detail.conversation.projectIds = ['project:first'];
+  f.detail.messages.items.push({ ...original, id: 'message:long', content: 'x'.repeat(4097) },
+    { ...original, id: 'message:generated', provenance: 'mock_adapter' });
+  let chat;
+  try {
+    chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+      async onRememberMessage(request) { requests.push(request); return false; } });
+    await chat.ready;
+    const row = () => f.view.root.querySelector(`[data-message-id="${original.id}"]`);
+    const editor = () => row().querySelector('.cp-memory-editor');
+    const open = () => { named(row(), 'Remember message')!.fire('click'); return editor(); };
+    for (const id of ['message:long','message:generated']) assert.equal(named(f.view.root.querySelector(`[data-message-id="${id}"]`), 'Remember message'), undefined);
+    const first = open();
+    f.detail.conversation.projectId = 'project:second'; f.detail.conversation.projectIds = ['project:second'];
+    f.detail.conversation.revision++; await chat.refresh();
+    assert.equal(editor(), null);
+    const second = open(); assert.notEqual(first, second);
+    second.querySelector('select').value = 'project'; second.fire('submit');
+    await until(() => requests.length === 1);
+    assert.equal(requests[0].expectedProjectId, 'project:second');
+    assert.equal(requests[0].expectedSourceText, original.content);
+    assert.equal(requests[0].scope, 'project');
+    f.detail.conversation.projectId = null; f.detail.conversation.projectIds = [];
+    f.detail.conversation.revision++; await chat.refresh(); assert.equal(editor(), null);
+    const third = open();
+    assert.equal(Array.from(third.querySelector('select').options).some((option:any)=>option.value === 'project'), false);
+    original.content = 'I prefer revised synthetic source wording.';
+    f.detail.conversation.revision++; await chat.refresh(); assert.equal(editor(), null);
+    const fourth = open(); fourth.fire('submit'); await until(() => requests.length === 2);
+    assert.equal(requests[1].expectedProjectId, null); assert.equal(requests[1].expectedSourceText, original.content);
+    assert.equal(requests[1].conversationId, f.draft.resourceId); assert.equal(requests[1].messageId, original.id);
+  } finally { await chat?.dispose(); f.restore(); }
+});
