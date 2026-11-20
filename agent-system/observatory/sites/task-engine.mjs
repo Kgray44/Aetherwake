@@ -41,17 +41,25 @@ const stateForV1 = {
 const unique = items => [...new Set(items)];
 const cycleAttempts = lifecycle => lifecycle.attempts.length - (lifecycle.cycle_start ?? 0);
 
-function waitState(task, lifecycle, rows, now) {
-  if (!claimStates.has(lifecycle.state)) return { state: lifecycle.state, blockers: [] };
-  const blockers = task.prerequisites.task_ids.flatMap(id => {
-    const dependency = rows.get(id);
-    const state = dependency ? details(dependency).state : 'missing';
-    const acceptedArchive = state === 'archived' && record(dependency).owner_acceptance === 'accepted';
-    return state === 'completed' || acceptedArchive ? [] : [{ type: 'task', id, state }];
-  }).concat(task.prerequisites.capabilities.filter(id => !lifecycle.prerequisites.includes(id))
-    .map(id => ({ type: 'capability', id, state: 'unsatisfied' })));
-  if (blockers.length) return { state: 'blocked', blockers };
-  return { state: lifecycle.start_at > now ? 'scheduled' : 'ready', blockers };
+function prerequisiteStatus(task,lifecycle,rows) {
+  const dependencies=task.prerequisites.task_ids.map(id=>{
+    const row=rows.get(id);
+    const state=row?details(row).state:'missing';
+    const acceptedArchive=state==='archived'&&record(row).owner_acceptance==='accepted';
+    const status=state==='completed'||acceptedArchive?'satisfied':row?'unsatisfied':'unverified';
+    return {type:'task',id,state,status};
+  });
+  return dependencies.concat(task.prerequisites.capabilities.map(id=>{
+    const attested=lifecycle.prerequisites.includes(id);
+    return {type:'capability',id,state:attested?'attested':'unsatisfied',status:attested?'satisfied':'unverified'};
+  }));
+}
+
+function waitState(task,lifecycle,rows,now,checks) {
+  if (!claimStates.has(lifecycle.state)) return {state:lifecycle.state,blockers:[]};
+  const blockers=(checks??prerequisiteStatus(task,lifecycle,rows))
+    .filter(check=>check.status!=='satisfied').map(({type,id,state})=>({type,id,state}));
+  return {state:blockers.length?'blocked':lifecycle.start_at>now?'scheduled':'ready',blockers};
 }
 
 function hasCycle(id, task, rows) {
@@ -86,10 +94,14 @@ export function taskAttemptRecord(task, attempt) {
   };
 }
 
-function publicLifecycle(row, rows, now) {
-  const stored = details(row);
-  const { attempts, event, cycle_start, ...lifecycle } = stored;
-  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), max_attempt_minutes:attemptLimit(stored), can_configure_execution:canConfigureExecution(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
+function publicLifecycle(row,rows,now,includePrerequisites=false) {
+  const stored=details(row);
+  const {attempts,event,cycle_start,...lifecycle}=stored;
+  const task=record(row);
+  const checks=includePrerequisites?prerequisiteStatus(task,lifecycle,rows):undefined;
+  return {...lifecycle,cycle_attempts:cycleAttempts(stored),max_attempt_minutes:attemptLimit(stored),
+    can_configure_execution:canConfigureExecution(stored),stored_state:lifecycle.state,
+    ...waitState(task,lifecycle,rows,now,checks),...(checks?{prerequisite_status:checks}:{})};
 }
 
 function validateReferenceRevisions(requirements) {
@@ -334,7 +346,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const receipts = id => query('SELECT event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND task_id = ? ORDER BY version',
     owner, namespace, id).all();
   const view = async row => ({
-    task: record(row), version: row.version, priority: row.priority, lifecycle: publicLifecycle(row, rows, now),
+    task: record(row), version: row.version, priority: row.priority, lifecycle: publicLifecycle(row, rows, now, true),
     attempts: details(row).attempts.map(exposeAttempt),
     events: [...proposalControl(row).history, ...(await receipts(row.task_id)).results
       .map(({ event }) => { const { digest, ...receipt } = JSON.parse(event); return receipt; })],

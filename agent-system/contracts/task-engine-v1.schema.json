@@ -618,6 +618,19 @@
               "maximum": 30
             },
             "can_configure_execution": {"type":"boolean"},
+            "prerequisite_status": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {"enum":["task","capability"]},
+                  "id": {"type":"string"},
+                  "state": {"type":"string"},
+                  "status": {"enum":["satisfied","unsatisfied","unverified"]}
+                },
+                "required": ["type","id","state","status"]
+              }
+            },
             "blockers": {
               "type": "array",
               "items": {

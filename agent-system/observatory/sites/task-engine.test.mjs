@@ -198,6 +198,23 @@ test('owner time limits constrain the claim deadline and leave a specific receip
   assert.equal(lost.events.at(-1).kind,'lease_expired');
 });
 
+test('prerequisite readback distinguishes a missing reference from an unattested capability',async t=>{
+  const {call,register,command,get}=setup(t);
+  const upstream=await register('unaccepted dependency');
+  const missing='task_'+crypto.randomUUID();
+  const downstream=(await call({op:'register',operation_id:crypto.randomUUID(),fields:{
+    ...fields('prerequisites'),dependencies:[upstream.task.id,missing],capabilities:['artifact access'],
+  }})).body;
+  const status=(detail,id)=>detail.lifecycle.prerequisite_status.find(row=>row.id===id).status;
+  assert.equal(status(downstream,upstream.task.id),'unsatisfied');
+  assert.equal(status(downstream,missing),'unverified');
+  assert.equal(status(downstream,'artifact access'),'unverified');
+  const ready=(await command(downstream,'admit',{executor:'codex',prerequisites:['artifact access']})).body;
+  assert.equal(status(await get(ready),'artifact access'),'satisfied');
+  assert.equal(ready.lifecycle.state,'blocked');
+  assert.deepEqual(ready.lifecycle.blockers.map(row=>row.id),[upstream.task.id,missing]);
+});
+
 test('owners can reschedule waiting work without changing an active attempt',async t=>{
   const {call,register,command,get,advance}=setup(t);
   const proposed=await register('editable runtime settings');
