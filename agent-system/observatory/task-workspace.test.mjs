@@ -36,7 +36,14 @@ test('direct dependency edges preserve direction and unknown evidence', () => {
   assert.deepEqual(graph.downstream.map(({ id }) => id), ['next']);
 });
 
-import { commandForTask, desktopSessionTokens, executionActions, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
+import { commandForTask, desktopSessionTokens, executionActions, hasLiveTaskWork, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
+
+test('fast registry polling follows changing work, including dependency-blocked admissions',()=>{
+  const task=(state,stored_state)=>({lifecycle:{state,stored_state}});
+  assert.equal(hasLiveTaskWork([task('proposed'),task('completed'),task('paused')]),false);
+  assert.equal(hasLiveTaskWork([task('blocked','admitted')]),true);
+  assert.equal(hasLiveTaskWork([task('verifying')]),true);
+});
 
 test('canonical checks and draft dependencies use authority without treating a missing Task as verified',()=>{
   const known={id:'current',state:'cancelled',owner_acceptance:'accepted'};

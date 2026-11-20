@@ -1,3 +1,9 @@
+const changingStates=new Set(['admitted','queued','scheduled','running','pausing','cancelling','verifying']);
+
+export function hasLiveTaskWork(tasks) {
+  return tasks.some(task=>changingStates.has(task.lifecycle?.stored_state??task.lifecycle?.state));
+}
+
 export async function taskEngineRequest(body, headers, { signal, fetcher = fetch } = {}) {
   const response = await fetcher('/api/task-engine/v1', {
     method: 'POST', cache: 'no-store', signal,

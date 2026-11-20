@@ -1,4 +1,4 @@
-import React,{lazy,Suspense,useEffect,useMemo,useRef,useState} from 'react';
+import React,{lazy,Suspense,useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {MotionConfig,motion,useReducedMotion} from 'motion/react';
 import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,CircleX,CircleAlert,Clock3,GitPullRequest,Layers3,ListTodo,Plus,Radio,RefreshCw,ShieldCheck,Workflow} from 'lucide-react';
@@ -13,7 +13,7 @@ import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
-import {taskEngineRequest} from './task-engine-client.mjs';
+import {hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
 import {useCardMotion} from './card-motion.jsx';
 import {TaskTimeline} from './task-timeline.jsx';
 import {StickySectionAside} from './sticky-section-aside.jsx';
@@ -120,10 +120,27 @@ useEffect(()=>{
 const [engine,setEngine]=useState({status:'checking',tasks:[]});
 const [github,setGitHub]=useState(null),[proposals,setProposals]=useState(null);
 const [draft,setDraft]=useState(initialDraft),[publishError,setPublishError]=useState('');
-const refreshId=useRef(0), foregroundRequest=useRef(false), submitting=useRef(false), proposalRequest=useRef(null);
+const refreshId=useRef(0), engineRequest=useRef(null), foregroundRequest=useRef(false), submitting=useRef(false), proposalRequest=useRef(null);
 const canPublish = Boolean(proposals && !proposals.verification && !demo);
 const publicIntake = canPublish && draft.visibility === 'public';
 const checks = proposalChecks(draft);
+const refreshEngine=useCallback(signal=>{
+  const previous=engineRequest.current;
+  if(previous&&!previous.signal?.aborted)return previous.request;
+  const read={signal};
+  read.request=taskEngineRequest({op:'list',include_archived:true},verificationHeaders,{signal}).then(data=>{
+    if(signal?.aborted||engineRequest.current!==read)return;
+    if(Array.isArray(data?.tasks))setEngine({status:'available',tasks:data.tasks,workerAccess:data.executor_access?.codex});
+    else if(data===null)setEngine({status:'absent',tasks:[]});
+    else setEngine(previous=>({...previous,status:'error',error:'Unexpected Task registry response.'}));
+  }).catch(error=>{
+    if(!signal?.aborted&&engineRequest.current===read)setEngine(previous=>({...previous,status:'error',error:error.message}));
+  }).finally(()=>{
+    if(engineRequest.current===read)engineRequest.current=null;
+  });
+  engineRequest.current=read;
+  return read.request;
+},[]);
 const refresh=async(mode=demo,{quiet=false,signal}={})=>{
   if(quiet&&foregroundRequest.current)return;
   const id=++refreshId.current;
@@ -131,13 +148,7 @@ const refresh=async(mode=demo,{quiet=false,signal}={})=>{
   if(mode){setHasLiveFeed(false);setRecords(demoRecords());setError('');setLoading(false);return}
   if(!quiet)setLoading(true);
   try{
-    void taskEngineRequest({op:'list',include_archived:true},verificationHeaders,{signal}).then(data=>({data}),error=>({error})).then(engineResult=>{
-      if(signal?.aborted||id!==refreshId.current)return;
-      if(engineResult.error)setEngine(previous=>({...previous,status:'error',error:engineResult.error.message}));
-      else if(Array.isArray(engineResult.data?.tasks))setEngine({status:'available',tasks:engineResult.data.tasks,workerAccess:engineResult.data.executor_access?.codex});
-      else if(engineResult.data===null)setEngine({status:'absent',tasks:[]});
-      else setEngine(previous=>({...previous,status:'error',error:'Unexpected Task registry response.'}));
-    });
+    void refreshEngine(signal);
     const loadFeed=async path=>{
       const response=await fetch(path,{cache:'no-store',headers:verificationHeaders,signal});
       if(!response.ok)throw Error('HTTP '+response.status);
@@ -177,6 +188,19 @@ useEffect(()=>{
 const [legacyHistory,setLegacyHistory]=useState(null);
 const [deployedRevision,setDeployedRevision]=useState(null);
 const watchingTasks=(Boolean(taskRoute)||page==='overview')&&!demo;
+const watchingExecution=watchingTasks&&engine.status==='available'&&hasLiveTaskWork(engine.tasks);
+useEffect(()=>{
+  if(!watchingExecution)return;
+  const controller=new AbortController();
+  const tick=()=>{
+    if(!document.hidden&&!foregroundRequest.current)void refreshEngine(controller.signal);
+  };
+  const timer=window.setInterval(tick,5_000);
+  return ()=>{
+    controller.abort();
+    window.clearInterval(timer);
+  };
+},[watchingExecution,refreshEngine]);
 useEffect(()=>{
   if(!watchingTasks)return;
   const controller=new AbortController();
@@ -315,7 +339,7 @@ const jumpToTaskSection=id=>{
   panel?.scrollIntoView({block:'start',behavior:reduce?'instant':'smooth'});
 };
 const activityGroup=kind=>demo?null:kind==='pulls'?github?.pulls:github?.ci;
-return <div className="app-shell"><Ambient/><aside className="sidebar"><div className="brand"><span className="brand-logo"><Layers3 size={21} strokeWidth={1.6}/></span><div><b>AETHERWAKE</b><small>ENGINEERING SYSTEMS</small></div></div><div className="rail-caption">OPERATIONS</div><nav>{nav.map(([id,label,Icon])=><motion.button key={id} className={'nav-link '+((activeNavigation===id)?'selected':'')} onClick={()=>navigate(id)} whileHover={{x:3}} whileTap={{scale:.98}}><Icon size={17} strokeWidth={1.7}/>{label}{(activeNavigation===id)&&<motion.span className="nav-indicator" layoutId="nav-indicator" transition={{type:'spring',stiffness:350,damping:30}}/>}</motion.button>)}</nav><div className="sidebar-bottom"><div className="connect-label"><span className="live-dot"/> {proposals?'PRIVATE SITES HOST':'LOCAL CONTROL PLANE'}</div><div className="mono">{short(revision)}</div><div>CONTRACT v1.0 · PHASE E</div></div></aside><main className="main"><header className="topbar"><div><div className="overline"><span className="overline-line"/>AETHERWAKE / ENGINEERING OBSERVATORY</div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{desc}</p></div><div className="header-actions">{demo&&<span className="demo-flag">SIMULATED DATA</span>}{page==='analytics'?<span className="connect-label"><span className="live-dot"/> Live sources</span>:<div className="mode-toggle">{['Live','Demo'].map(m=><button key={m} className={(demo===(m==='Demo'))?'on':''} onClick={()=>{const v=m==='Demo';setDemo(v);refresh(v)}}>{m}</button>)}</div>}<motion.button className="icon-button" aria-label="Refresh records" title="Refresh" whileTap={reduce?undefined:{rotate:160}} onClick={()=>refresh()}><RefreshCw size={17}/></motion.button>{page==='overview'&&<button className="quiet-button" onClick={()=>navigate('tasks')}>Browse Tasks <ArrowRight size={13}/></button>}<motion.button className="primary-button" whileHover={{y:-2}} whileTap={{scale:.97}} onClick={()=>navigate('create')}><Plus size={16}/> New task</motion.button></div></header>{!demo&&proposals?.verification&&<div className="notice"><ShieldCheck size={16}/>Isolated verification proposals</div>}{error&&<div className="notice error" role="status"><CircleAlert size={17}/>{error}</div>}{loading&&<div className="notice"><Radio size={16}/>Synchronizing engineering record feed…</div>}<motion.div key={page+(taskRoute?.id?'-'+taskRoute.id:'')+(githubView?.id?'-'+githubView.kind+'-'+githubView.id:'')+(demo?'-demo':'-live')} initial={reduce?false:{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{duration:reduce?.01:.3,ease}} className="view">
+return <div className="app-shell"><Ambient/><aside className="sidebar"><div className="brand"><span className="brand-logo"><Layers3 size={21} strokeWidth={1.6}/></span><div><b>AETHERWAKE</b><small>ENGINEERING SYSTEMS</small></div></div><div className="rail-caption">OPERATIONS</div><nav>{nav.map(([id,label,Icon])=><motion.button key={id} className={'nav-link '+((activeNavigation===id)?'selected':'')} onClick={()=>navigate(id)} whileHover={{x:3}} whileTap={{scale:.98}}><Icon size={17} strokeWidth={1.7}/>{label}{(activeNavigation===id)&&<motion.span className="nav-indicator" layoutId="nav-indicator" transition={{type:'spring',stiffness:350,damping:30}}/>}</motion.button>)}</nav><div className="sidebar-bottom"><div className="connect-label"><span className="live-dot"/> {proposals?'PRIVATE SITES HOST':'LOCAL CONTROL PLANE'}</div><div className="mono">{short(revision)}</div><div>CONTRACT v1.0 · PHASE E</div></div></aside><main className="main"><header className="topbar"><div><div className="overline"><span className="overline-line"/>AETHERWAKE / ENGINEERING OBSERVATORY</div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{desc}</p></div><div className="header-actions">{demo&&<span className="demo-flag">SIMULATED DATA</span>}{page==='analytics'?<span className="connect-label"><span className="live-dot"/> Live sources</span>:<div className="mode-toggle">{['Live','Demo'].map(m=><button key={m} className={(demo===(m==='Demo'))?'on':''} onClick={()=>{const v=m==='Demo';setDemo(v);refresh(v)}}>{m}</button>)}</div>}<motion.button className="icon-button" aria-label="Refresh records" title="Refresh" whileTap={reduce?undefined:{rotate:160}} onClick={()=>refresh()}><RefreshCw size={17}/></motion.button>{page==='overview'&&<button className="quiet-button" onClick={()=>navigate('tasks')}>Browse Tasks <ArrowRight size={13}/></button>}<motion.button className="primary-button" whileHover={{y:-2}} whileTap={{scale:.97}} onClick={()=>navigate('create')}><Plus size={16}/> New task</motion.button></div></header>{!demo&&proposals?.verification&&<div className="notice"><ShieldCheck size={16}/>Isolated verification proposals</div>}{error&&<div className="notice error" role="status"><CircleAlert size={17}/>{error}</div>}{loading&&<div className="notice"><Radio size={16}/>Synchronizing engineering record feed…</div>}{watchingTasks&&engine.status==='error'&&engine.tasks.length>0&&<div className="notice" role="status"><Radio size={16}/>Task registry refresh failed. Showing the last known execution state.</div>}<motion.div key={page+(taskRoute?.id?'-'+taskRoute.id:'')+(githubView?.id?'-'+githubView.kind+'-'+githubView.id:'')+(demo?'-demo':'-live')} initial={reduce?false:{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{duration:reduce?.01:.3,ease}} className="view">
 {page==='overview'&&<><div className="metrics"><Metric name="Registered tasks" value={tasks.length} meta={usingEngineRegistry?'Engine registry · partial view':'Canonical v1 records'} Icon={Boxes} index={0}/><Metric name="Accepted" href={taskHref(undefined,'accepted')} onClick={resetMetricFilters} value={work.accepted} meta="Explicit task outcomes" Icon={CheckCircle2} index={1}/><Metric name="Executing" href={taskHref(undefined,'active')} onClick={resetMetricFilters} value={engine.status==='available'?work.active:'Unavailable'} meta={work.reportedRunning?work.reportedRunning+' last reported running':workerAccess==='not_configured'&&!work.active?'Codex worker access unavailable':'Engine-confirmed activity'} Icon={Activity} index={2}/><Metric name="At risk" href={taskHref(undefined,'issues')} onClick={resetMetricFilters} value={work.issues} meta="Blocked + failed" Icon={CircleAlert} index={3}/><Metric name="Successful attempts" href={taskHref(undefined,'succeeded')} onClick={resetMetricFilters} value={work.succeeded} meta="Tasks awaiting acceptance" Icon={Clock3} index={4}/></div><div className="wide-grid"><Rise delay={.12}><Panel title="Engineering throughput" kicker="01 / ACTIVITY SIGNAL" right={<span className="panel-meta">TASK ARRIVAL · 14D</span>}><Timeline values={chart}/><div className="chart-footer">TASKS CREATED <span>Only observed records shown</span></div></Panel></Rise><StickySectionAside><Rise delay={.19}><Panel title="Delivery integrity" kicker="02 / ACCEPTANCE" right={<ShieldCheck size={18} className="muted-icon"/>}><div className="accept-head"><strong>{tasks.length?Math.round(100*work.accepted/tasks.length)+'%':'—'}</strong><small>ACCEPTED TASKS</small></div><div className="track"><motion.span initial={{width:0}} animate={{width:(tasks.length?100*work.accepted/tasks.length:0)+'%'}} transition={{duration:.9,ease}}/></div><DetailLine name="Execution attempts" value={attempts.length}/><DetailLine name="Awaiting owner review" value={<a className="text-button" aria-label={work.review+' Tasks awaiting owner review'} href={taskHref(undefined,'review')} onClick={resetMetricFilters}>{work.review}</a>}/><DetailLine name="Queued, scheduled, or paused" value={<a className="text-button" aria-label={work.waiting+' queued, scheduled, or paused Tasks'} href={taskHref(undefined,'waiting')} onClick={resetMetricFilters}>{work.waiting}</a>}/><DetailLine name="Tasks with no linked execution" value={work.unlinked}/><DetailLine name="Observed time" value={duration}/><DetailLine name="Failed attempts" value={attempts.filter(a=>a.state==='failed').length}/><DetailLine name="Evidence records" value={evidence.length}/><DetailLine name="Reported passes (unverified)" value={evidence.filter(e=>e.result==='passed').length}/><DetailLine name="Pending acceptance" value={tasks.filter(t=>t.state!=='accepted').length}/></Panel></Rise></StickySectionAside></div><Rise delay={.24}><Panel title="Recent engineering work" kicker="03 / TASK FEED" right={<button className="text-button" onClick={()=>navigate('tasks')}>Open Task Control Center <ArrowRight size={15}/></button>}><TaskRows tasks={displayTasks.filter(task=>task.state!=='archived').slice(0,9)} controls={privateControls} related={related} activityFor={activityFor} Status={Status}/></Panel></Rise>{!demo&&proposals&&<ExecutionFeed execution={execution} records={records} headers={verificationHeaders} onRefresh={()=>refresh(false)} automatic={telemetryScope?automaticTelemetry:null}/>} {!demo&&github&&<Rise><Panel title="GitHub repository activity" kicker="PUBLIC ENGINEERING SOURCES"><GitHubFeed data={github}/></Panel></Rise>}</>}
 {page==='tasks'&&<Rise><TaskExplorer tasks={displayTasks} work={taskRoute?.work??'all'} workActivity={activity} controls={privateControls} related={related} activityFor={activityFor}
   Status={Status} Panel={Panel} loading={loading} filters={filters} setFilters={setFilters} onCreate={()=>navigate('create')}/></Rise>}
