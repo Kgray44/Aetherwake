@@ -151,6 +151,8 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
     await git(parent, 'clone', '--quiet', '--no-local', source, path);
     await git(path, 'remote', 'set-url', 'origin', 'https://github.com/Kgray44/Aetherwake.git');
     await git(path, 'switch', '-c', 'codex/aads-task-' + name);
+    await git(path, 'config', 'user.name', 'Test worker');
+    await git(path, 'config', 'user.email', 'test@example.test');
     workspaces.set(task.task.id, await realpath(path));
     assert.equal((await command(task, 'admit', { executor: 'codex' })).status, 200);
   }
@@ -182,8 +184,6 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
         await overlap;
       }
       await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id], { cwd });
-      await git(cwd, 'add', 'artifact.txt');
-      await git(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'artifact');
       return { ok: true, measurements: [{ name: 'test_summary' }] };
     },
   });
@@ -198,6 +198,9 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   assert.equal(candidate.lifecycle.state, 'verifying');
   assert.equal(candidate.attempts[0].revision, base);
   const revision = candidate.attempts[0].candidate_revision;
+  assert.notEqual(revision, base);
+  assert.equal(await git(workspaces.get(a.task.id), 'rev-parse', revision + '^'), base);
+  assert.equal(await git(workspaces.get(a.task.id), 'status', '--porcelain'), '');
   assert.equal(await git(workspaces.get(a.task.id), 'show', revision + ':artifact.txt'), a.task.id);
   assert.equal((await command(candidate, 'accept', { evidence: [
     { criterion_id: 'criterion-1', uri: 'https://example.test/reviewed-artifact', revision },

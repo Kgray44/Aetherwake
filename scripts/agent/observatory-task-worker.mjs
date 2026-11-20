@@ -33,6 +33,17 @@ export async function checkoutIdentity(path, base) {
   return { branch, revision, dirty: Boolean(dirty) };
 }
 
+async function checkpointCandidate(workspace, { branch, revision }, task, attempt) {
+  const noHooks = 'core.hooksPath=' + join(workspace, '.git', 'aads-disabled-hooks-' + randomUUID());
+  const writeGit = (...args) => git(workspace, '-c', noHooks, '-c', 'core.fsmonitor=false',
+    '-c', 'commit.gpgsign=false', ...args);
+  await writeGit('add', '-A', '--', '.');
+  const tree = await writeGit('write-tree');
+  const candidate = await writeGit('commit-tree', tree, '-p', revision, '-m',
+    'Checkpoint AADS Task ' + task.id + ' attempt ' + attempt.id);
+  await writeGit('update-ref', 'refs/heads/' + branch, candidate, revision);
+}
+
 function termination(child) {
   if (child.exitCode !== null || !child.pid) return;
   if (process.platform === 'win32') {
@@ -45,7 +56,8 @@ function termination(child) {
 export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
   const prompt = [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
-    'Follow repository governance and the current sandbox. Record changes and tests with an exact candidate revision.',
+    'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
+    'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
     task.title, task.objective, 'Acceptance criteria:',
@@ -169,8 +181,16 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
-      try { result = await identify(workspace, attempt.revision); }
-      catch { /* Record a structured failure when candidate readback is unavailable. */ }
+      try {
+        result = await identify(workspace, attempt.revision);
+        if (result.dirty && result.branch === identity.branch && result.revision === attempt.revision) {
+          await admitStorage();
+          await checkpointCandidate(workspace, result, task, attempt);
+          result = await identify(workspace, attempt.revision);
+        }
+      } catch {
+        result = undefined;
+      }
       if (result && !result.dirty && result.branch === identity.branch) {
         await report('finished', { result: 'candidate', revision: result.revision });
         executionState = 'completed';
