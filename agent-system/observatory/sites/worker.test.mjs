@@ -29,7 +29,7 @@ const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
 
-function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey } = {}) {
+function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, assets = {} } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec(migration);
@@ -93,7 +93,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey } =
     assert.fail('Unexpected fetch: ' + pathname);
   };
   // A new Worker instance for each request exercises shared D1 rather than isolate memory.
-  const call = (path, options) => createWorker({ validate, validateEvent, assets: {}, sourceRevision: blob, fetcher })
+  const call = (path, options) => createWorker({ validate, validateEvent, assets, sourceRevision: blob, fetcher })
     .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token, OBSERVATORY_TASK_ENGINE_OWNER_ID: 'owner-1', OBSERVATORY_TASK_WORKER_KEY: taskKey });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
@@ -116,6 +116,37 @@ test('hosted API checks identity and same-origin JSON before touching upstream',
   assert.equal((await post({ 'content-type': 'application/jsonx' })).status, 415);
   assert.equal((await post({ 'x-observatory-verification': 'live' })).status, 400);
   assert.equal(requests.length, 0);
+});
+
+test('only fingerprinted static assets receive a long browser cache lifetime', async t => {
+  const {call}=fixture(t,{assets:{
+    '/':{type:'text/html',content:'index'},
+    '/assets/index-a1234567.js':{type:'text/javascript',content:'code'},
+    '/assets/shared.js':{type:'text/javascript',content:'code'},
+  }});
+  assert.equal((await call('/')).headers.get('cache-control'),'private, no-store');
+  assert.equal((await call('/assets/index-a1234567.js')).headers.get('cache-control'),'private, max-age=31536000, immutable');
+  assert.equal((await call('/assets/shared.js')).headers.get('cache-control'),'private, no-store');
+});
+
+test('cached-first overview serves private Tasks without making an upstream request', async t => {
+  const {call,post,requests,hitLimit}=fixture(t,{token:'read-test-token'});
+  const cold=await (await call('/api/overview?prefer=cached',{headers:ownerHeader})).json();
+  assert.equal(cold.github_refresh_pending,true);
+  assert.equal(cold.github.main.status,'unavailable');
+  assert.equal(requests.length,0);
+  const {task}=await (await post()).json();
+  hitLimit();
+  const before=requests.length;
+  const local=await (await call('/api/overview?prefer=cached',{headers:ownerHeader})).json();
+  assert.equal(local.github_refresh_pending,true);
+  assert.equal(local.github.main.status,'stale');
+  assert.equal(local.records.some(record=>record.id===task.id),true);
+  assert.equal(requests.length,before);
+  const refreshed=await (await call('/api/overview',{headers:ownerHeader})).json();
+  assert.equal(refreshed.github_refresh_pending,false);
+  assert.equal(refreshed.github.main.status,'stale');
+  assert.ok(requests.length>before);
 });
 
 test('private proposal control applies one versioned edit, fences concurrent writes and isolates owners', async t => {

@@ -51,6 +51,26 @@ function pending(row, key, now) {
   return result;
 }
 
+export async function peekGitHub(db, token, now = Date.now()) {
+  const key = await credentialKey(token);
+  const row = await db.prepare(`
+    SELECT snapshot, auth_mode, credential_key, retry_at, lease_until, rate_until, read_reject_key, read_reject_until
+    FROM github_snapshot WHERE id = 1
+  `).bind().first();
+  const refresh = !row || (
+    !(key === null && row.auth_mode === 'authenticated') &&
+    row.rate_until <= now && !(key !== null && row.read_reject_key === key && row.read_reject_until > now) &&
+    (row.retry_at <= now || row.credential_key !== key)
+  );
+  const snapshot = pending(row ?? { credential_key:key }, key, now);
+  if (refresh) {
+    for (const group of GROUPS) {
+      if (snapshot[group]?.status === 'available') snapshot[group] = {...snapshot[group],status:'stale',reason:'Refreshing GitHub data'};
+    }
+  }
+  return { snapshot, refresh };
+}
+
 export async function cachedGitHub(db, fetcher, validate, token, now = Date.now()) {
   const key = await credentialKey(token);
   const mode = key === null ? 'anonymous' : 'authenticated';
