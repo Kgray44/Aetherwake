@@ -81,6 +81,10 @@ test('registry activity distinguishes intake, reported attempts and authoritativ
     { label: 'Latest attempt succeeded', at: '2026-11-19T20:05:00Z' });
   assert.deepEqual(taskActivity(task, [attempt], [], { state: 'scheduled', start_at: 1795200000000 }),
     { label: 'Engine scheduled', at: '2026-11-20T18:40:00.000Z' });
+  assert.deepEqual(taskActivity(task,[attempt],[],{state:'ready'},'not_configured'),
+    {label:'Waiting for Codex worker access',at:null});
+  assert.deepEqual(taskActivity(task,[attempt],[],{state:'running'},'not_configured'),
+    {label:'Engine running',at:null});
   assert.equal(task.state, 'proposed');
 });
 
