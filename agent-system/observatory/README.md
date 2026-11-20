@@ -114,11 +114,13 @@ A worker exit requests verification. Acceptance requires the configured owner's 
 
 For a hosted rollout, apply migration 0011, set the private Site's OBSERVATORY_TASK_ENGINE_OWNER_ID and OBSERVATORY_TASK_WORKER_KEY, and verify the new tool appears in discovery from the installed Observatory connector. Use a generated secret of at least 32 characters and configure the same value as AADS_TASK_WORKER_KEY on the executor host. Keep the secret out of repository files, command arguments and Task records. The ordinary agent tool cannot admit, cancel, retry or accept work, and the worker credential cannot authorize those operations.
 
-Start the host with node scripts/agent/observatory-task-worker.mjs and the path to a private JSON config. The config has four required keys and an optional verification namespace.
+Start the host with node scripts/agent/observatory-task-worker.mjs and the path to a private JSON config. The config provides the executable, workspace root, storage check, workspace policy, and an optional verification namespace.
 
 - codex_bin is an absolute path to the executable of a signed-in Codex installation supporting exec and App Server.
 - workspace_root is an absolute path containing dedicated Aetherwake checkouts. Each checkout has its own Git directory and a codex/aads-task- branch.
-- workspaces maps Task IDs to the absolute paths of their distinct checkouts. The worker only claims mapped Tasks.
+- `workspaces` maps Task IDs to existing dedicated checkouts. In this mode, the worker only claims mapped Tasks.
+- `auto_provision` with `name` and `email` opts the worker into creating its own checkouts. The worker claims owner-admitted Tasks and fetches the exact claimed commit from Aetherwake into a dedicated branch under `workspace_root`. Optional `auto_provision.task_ids` narrows claims by Task ID. Explicit `workspaces` can still override checkout locations for eligible Tasks.
+- Size `storage_check` for the maximum concurrent checkout and Git object allocation on the worker host. Provisioning is covered by the same reservation and lease as the attempt. An existing clean checkout at the pinned revision is reusable. Interrupted sessions require their original checkout, and dirty or conflicting workspaces are retained for reconciliation.
 - storage_check is an argument array starting with an absolute executable path. Its exit code controls resource admission before launch and during heartbeats. On the AERO X16 use the host reserve check with bounded estimates.
 - verification is the UUID of an isolated Task namespace. Use the same UUID in the Site controls and when connecting telemetry for the sandbox checkouts. The worker rejects a checkout connected to a different telemetry namespace, and omitting verification selects the live namespace.
 
