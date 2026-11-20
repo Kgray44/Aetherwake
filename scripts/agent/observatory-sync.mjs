@@ -184,7 +184,7 @@ export async function startObservatorySync({ task, journal, directory = observat
   const status = async value => { try { await save(statusPath, value); } catch { /* Never block task execution. */ } };
 
   async function flush(force = false) {
-    if (current || control.signal.aborted || Date.now() < retryAt) return current;
+    if (current || control.signal.aborted || (!force && Date.now() < retryAt)) return current;
     current = (async () => {
       try {
         connector ??= managedConnection ?? openObservatoryConnector({ signal: control.signal });

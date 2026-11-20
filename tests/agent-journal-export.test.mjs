@@ -107,11 +107,15 @@ test('managed telemetry can deliver for a new checkout using the admitted worker
   const event = traceEvent({task,attemptId:attempt.id,kind:'measurement'});
   await appendEvent(directory,event);
   const scope = '11111111-1111-4111-8111-111111111111';
-  let baseline, closed = false;
+  let baseline, closed = false, unavailableOnce = true;
   const managedConnection = {
     async call({task_id,change,verification}) {
       assert.equal(task_id,task.id);
       assert.equal(verification,scope);
+      if (unavailableOnce) {
+        unavailableOnce = false;
+        throw Error('The managed connection was temporarily busy');
+      }
       if (!change) return {baseline:baseline??null};
       const projection = applyTelemetryDelta(baseline?.projection??null,change);
       baseline = {projection,digest:createHash('sha256').update(JSON.stringify(projection)).digest('hex'),
