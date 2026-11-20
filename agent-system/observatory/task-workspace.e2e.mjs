@@ -51,6 +51,10 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     assets, validate, validateEvent, sourceRevision: revision,
     fetcher: async url => {
       const path = new URL(url).pathname;
+      if (path === '/api/docs/models/gpt-6.2-sol.md') return new Response([
+        '# Model', 'Model ID: `gpt-6.2-sol`', '## Pricing', '### Text tokens',
+        '| Input | $2 | 1M tokens |', '| Cached input | $0.1 | 1M tokens |', '| Output | $10 | 1M tokens |',
+      ].join('\n'),{headers:{'content-type':'text/markdown'}});
       if (path.endsWith('/git/ref/heads/main')) return Response.json({ ref: 'refs/heads/main', object: { sha: revision } });
       if (path.endsWith('/actions/runs')) return Response.json({ total_count: 0, workflow_runs: [] });
       return Response.json([]);
@@ -355,6 +359,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       // Only the provider boundary is replaced. The worker checkpoints and reports the real Git result.
       execute: async ({ cwd, task, signal, onSession }) => {
         await onSession(conversationId);
+        await executor({op:'report',task_id:task.id,operation_id:crypto.randomUUID(),attempt_id:claim.attempt.id,lease:claim.lease,
+          report:{type:'heartbeat',session_id:conversationId,execution_identity:{provider:'openai',model:'gpt-6.2-sol',source:'codex_app_server_thread_start'}}});
         assert.equal((await send({op:'get',task_id:task.id})).attempts[0].session_id,conversationId);
         await runFile(process.execPath, ['-e',
           'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id,
@@ -431,7 +437,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       },timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
         timedEvent('integration','span_end',350),timedEvent('implementation','span_end',300),{
         ...timedEvent('implementation','measurement',280),
-        measurements:[['total',90],['input',80],['cached_input',60],['output',10]].map(([key,value])=>({
+        measurements:[['total',90],['input',80],['cached_input',60],['output',10],['cache_write_input',0]].map(([key,value])=>({
           name:'provider_'+key+'_tokens',value,unit:'tokens',availability:'observed',
           source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
         })),
@@ -601,8 +607,10 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await dataCoverage.getByRole('row',{name:/Telemetry arrival Observed/}).waitFor();
   await dataCoverage.getByRole('row',{name:/Owner review Verified/}).waitFor();
   await dataCoverage.getByRole('row',{name:/Billing Unavailable/}).waitFor();
-  const billing = telemetry.locator('dl').filter({has:page.getByText('Billing',{exact:true})});
+  const billing = telemetry.locator('dl').filter({has:page.getByText('Actual billing',{exact:true})});
   await billing.getByText('Unknown',{exact:true}).waitFor();
+  await telemetry.getByRole('table',{name:/OpenAI API reference estimates for 1 of 1 attempts/})
+    .getByRole('cell',{name:'$0.000146',exact:true}).waitFor();
   const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
   await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
   await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
@@ -688,5 +696,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output total'});
   await attemptTotal.getByText('90',{exact:true}).waitFor();
   await page.locator('.analytics-counts > div').filter({hasText:'App Server receipts'}).getByText('1',{exact:true}).waitFor();
+  await page.getByText('Attempt breakdown',{exact:true}).click();
+  await page.getByRole('link',{name:'$0.000146',exact:true}).waitFor();
   await page.locator('.analytics-counts > div').filter({hasText:'Observed session-only tokens'}).getByText('137',{exact:true}).waitFor();
 });

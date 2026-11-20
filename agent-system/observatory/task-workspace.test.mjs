@@ -646,3 +646,31 @@ test('Overview shows the latest attempt metrics and a revision-pinned artifact',
   const duplicate = overviewTaskResults([task],[latest], [...events,events[2]],summaries).get(task.id);
   assert.equal(duplicate.observedTokens,null);
 });
+
+test('Task usage and its PDF share current API estimates based on the final attempt receipt', () => {
+  const task = {id:'task_price', repository:'Kgray44/Aetherwake', title:'Pricing', objective:'Verify token estimates'};
+  const revision = 'a'.repeat(40);
+  const attempt = {id:'attempt_price',task_id:task.id,revision,attempt_number:1,state:'succeeded',
+    execution_identity:{model:'gpt-6.2-sol',provider:'openai'}};
+  const now = Date.now();
+  const receipt = {
+    task_id:task.id,repository:task.repository,revision,attempt_id:attempt.id,event_id:'sample-final',kind:'measurement',
+    occurred_at:new Date(now-1000).toISOString(),
+    measurements:Object.entries({total:282838,input:280895,cached_input:243456,output:1943,reasoning_output:149,cache_write_input:0})
+      .map(([name,value])=>({name:'provider_'+name+'_tokens',value,unit:'tokens',availability:'observed',
+        source:'codex_app_server_token_usage_updated',method:'fresh_thread_total'})),
+  };
+  const quote={model:'gpt-6.2-sol',usdPerMillion:{input:2,cachedInput:0.1,output:10},
+    retrievedAt:new Date(now-1500).toISOString(),expiresAt:new Date(now+6*3600_000).toISOString()};
+  const input={task,attempts:[attempt],events:[receipt],pricing:{[quote.model]:quote},now};
+  const usage=taskUsageAccounting(input);
+  assert.ok(Math.abs(usage.referencePrice.total-0.1186536)<1e-12);
+  assert.equal(usage.billing,'Unknown');
+  const report=JSON.stringify(taskReportDefinition(input).content);
+  assert.match(report,/OpenAI API reference estimate \$0\.1186536/);
+  assert.match(report,/"link":"https:\/\/developers\.openai\.com\/api\/docs\/models\/gpt-6\.2-sol"/);
+  assert.match(report,/Actual billing Unknown/);
+  assert.equal(taskUsageAccounting({...input,now:Date.parse(quote.expiresAt)}).referencePrice.total,null);
+  const oldReceipt={...receipt,measurements:receipt.measurements.filter(item=>item.name!=='provider_cache_write_input_tokens')};
+  assert.equal(taskUsageAccounting({...input,events:[oldReceipt]}).referencePrice.total,null);
+});

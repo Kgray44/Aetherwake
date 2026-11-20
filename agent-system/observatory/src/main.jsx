@@ -21,6 +21,7 @@ import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../de
 import {useCardMotion} from './card-motion.jsx';
 import {TaskTimeline} from './task-timeline.jsx';
 import {StickySectionAside} from './sticky-section-aside.jsx';
+import {useOpenAIPricing} from './use-openai-pricing.jsx';
 import {TaskReportExport} from './task-report-export.jsx';
 import {mergeTaskAttempts} from './task-attempts.mjs';
 import {readTaskScope,TaskScopeFields,TaskScopeSummary} from './task-scope.jsx';
@@ -273,6 +274,7 @@ const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyH
 const taskTelemetrySource=demo||!current?null:execution?.sources?.find(source=>source.task_id===current.id);
 const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attempt));
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
+const {pricing,loadingPrice}=useOpenAIPricing(taskAttempts,page==='detail'&&!demo,verificationHeaders);
 const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
 const executionStatus=canonical?taskExecutionStatus({taskId:canonical.task.id,state:detailState,
   attempt:canonical.attempts.at(-1),events:taskEvents,audits:taskAudits}):null;
@@ -372,11 +374,11 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
     openTask: taskId => { navigate('detail'); select(taskId); } }}/></Suspense>}
 {page==='analytics'&&<Suspense fallback={<p role="status">Loading engineering analytics…</p>}><EngineeringAnalyticsPage
   records={records} events={execution?.events} github={demo?null:github} execution={demo?null:execution}
-  ready={!demo&&hasLiveFeed} ui={githubUi}/></Suspense>}
+  ready={!demo&&hasLiveFeed} ui={githubUi} headers={verificationHeaders}/></Suspense>}
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 {conversation&&<a className="primary-button" href={codexThreadHref(conversation)}>Open in Codex</a>}
-<TaskReportExport key={current.id} disabled={!demo&&(!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
-  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
+<TaskReportExport key={current.id} disabled={!demo&&(loadingPrice||!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
+  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
@@ -427,7 +429,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   attempts={taskAttempts} reviewed={reviewedCriteria} Status={Status}/></Panel></Rise><Rise><Panel id="task-attempts" title="Execution attempts"><TaskAttemptHistory key={current.id} attempts={taskAttempts} events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} Status={Status}/></Panel></Rise><Rise><Panel id="task-evidence" title="Evidence ledger"><TaskEvidenceLedger task={canonical?.task??current} evidence={related(current.id,'evidence')} attempts={taskAttempts} reviewed={[...reviewedCriteria.values()]} events={taskEvents} telemetrySource={taskTelemetrySource} Status={Status}/></Panel></Rise></div><StickySectionAside className="detail-right"><Rise delay={.05}><Panel title="Task record">{!engineSummary&&<TaskCapabilitySummary manageable={Boolean(proposalControls)}/>}<DetailLine name="Revision" value={<code>{short(current.revision)}</code>}/><DetailLine name="Created" value={fmt(current.created_at)}/><DetailLine name="Owner decision" value={(canonical?.task??current).owner_acceptance||'Unavailable'}/><DetailLine name="Verification" value={current.acceptance?.profile_id}/><DetailLine name="Context snapshots" value={related(current.id,'context_snapshot').length}/><DetailLine name="Artifacts" value={current.artifacts?.length||0}/></Panel></Rise><Rise delay={.1}><Panel title="Dependency graph"><TaskDependencies task={canonical?.task??current} tasks={tasks} lifecycle={canonical?.lifecycle} summaries={engineSummary?summaries:undefined} Status={Status}/></Panel></Rise></StickySectionAside></div></>:loading?<p role="status">Loading Task…</p>:<Empty title="Task not found" body="This Task is unavailable in the current feed."/>)}
 {page==='detail'&&current&&<Rise><Panel id="task-telemetry" title="Telemetry"><Suspense fallback={<p role="status">Loading Task telemetry…</p>}>
   <TaskTelemetry key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts} telemetry={related(current.id,'telemetry')}
-    events={taskEvents} records={demo?null:records} telemetrySource={taskTelemetrySource}/>
+    events={taskEvents} records={demo?null:records} telemetrySource={taskTelemetrySource} pricing={pricing}/>
 </Suspense></Panel></Rise>}
 {page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution timing">
   <TaskExecutionTiming key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts}

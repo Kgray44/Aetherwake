@@ -47,6 +47,6 @@ export function taskDataCoverage({task,canonical,attempts,usage,diagnostics,even
   const realEvidence=diagnostics.evidence.filter(record=>record.repository===task.repository&&record.synthetic===false).length;
   if (realEvidence) add('Verification contract records','reported',realEvidence+' non-synthetic evidence records describe results.');
   else add('Verification contract records','unavailable','No non-synthetic verification contract records are linked.');
-  add('Billing','unavailable','No applicable billing or qualified pricing record is linked to this Task.');
+  add('Billing','unavailable','No actual charge is linked to this Task. Published API reference rates are shown separately when available.');
   return rows;
 }

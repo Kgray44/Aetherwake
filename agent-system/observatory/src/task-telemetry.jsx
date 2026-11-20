@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { useCardMotion } from './card-motion.jsx';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
+import { formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 import { taskDataCoverage } from './task-data-coverage.mjs';
@@ -40,10 +41,10 @@ function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
 }
 
-export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records, telemetrySource }) {
+export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records, telemetrySource, pricing }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
-  const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events}), [task,canonical,attempts,events]);
+  const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events,pricing}), [task,canonical,attempts,events,pricing]);
   const {rows:tokens,desktop} = usage;
   const diagnostics = useMemo(() => taskExecutionDiagnostics({
     task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
@@ -108,13 +109,14 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       <h3>Execution diagnostics</h3>
       <ul>{diagnostics.findings.map(({title,detail,key})=><li key={key??title}><strong>{title}</strong><p>{detail}</p></li>)}</ul>
     </section>}
-    <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
+    <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt.</p>
     <h3>Model and token accounting</h3>
     <h4>Observed Task token usage</h4>
     <dl className="github-facts task-telemetry-coverage">
       {usageFields.map(([key,label])=><div key={key}><dt>{label}</dt><dd>{usage.observed[key]?.toLocaleString()??'Unavailable'}</dd></div>)}
       <div><dt>Sessions with token totals</dt><dd>{usage.coverage.sessionTotals} of {usage.coverage.sessions}</dd></div>
-      <div><dt>Billing</dt><dd>{usage.billing}</dd></div>
+      <div><dt>Actual billing</dt><dd>{usage.billing}</dd></div>
+      <div><dt>OpenAI API reference estimate</dt><dd>{usage.referencePrice.total === null ? 'Unavailable' : formatReferenceCost(usage.referencePrice.total)}</dd></div>
     </dl>
     <p className="low">{usage.scope}</p>
     {usage.coverage.conflicts>0&&<p>Conflicting usage records excluded from the affected totals.</p>}
@@ -129,6 +131,16 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       </tr>)}</tbody>
     </table></div>}
     <TaskTokenAccounting rows={tokens}/>
+    {usage.referencePrice.attempts.length>0&&<div className="analytics-table"><table>
+      <caption>OpenAI API reference estimates for {usage.referencePrice.attempts.length} of {usage.coverage.attempts} attempts. {openAIReferenceBasis}</caption>
+      <thead><tr><th scope="col">Attempt</th><th scope="col">Pricing source</th><th scope="col">Rates per 1M tokens</th><th scope="col">Estimate</th></tr></thead>
+      <tbody>{usage.referencePrice.attempts.map(row=><tr key={row.attemptId}>
+        <th scope="row">{row.attemptNumber ?? row.attemptId}</th>
+        <td><a href={row.source} target="_blank" rel="noreferrer">{row.model}</a><small className="row-meta">Retrieved {new Date(row.retrievedAt).toLocaleString()}</small></td>
+        <td>{formatReferenceCost(row.rate.input)} input · {formatReferenceCost(row.rate.cachedInput)} cached · {formatReferenceCost(row.rate.output)} output</td>
+        <td>{formatReferenceCost(row.usd)}</td>
+      </tr>)}</tbody>
+    </table></div>}
     <h3>Recorded measurements</h3>
     {measurements.length ? <>
       <div className="analytics-table"><table>

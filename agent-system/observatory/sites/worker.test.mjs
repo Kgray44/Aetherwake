@@ -934,3 +934,29 @@ test('a scoped executor can claim the verification Task without activating its l
   const states = await Promise.all([rpc({ op: 'get', task_id }), rpc({ op: 'get', task_id }, { verification: namespace })]);
   assert.deepEqual(states.map(item => item.lifecycle.state), ['proposed', 'running']);
 });
+
+test('owner pricing route refreshes exact OpenAI text rates and sends no Task data upstream', async () => {
+  const markdown = [
+    '# Model', 'Model ID: `gpt-6.2-sol`', '## Pricing', '### Text tokens',
+    '| Metric | Price | Unit |', '| --- | ---: | --- |',
+    '| Input | $2 | 1M tokens |', '| Cached input | $0.1 | 1M tokens |', '| Output | $10 | 1M tokens |',
+    '### Batch', '| Input | $1 | 1M tokens |',
+  ].join('\n');
+  const calls = [];
+  const worker = createWorker({fetcher:async (url, options) => {
+    calls.push([url, options]);
+    return new Response(markdown,{headers:{'content-type':'text/markdown; charset=utf-8'}});
+  }});
+  const get = (model, options = {}) => worker.fetch(new Request(origin+'/api/openai-pricing/'+model,options),{});
+  assert.equal((await get('gpt-6.2-sol')).status,401);
+  assert.equal((await get('gpt-6.2-sol',{headers:ownerHeader,method:'POST'})).status,405);
+  const [first, second] = await Promise.all([get('gpt-6.2-sol',{headers:ownerHeader}),get('gpt-6.2-sol',{headers:ownerHeader})]);
+  const {pricing} = await first.json();
+  assert.deepEqual(pricing.usdPerMillion,{input:2,cachedInput:0.1,output:10});
+  assert.deepEqual(await second.json(),{pricing});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0][0],'https://developers.openai.com/api/docs/models/gpt-6.2-sol.md');
+  assert.deepEqual(calls[0][1].headers,{accept:'text/markdown'});
+  assert.equal(calls[0][1].redirect,'error');
+  assert.deepEqual(await (await get('gpt-other',{headers:ownerHeader})).json(),{pricing:null});
+});

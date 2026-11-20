@@ -8,6 +8,7 @@ import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
 import { combinedTelemetry, ingestTaskTelemetry, sha256, telemetryBaseline } from './task-telemetry.mjs';
+import { createOpenAIModelPricing } from './openai-pricing.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
 
 const MAX_PROPOSALS = 500;
@@ -23,6 +24,7 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const error = (message, status) => json({ error: message }, status);
 
 export function createWorker({ assets, validate, sourceRevision, validateEvent, fetcher = fetch }) {
+  const lookupOpenAIPrice = createOpenAIModelPricing(fetcher);
   async function taskRevision(env) {
     const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN);
     return isRevision(main.revision) && (main.status === 'available' || (main.status === 'stale' && main.observed_at)) ? main : null;
@@ -35,6 +37,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
 
     const verification = request.headers.get('x-observatory-verification');
     if (verification !== null && !UUID.test(verification)) return error('Invalid verification namespace', 400);
+    const priceRoute = url.pathname.match(/^\/api\/openai-pricing\/([a-z0-9.-]+)$/);
+    if (priceRoute) {
+      if (request.method !== 'GET') return error('Method not allowed', 405);
+      return json({pricing: await lookupOpenAIPrice(priceRoute[1])});
+    }
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';

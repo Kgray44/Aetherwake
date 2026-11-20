@@ -1,3 +1,4 @@
+import { estimateOpenAIReference } from './openai-pricing.mjs';
 import { linkedCodexSessionId } from './task-activity.mjs';
 import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
 import { uniqueEngineeringEvents } from './engineering-analytics.mjs';
@@ -79,7 +80,7 @@ export function loadedSessionUsage({records,events,bindings,now=Date.now()}) {
   };
 }
 
-export function taskUsageAccounting({ task, canonical, attempts = [], events = [], now = Date.now() }) {
+export function taskUsageAccounting({ task, canonical, attempts = [], events = [], pricing = {}, now = Date.now() }) {
   const taskAttempts = attempts.filter(attempt => attempt.task_id === task.id &&
     (!attempt.repository || attempt.repository === task.repository));
   const eventData = uniqueEngineeringEvents(events.filter(event => event.task_id === task.id &&
@@ -141,7 +142,7 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
     sessionTotals:sessionRows.filter(row=>row.observed.totalTokens!==null).length, sessions:sessionRows.length,
     conflicts:eventData.conflicts+sessionRows.filter(row=>row.basis==='Conflicting cumulative receipts').length,
   };
-  return {rows,sessionRows,coverage,billing:'Unknown',
+  return {rows,sessionRows,coverage,billing:'Unknown',referencePrice:estimateOpenAIReference(usable, pricing, now),
     progressRows:taskTokenProgress(task,taskAttempts,eventData.items,rows),observed:addObserved([
     ...usable.filter(row=>!attemptSessions.has(row.attemptId)).map(row=>row.observed),
     ...sessionRows.map(row=>row.observed),

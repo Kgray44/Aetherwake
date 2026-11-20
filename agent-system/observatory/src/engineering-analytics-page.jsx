@@ -1,5 +1,7 @@
 import {StickySectionAside} from './sticky-section-aside.jsx';
 import React, { useMemo, useState } from 'react';
+import { estimateOpenAIReference, formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs';
+import { useOpenAIPricing } from './use-openai-pricing.jsx';
 import { loadedSessionUsage } from './task-usage-accounting.mjs';
 import { Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, Clock3, Cpu, FileCheck2, GitPullRequest, Workflow } from 'lucide-react';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
@@ -129,7 +131,7 @@ function Usage({ usage }) {
   </div>;
 }
 
-function TokenAccounting({ accounting, receipts }) {
+function TokenAccounting({ accounting, receipts, ready, headers }) {
   const [taskId, setTaskId] = useState('');
   const selected = receipts.byTask.find(row => row.taskId === taskId);
   const totals = selected?.totals ?? receipts.totals;
@@ -138,6 +140,8 @@ function TokenAccounting({ accounting, receipts }) {
   const attempts = selected
     ? selected.rows
     : receipts.byTask.flatMap(row=>row.rows.filter(attempt=>attempt.coverage!=='unavailable'));
+  const {pricing} = useOpenAIPricing(attempts,ready,headers);
+  const estimates = new Map(estimateOpenAIReference(attempts,pricing,Date.now()).attempts.map(row=>[row.attemptId,row]));
   return <>
     <label>Task <select value={selected?.taskId ?? ''} onChange={event => setTaskId(event.target.value)}>
       <option value="">All loaded Tasks</option>
@@ -148,24 +152,26 @@ function TokenAccounting({ accounting, receipts }) {
       ['Output tokens', count(usage.outputTokens)], ['Cached input tokens', count(usage.cachedInputTokens)],
       ['Uncached input tokens', count(usage.uncachedInputTokens)],
       ['Attempts with token totals',totals.attemptsWithTotals+' of '+totals.attempts],
-      ['App Server receipts',count(totals.appServerReceipts)], ['Billing',receipts.billing],
+      ['App Server receipts',count(totals.appServerReceipts)], ['Actual billing',receipts.billing],
       ['Recorded CLI turns', count(turnUsage.turns)],
       ['Unattributed turns in this projection', count(accounting.unattributedTurns)]
     ]}/>
     <p className="low">Totals cover loaded attempt receipts. Daily trends use CLI turns. Session-only usage and uncovered attempts can add further consumption.</p>
     {attempts.length > 0 && <details><summary>Attempt breakdown</summary><div className="analytics-table">
-      <table><thead><tr><th scope="col">Attempt</th><th scope="col">State</th><th scope="col">Recorded model</th>
-        <th scope="col">Core usage coverage</th><th scope="col">Observed total tokens</th></tr></thead>
+      <table><caption>{openAIReferenceBasis}</caption><thead><tr><th scope="col">Attempt</th><th scope="col">State</th><th scope="col">Recorded model</th>
+        <th scope="col">Core usage coverage</th><th scope="col">Observed total tokens</th><th scope="col">API reference estimate</th></tr></thead>
         <tbody>{attempts.map(row => <tr key={row.attemptId}>
           <th scope="row">{row.attemptNumber === null ? row.attemptId : row.attemptId + ' · #' + row.attemptNumber}</th>
           <td>{label(row.state)}</td><td>{row.model ?? 'Unavailable'}</td>
           <td>{label(row.coverage)}</td><td>{count(row.observed.totalTokens)}</td>
+          <td>{estimates.has(row.attemptId)?<a href={estimates.get(row.attemptId).source} target="_blank" rel="noreferrer">
+            {formatReferenceCost(estimates.get(row.attemptId).usd)}</a>:'Unavailable'}</td>
         </tr>)}</tbody></table>
     </div></details>}
   </>;
 }
 
-export function EngineeringAnalyticsPage({ records, events, github, execution, ready, ui }) {
+export function EngineeringAnalyticsPage({ records, events, github, execution, ready, ui, headers }) {
   const { Metric, Panel, Rise, Status } = ui;
   const data = useMemo(() => buildEngineeringAnalytics({
     records: ready ? records : undefined,
@@ -244,7 +250,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         ]}/>
       </Panel></Rise></StickySectionAside>
     </div>
-    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting}/></Panel></Rise>
+    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting} ready={ready} headers={headers}/></Panel></Rise>
     <Rise><Panel title="Session-only usage across loaded Tasks">
       {sessions?<><MetricRows fields={[
         ['Observed session-only tokens',count(sessions.observed.totalTokens)],

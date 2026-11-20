@@ -252,7 +252,7 @@ export function TaskTokenAccounting({ rows }) {
   const display = value => value == null ? 'Unavailable' : value.toLocaleString();
   return <div className="analytics-table">
     <table>
-      <caption>Observed Codex token receipts by attempt. Costs require a billing source.</caption>
+      <caption>Observed Codex token receipts by attempt.</caption>
       <thead><tr><th scope="col">Attempt</th><th scope="col">Model</th><th scope="col">Input</th><th scope="col">Cached</th>
         <th scope="col">Output</th><th scope="col">Total</th><th scope="col">Coverage</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.attemptId + ':' + row.revision}>

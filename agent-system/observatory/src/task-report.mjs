@@ -1,5 +1,6 @@
 import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-status.mjs';
 import { buildTaskTimeline, journalReceiptSummary } from './task-timeline.mjs';
+import { formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { executionTiming,timingLegend } from './execution-timing.mjs';
@@ -82,7 +83,7 @@ function allocationBar(part, total) {
   ]}];
 }
 
-export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt}) {
+export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt, pricing}) {
   const taskRecords=records.filter(record=>record.task_id===task.id);
   const taskEvents=events.filter(event=>event.task_id===task.id);
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
@@ -106,7 +107,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
   const timing=executionTiming({taskId:task.id,canonical,attempts:taskAttempts,spans:trace.spans,linkedEvents:activity.events});
-  const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents});
+  const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents,pricing});
   const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
   const dataCoverage=taskDataCoverage({task,canonical,attempts:taskAttempts,usage,diagnostics,events:taskEvents,telemetrySource});
@@ -149,7 +150,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         row.attemptNumber,row.model,row.observed.uncachedInputTokens,row.observed.cachedInputTokens,row.observed.outputTokens,
       ]),['*','*','*','*','*']),
       ...allocationBar(latestTokens?.cachedInputTokens,latestTokens?.inputTokens),
-      {text:'Costs depend on a qualified pricing or billing source.',style:'muted',margin:[0,4,0,0]},
+      {text:'OpenAI API reference estimate '+(usage.referencePrice.total===null?'unavailable':formatReferenceCost(usage.referencePrice.total))+
+        ' · '+usage.referencePrice.attempts.length+' of '+usage.coverage.attempts+' attempts · Actual billing '+usage.billing,style:'muted',margin:[0,4,0,0]},
       {toc:{title:{text:'Report contents',style:'section'}},pageBreak:'before'},
       section('Data coverage'),
       grid(['Data','Coverage','Evidence'],dataCoverage.map(row=>[row.topic,row.label,row.basis]),[105,100,'*']),
@@ -194,6 +196,12 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       {text:'Attempt totals '+usage.coverage.attemptTotals+' of '+usage.coverage.attempts+
         ' · Session totals '+usage.coverage.sessionTotals+' of '+usage.coverage.sessions+
         ' · Conflicts '+usage.coverage.conflicts+' · Billing '+usage.billing,style:'muted'},
+      ...(usage.referencePrice.attempts.length?[subhead('OpenAI API reference estimates'),{text:openAIReferenceBasis,style:'muted'},
+        ...blocks(usage.referencePrice.attempts,row=>'Attempt '+(row.attemptNumber??row.attemptId),row=>[
+          ['Estimate',formatReferenceCost(row.usd)],['Model',row.model],['OpenAI price source',row.source],['Retrieved at',row.retrievedAt],
+          ['Rates per 1M tokens',[['input',row.rate.input],['cached',row.rate.cachedInput],['output',row.rate.output]]
+            .map(([label,rate])=>formatReferenceCost(rate)+' '+label).join(' · ')],
+        ])]:[]),
       ...blocks(usage.sessionRows,row=>'Executor session '+row.id,row=>[
         ['Receipt scope',row.basis],['Linked attempts',row.attemptIds.join(', ')||'None'],
         ...usageFields.map(([key,label])=>[label,display(row.observed[key])]),
