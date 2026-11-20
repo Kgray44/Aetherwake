@@ -308,15 +308,25 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('form', { name: 'Admit to Codex queue' }).getByRole('button', { name: 'Confirm' }).click();
   await page.getByText(/Stored state admitted/).waitFor();
   await page.getByText('Waiting for Codex worker access',{exact:true}).waitFor();
-  const { claim } = await executor({ op: 'claim', operation_id: crypto.randomUUID(), task_ids: [execution.task.id] });
-  assert.equal(claim.task.id, execution.task.id);
-  await page.clock.fastForward(31_000);
-  await page.getByText(/Stored state running/).waitFor();
-  const candidate = 'b'.repeat(40);
-  await executor({ op: 'report', task_id: execution.task.id, operation_id: crypto.randomUUID(),
-    attempt_id: claim.attempt.id, lease: claim.lease, report: { type: 'finished', result: 'candidate', revision: candidate } });
-  await page.clock.fastForward(31_000);
-  await page.getByRole('button', { name: 'Record owner acceptance', exact: true }).click();
+  const overviewRoute=url=>url.pathname==='/api/overview';
+  let unblockFeed;
+  const heldFeed=new Promise(resolve=>{unblockFeed=resolve;});
+  await page.route(overviewRoute,async route=>{await heldFeed;await route.continue();});
+  const candidate='b'.repeat(40);
+  try {
+    const {claim}=await executor({op:'claim',operation_id:crypto.randomUUID(),task_ids:[execution.task.id]});
+    assert.equal(claim.task.id,execution.task.id);
+    await page.clock.fastForward(6_000);
+    await page.getByText(/Stored state running/).waitFor({timeout:8_000});
+    await executor({op:'report',task_id:execution.task.id,operation_id:crypto.randomUUID(),
+      attempt_id:claim.attempt.id,lease:claim.lease,report:{type:'finished',result:'candidate',revision:candidate}});
+    await page.clock.fastForward(6_000);
+    await page.getByRole('button',{name:'Record owner acceptance',exact:true}).waitFor({timeout:8_000});
+  } finally {
+    unblockFeed();
+    await page.unroute(overviewRoute);
+  }
+  await page.getByRole('button',{name:'Record owner acceptance',exact:true}).click();
   const review = page.getByRole('form', { name: 'Record owner acceptance' });
   await review.getByLabel('Review the candidate result').fill('https://example.test/reviewed-artifact');
   await review.getByRole('button', { name: 'Confirm' }).click();
