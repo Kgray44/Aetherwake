@@ -1,3 +1,4 @@
+import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-status.mjs';
 import { buildTaskTimeline } from './task-timeline.mjs';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
@@ -43,6 +44,16 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
   const taskAttempts=attempts.filter(attempt=>attempt.task_id===task.id);
   const evidence=taskRecords.filter(record=>record.record_type==='evidence');
+  const reviewed=ownerReviewByCriterion(task,canonical);
+  const reviewRevision=canonical?.attempts?.at(-1)?.candidate_revision??task.revision;
+  const criteria=(task.acceptance?.criteria??[]).map(criterion=>{
+    const receipt=reviewed.get(criterion.id);
+    const reports=evidence.filter(item=>item.criterion_id===criterion.id);
+    return {criterion:criterion.description,id:criterion.id,
+      status:receipt?'Owner accepted':words(criterionEvidenceStatus(reports,reviewRevision,taskAttempts)),
+      reported_records:reports.length,
+      ...(receipt?{accepted_revision:receipt.revision,...(receipt.at?{reviewed_at:receipt.at}:{}),reviewed_artifact:receipt.uri}:{})};
+  });
   const timeline=buildTaskTimeline({task,attempts:taskAttempts,events:taskEvents,audits:taskAudits,evidence,records:taskRecords});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
@@ -85,6 +96,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       section('Task record and acceptance criteria'),
       ...blocks([task],()=>task.id),
       ...(canonical ? blocks([{version:canonical.version,priority:canonical.priority,...canonical.lifecycle}],()=> 'Canonical lifecycle') : []),
+      section('Acceptance criteria and owner review',criteria.length),
+      ...blocks(criteria,item=>item.id+'  ·  '+item.status),
       section('Task Timeline',timeline.length),
       ...blocks(timeline,item=>item.at+'  ·  '+item.title,item=>[
         ['Category',item.type], ...(item.description?[['Summary',item.description]]:[]), ...item.details,

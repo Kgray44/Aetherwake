@@ -323,7 +323,10 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-event.milestone .task-timeline-label strong { color:#b6f2ca; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; border-color:#4b876c; }
 .task-detail-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.65rem; margin-bottom:1rem; }
-.status-satisfied { color:#98debe; border-color:#365f50; background:#18352b; }
+.status-satisfied,.status-owner_accepted { color:#98debe; border-color:#365f50; background:#18352b; }
+.task-review-summary { display:grid; gap:.36rem; justify-items:start; }
+.task-review-summary small { color:var(--muted); }
+.task-review-summary a { color:var(--accent); }
 .status-unsatisfied { color:#ecc38d; border-color:#71593b; background:#3a2e1e; }
 .status-unverified { color:#a6b8c5; border-color:#485b67; background:#18232c; }
 .dependency-nodes li small { color:var(--muted); }

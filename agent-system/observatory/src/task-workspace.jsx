@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
 import {taskActivityHref} from './github-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
-import { attemptMatchesEvidence, evidenceClaimStatus } from './evidence-status.mjs';
+import { attemptMatchesEvidence, criterionEvidenceStatus, evidenceClaimStatus } from './evidence-status.mjs';
 import { attemptJournal } from './task-attempts.mjs';
 import { dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
 
@@ -180,6 +180,24 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
   })}</ol>;
 }
 
+export function TaskAcceptanceMatrix({task,canonical,evidence,attempts,reviewed,Status}) {
+  const revision=canonical?.attempts?.at(-1)?.candidate_revision??task.revision;
+  return <section aria-label="Task acceptance criteria">{(task.acceptance?.criteria??[]).map(criterion=>{
+    const reports=evidence.filter(item=>item.criterion_id===criterion.id);
+    const review=reviewed.get(criterion.id);
+    return <article className="record" key={criterion.id}>
+      <div className="record-title"><strong>{criterion.id}</strong>
+        <Status value={review?'owner_accepted':criterionEvidenceStatus(reports,revision,attempts)}/></div>
+      <p>{criterion.description}</p>
+      {review?<div className="task-review-summary">
+        <small>Accepted revision <code>{review.revision}</code></small>
+        {review.at&&<small>Owner review <time dateTime={review.at}>{displayTime(review.at)}</time></small>}
+        <EvidenceArtifact artifact={{uri:review.uri}}/>
+      </div>:<small>{reports.length} reported {reports.length===1?'record':'records'}{canonical?.lifecycle.state==='verifying'?' · Awaiting owner review':''}</small>}
+    </article>;
+  })}</section>;
+}
+
 function EvidenceArtifact({ artifact }) {
   const uri = artifact?.uri;
   if (!uri) return <span>No artifact reference was recorded.</span>;
@@ -201,6 +219,7 @@ export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status 
   return <>
     {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3><ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
       <strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><small>Reviewed revision <code>{item.revision}</code></small>
+      {item.at&&<small>Owner review <time dateTime={item.at}>{displayTime(item.at)}</time></small>}
       <EvidenceArtifact artifact={{uri:item.uri}}/>
     </li>)}</ul></section>}
     {ordered.map(item=>{

@@ -8,7 +8,7 @@ test('criterion evidence cannot select an accepted badge', () => {
   assert.doesNotMatch(source, /pass\s*\?\s*['"]accepted['"]/);
 });
 
-import { criterionEvidenceStatus, evidenceClaimStatus } from './src/evidence-status.mjs';
+import { criterionEvidenceStatus, evidenceClaimStatus, ownerReviewByCriterion } from './src/evidence-status.mjs';
 const revision = 'a'.repeat(40);
 const passed = {result:'passed', synthetic:false, revision,task_id:'task',attempt_id:'attempt'};
 const attempts=[{id:'attempt',task_id:'task',revision}];
@@ -22,6 +22,21 @@ test('missing, synthetic, stale and nonpassing evidence cannot establish accepta
     assert.equal(criterionEvidenceStatus(evidence,revision),'unverified');
   }
 });
+test('only a current canonical owner review tied to the accepted candidate satisfies a criterion',()=>{
+  const task={id:'task',owner_acceptance:'accepted',acceptance:{criteria:[{id:'c1'},{id:'c2'}]}};
+  const accepted={criterion_id:'c1',revision,uri:'https://example.test/checked-artifact'};
+  const canonical={task,lifecycle:{stored_state:'completed',evidence:[accepted,{...accepted,criterion_id:'c2',revision:'b'.repeat(40)}]},
+    attempts:[{id:'a',state:'succeeded',candidate_revision:revision}],
+    events:[{kind:'accept',attempt_id:'a',revision,at:'2026-11-20T03:00:00Z'}]};
+  const shown=ownerReviewByCriterion(task,canonical);
+  assert.deepEqual([...shown.keys()],['c1']);
+  assert.equal(shown.get('c1').at,canonical.events[0].at);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,lifecycle:{...canonical.lifecycle,stored_state:'archived'}}).size,1);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,lifecycle:{...canonical.lifecycle,stored_state:'queued'}}).size,0);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,task:{...task,id:'other'}}).size,0);
+  assert.equal(ownerReviewByCriterion(task,null).size,0);
+});
+
 test('display classification does not mutate canonical task or evidence records', () => {
   const task={state:'accepted',owner_acceptance:'accepted',revision};
   const original=JSON.stringify({task,passed});
