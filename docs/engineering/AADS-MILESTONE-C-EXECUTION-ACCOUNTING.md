@@ -47,6 +47,17 @@ new poller or telemetry store.
   when it reaches that limit. Session identifiers, prompts and tool output are
   excluded from this accounting projection.
 
+## Task Engine observer handoff
+
+The Task Engine worker can supply claim start, normalized turn usage, and stream-end
+callbacks through the existing Codex observer. The claim collector writes only trace
+events to the dedicated checkout's private journal and uses the immutable execution
+revision. The engine provides the canonical Task and Attempt records, including any
+candidate revision and acceptance state. A worker killed before its terminal receipt
+leaves already committed usage and an open span. The checkout's existing opt-in
+Observatory connection provides incremental delivery using scope-bound visitor
+identity. The collector neither needs nor forwards the engine worker credential.
+
 ## Verification scope
 
 The first private AADS baseline ran 27 focused assertions with a source-verified
