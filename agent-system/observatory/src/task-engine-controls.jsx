@@ -29,7 +29,7 @@ function localStart(value) {
   return new Date(value-date.getTimezoneOffset()*60_000).toISOString().slice(0,16);
 }
 
-export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, Status }) {
+export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCommand, tasks, Status }) {
   const reduce = useReducedMotion();
   const interaction = useCardMotion(true);
   const [action, setAction] = useState('');
@@ -125,11 +125,14 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
           <div><Status value={lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
         <dl className="task-command-facts">
           <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
+          {workerAccess&&<div><dt>Codex worker access</dt><dd>{workerAccess==='not_configured'?'Not configured':'Configured'}</dd></div>}
           <div><dt><Clock3 size={14} aria-hidden="true"/>Start time</dt><dd>{lifecycle.start_at == null ? 'Unscheduled' : stamp(lifecycle.start_at)}</dd></div>
           <div><dt>Priority</dt><dd>{detail.priority}</dd></div>
           <div><dt>Attempt time limit</dt><dd>{lifecycle.max_attempt_minutes == null ? 'Unreported' : lifecycle.max_attempt_minutes+' min'}</dd></div>
           <div><dt>Dependency cancellation</dt><dd>{lifecycle.cancel_with_dependency ? 'Enabled' : 'Off'}</dd></div>
         </dl>
+        {workerAccess==='not_configured'&&['proposed','admitted','queued','ready','scheduled','blocked','paused'].includes(lifecycle.state)&&
+          <p className="notice">A Codex worker can claim a queued Task once worker access is configured.</p>}
         {blocker.length > 0 && <section className="task-command-blockers"><h3>Blocking execution</h3><ul aria-label="Admission blockers">{blocker.map(item => <li key={item.type + ':' + item.id}>
           {tasks.find(other => other.id === item.id)?.title ?? item.id} · {humanize(item.state)}
         </li>)}</ul></section>}
@@ -154,7 +157,9 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
       <h3 ref={formHeading} tabIndex={-1}>{actionLabels[action] ?? 'Attest capability'}</h3>
       {['admit','configure_execution'].includes(action)&&<>
         <p>{action==='admit'
-          ? 'A configured Codex worker can claim this Task once its schedule and prerequisites are satisfied.'
+          ? workerAccess==='not_configured'
+            ? 'You can queue this Task now. Execution also requires Codex worker access.'
+            : 'A configured Codex worker can claim this Task once its schedule and prerequisites are satisfied.'
           : 'Changes apply to the next attempt. A paused Task still needs to be resumed.'}</p>
         <label>Start at (local time, optional)<input name="start_at" type="datetime-local"
           defaultValue={action==='configure_execution'?localStart(lifecycle.start_at):''}/>

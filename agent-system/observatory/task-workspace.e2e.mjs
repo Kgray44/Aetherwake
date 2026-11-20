@@ -256,6 +256,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
 
   await page.getByRole('button', { name: 'Admit to Codex queue', exact: true }).click();
   const admission = page.getByRole('form', { name: 'Admit to Codex queue' });
+  await admission.getByText('You can queue this Task now. Execution also requires Codex worker access.').waitFor();
   await admission.getByLabel('Start at').fill('2050-01-01T13:00');
   await admission.getByLabel('Maximum minutes per attempt').fill('7');
   await admission.getByRole('list',{name:'Prerequisite checks'}).getByText('unverified',{exact:true}).waitFor();
@@ -306,6 +307,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('button', { name: 'Admit to Codex queue', exact: true }).click();
   await page.getByRole('form', { name: 'Admit to Codex queue' }).getByRole('button', { name: 'Confirm' }).click();
   await page.getByText(/Stored state admitted/).waitFor();
+  await page.getByText('Waiting for Codex worker access',{exact:true}).waitFor();
   const { claim } = await executor({ op: 'claim', operation_id: crypto.randomUUID(), task_ids: [execution.task.id] });
   assert.equal(claim.task.id, execution.task.id);
   await page.clock.fastForward(31_000);

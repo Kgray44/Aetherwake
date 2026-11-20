@@ -68,7 +68,10 @@ export function dependencyGraph(current,tasks,{lifecycle,summaries}={}) {
 const inactiveStates = new Set(['archived','cancelled','superseded']);
 const waitingStates = new Set(['ready','queued','admitted','scheduled','paused']);
 
-export function taskActivity(task, attempts, events, lifecycle) {
+export function taskActivity(task,attempts,events,lifecycle,workerAccess) {
+  if (workerAccess==='not_configured' && ['queued','ready'].includes(lifecycle?.state)) {
+    return {label:'Waiting for Codex worker access',at:null};
+  }
   const humanize = state => String(state).replaceAll('_', ' ');
   if (lifecycle && (['running','pausing','cancelling','blocked','failed','verifying','completed'].includes(lifecycle.state) ||
       waitingStates.has(lifecycle.state) || inactiveStates.has(lifecycle.state))) {
