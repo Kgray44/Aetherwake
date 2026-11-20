@@ -7,7 +7,7 @@ const receiptTitles = {
   resume:'Task resumed', cancel:'Cancellation requested', archive:'Task archived', reopen:'Task reopened with feedback',
   supersede:'Task superseded', associate:'Delivery reference linked', dependency_cancelled:'Cancelled by dependency',
   failed:'Executor reported failure', finished:'Candidate submitted for review', stopped:'Executor stopped',
-  heartbeat:'Executor heartbeat', orphaned:'Executor lease expired',
+  heartbeat:'Executor heartbeat', lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
 };
 
 export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evidence=[], records=[]}) {
@@ -23,7 +23,8 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
   for (const attempt of selected) {
     const common = [...detail('Attempt ID',attempt.id),...detail('Executor',attempt.provider ?? attempt.executor),
       ...detail('Model',attempt.model),...detail('Branch',attempt.branch),...detail('Base revision',attempt.revision),
-      ...detail('Candidate revision',attempt.candidate_revision)];
+      ...detail('Candidate revision',attempt.candidate_revision),
+      ...detail('Attempt deadline',Number.isFinite(attempt.deadline)?new Date(attempt.deadline).toISOString():null)];
     add({id:'start:'+attempt.id,at:attempt.started_at,type:'Attempt',title:'Attempt '+attempt.attempt_number+' started',
       description:[attempt.provider ?? attempt.executor,attempt.model].filter(Boolean).join(' · '),details:common});
     add({id:'end:'+attempt.id,at:attempt.finished_at,type:'Attempt',title:'Attempt '+attempt.attempt_number+' finished',
@@ -37,7 +38,8 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
       milestone:operation==='accept', description:humanize(receipt.state),
       href:receipt.reference?.uri, reviewedEvidence:receipt.evidence??[], details:[
         ...detail('Recorded by',receipt.actor),...detail('Task version',receipt.version),...detail('Reason',receipt.reason),
-        ...detail('Owner feedback',receipt.feedback),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
+        ...detail('Owner feedback',receipt.feedback),...detail('Scheduled start',receipt.start_at),
+        ...detail('Time limit (minutes)',receipt.max_attempt_minutes),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
         ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),
         ...detail('Reviewed criteria',receipt.evidence?.length),...detail('Reference type',humanize(receipt.reference?.kind)),
         ...detail('Attempt',receipt.attempt_id),...detail('Operation ID',receipt.operation_id),

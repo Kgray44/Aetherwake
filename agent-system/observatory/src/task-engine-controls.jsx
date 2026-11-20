@@ -85,6 +85,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
         change.executor = 'codex';
         change.cancel_with_dependency = fields.has('cancel_with_dependency');
         change.prerequisites = fields.getAll('verified_capability');
+        if (fields.has('max_attempt_minutes')) change.max_attempt_minutes = Number(fields.get('max_attempt_minutes'));
         const date = fields.get('start_at');
         if (date) change.start_at = new Date(date).toISOString();
       }
@@ -114,6 +115,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
           <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
           <div><dt><Clock3 size={14} aria-hidden="true"/>Start time</dt><dd>{lifecycle.start_at == null ? 'Unscheduled' : stamp(lifecycle.start_at)}</dd></div>
           <div><dt>Priority</dt><dd>{detail.priority}</dd></div>
+          <div><dt>Attempt time limit</dt><dd>{lifecycle.max_attempt_minutes == null ? 'Unreported' : lifecycle.max_attempt_minutes+' min'}</dd></div>
           <div><dt>Dependency cancellation</dt><dd>{lifecycle.cancel_with_dependency ? 'Enabled' : 'Off'}</dd></div>
         </dl>
         {blocker.length > 0 && <section className="task-command-blockers"><h3>Blocking execution</h3><ul aria-label="Admission blockers">{blocker.map(item => <li key={item.type + ':' + item.id}>
@@ -141,6 +143,10 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
       {action === 'admit' && <>
         <p>Admission allows a configured Codex worker to claim this Task once its schedule and prerequisites are satisfied.</p>
         <label>Start at (local time, optional)<input name="start_at" type="datetime-local"/></label>
+        {lifecycle.max_attempt_minutes!=null&&<label>Maximum minutes per attempt
+          <input name="max_attempt_minutes" type="number" min={1} max={30} step={1} defaultValue={lifecycle.max_attempt_minutes} required/>
+          <small>The worker stops at this limit. Time spent in the queue is excluded.</small>
+        </label>}
         <label className="task-check"><input name="cancel_with_dependency" type="checkbox"/> Cancel if a dependency is cancelled</label>
         {task.prerequisites.capabilities.map(capability => <label className="task-check" key={capability}>
           <input name="verified_capability" type="checkbox" value={capability}/> Verify {capability}
@@ -205,6 +211,7 @@ export function TaskDeliveryEvidence({ task, lifecycle, attempts, Status }) {
         {attempt.started_at && <small>Started {stamp(attempt.started_at)}</small>}
         {attempt.finished_at && <small>Finished {stamp(attempt.finished_at)}</small>}
         {attempt.branch && <small>Branch <code>{attempt.branch}</code></small>}
+        {Number.isFinite(attempt.deadline)&&<small>Attempt deadline {stamp(attempt.deadline)}</small>}
         <small>Base revision <code>{attempt.revision}</code></small>
         {attempt.candidate_revision && <small>Candidate revision <code>{attempt.candidate_revision}</code></small>}
         {attempt.failure && <p>{attempt.failure}</p>}

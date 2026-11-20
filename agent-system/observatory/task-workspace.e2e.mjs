@@ -222,6 +222,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('button', { name: 'Admit to Codex queue', exact: true }).click();
   const admission = page.getByRole('form', { name: 'Admit to Codex queue' });
   await admission.getByLabel('Start at').fill('2050-01-01T13:00');
+  await admission.getByLabel('Maximum minutes per attempt').fill('7');
   await admission.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.getByRole('list', { name: 'Admission blockers' }).getByText(/Canonical prerequisite/).waitFor();
   const id = new URL(page.url()).hash.split('/').at(-1);
@@ -229,6 +230,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(detail.lifecycle.stored_state, 'admitted');
   assert.equal(detail.lifecycle.state, 'blocked');
   assert.equal(detail.lifecycle.executor, 'codex');
+  assert.equal(detail.lifecycle.max_attempt_minutes,7);
   assert.equal(detail.lifecycle.start_at, await page.evaluate(() => new Date('2050-01-01T13:00').getTime()));
 
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
@@ -241,6 +243,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByText(/Stored state cancelled/).waitFor();
   await page.reload();
   await page.getByText(/Stored state cancelled/).waitFor();
+  await page.getByText('7 min',{exact:true}).waitFor();
   detail = await send({ op: 'get', task_id: id });
   assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'resume', 'cancel']);
   assert.equal(detail.task.owner_acceptance, 'not_reviewed');
