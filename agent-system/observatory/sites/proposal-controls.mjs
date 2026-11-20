@@ -6,7 +6,6 @@ const transitions = {
   proposed: ['blocked', 'cancelled', 'superseded'],
   blocked: ['proposed', 'cancelled', 'superseded'],
 };
-const referenceKinds = ['git', 'requirement', 'document', 'artifact', 'issue', 'pull_request', 'url'];
 const failure = (status, error) => ({ status, body: { error } });
 
 export function proposalControl(row) {
@@ -47,14 +46,9 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
     let fields;
     try { fields = validateNewTask(action.fields); }
     catch (cause) { return failure(400, cause.message); }
-    const { requirements } = action.fields;
     priority = action.fields.priority;
-    if (!priorities.includes(priority) || !Array.isArray(requirements) || requirements.length > 50 ||
-        !requirements.every(ref => ref && referenceKinds.includes(ref.kind) && typeof ref.uri === 'string' &&
-          ref.uri.trim() && ref.uri.length <= 1000 &&
-          (ref.revision === undefined || (typeof ref.revision === 'string' && ref.revision.length <= 128))) ||
-        fields.ids.includes(id)) {
-      return failure(400, 'Invalid priority, requirement reference, or prerequisite');
+    if (!priorities.includes(priority) || fields.ids.includes(id)) {
+      return failure(400, 'Invalid priority or prerequisite');
     }
     const previousCriteria = [...task.acceptance.criteria];
     updated = {
@@ -63,7 +57,8 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
       objective: fields.objective,
       classification: { ...task.classification, primary: fields.primary },
       prerequisites: { task_ids: fields.ids, capabilities: fields.capabilities },
-      requirements: requirements.map(({ kind, uri, revision }) => ({ kind, uri: uri.trim(), ...(revision ? { revision } : {}) })),
+      ...(fields.requirements===undefined?{}:{requirements:fields.requirements}),
+      ...(fields.deliverables===undefined?{}:{deliverables:fields.deliverables}),
       acceptance: { profile_id: fields.profile, criteria: fields.accept.map(({ description }) => {
         const index = previousCriteria.findIndex(criterion => criterion.description === description);
         return index < 0 ? { description, id: 'criterion-' + crypto.randomUUID() } : previousCriteria.splice(index, 1)[0];
