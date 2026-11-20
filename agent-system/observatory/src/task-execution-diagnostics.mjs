@@ -2,6 +2,7 @@ import { ownerReviewByCriterion } from './evidence-status.mjs';
 import { attemptTraceCoverage } from './trace-timeline.mjs';
 
 const number = new Intl.NumberFormat('en-US');
+const percent = new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:1});
 const seconds = milliseconds => (milliseconds / 1000).toFixed(2) + ' s';
 
 export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tokens, records }) {
@@ -21,9 +22,10 @@ export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tok
   for (const row of tokens) {
     const { inputTokens, cachedInputTokens, uncachedInputTokens, totalTokens } = row.observed;
     if (inputTokens != null && cachedInputTokens != null && uncachedInputTokens != null) {
+      const reuseRatio = inputTokens>0 ? ' (' + percent.format(cachedInputTokens/inputTokens) + ' of input)' : '';
       findings.push({ title:'Attempt ' + row.attemptNumber + ' input reuse',
-        detail:number.format(cachedInputTokens) + ' cache-reused input tokens and ' +
-          number.format(uncachedInputTokens) + ' uncached input tokens from ' + row.source +
+        detail:number.format(cachedInputTokens) + ' cache-reused input tokens' + reuseRatio + ' and ' +
+          number.format(uncachedInputTokens) + ' uncached input tokens from ' + (row.source??'Codex CLI receipts') +
           '. The receipt measures aggregate input across model calls.' });
     }
     if (!row.model && totalTokens != null) findings.push({title:'Attempt ' + row.attemptNumber + ' model attribution missing',

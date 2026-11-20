@@ -138,19 +138,21 @@ function termination(child) {
 }
 
 export function codexTaskPrompt(task, attempt) {
+  const references = [...new Set((task.requirements??[]).map(({kind,uri,revision})=>
+    '- '+kind+' '+uri+(revision?' @ '+revision:'')))];
+  const deliverables = [...new Set(task.deliverables??[])];
   return [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
     'Use targeted repository searches and governance sections. Keep command output focused and reuse facts already read unless the source changed or needs independent verification.',
+    'When the checkout supports governance-context --compact, prefer it for routed guidance. Read all applicable binding requirements.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
     task.title, task.objective,
-    ...(task.requirements?.length ? ['Task requirements and input references:',
-      ...task.requirements.map(({kind,uri,revision})=>'- '+kind+' '+uri+(revision?' @ '+revision:'')),
+    ...(references.length ? ['Task requirements and input references:', ...references,
       'Consult these references through permitted tools and existing access. A reference does not grant access.'] : []),
-    ...(task.deliverables?.length ? ['Planned deliverables:',
-      ...task.deliverables.map(item=>'- '+item)] : []),
+    ...(deliverables.length ? ['Planned deliverables:', ...deliverables.map(item=>'- '+item)] : []),
     'Acceptance criteria:',
     ...task.acceptance.criteria.map(item => item.id + ' ' + item.description),
   ].join('\n');
