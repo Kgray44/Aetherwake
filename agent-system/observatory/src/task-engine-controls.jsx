@@ -4,6 +4,7 @@ import { Activity, Archive, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, 
 import {taskActivityHref} from './github-activity.mjs';
 import { PrerequisiteChecks } from './task-workspace.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
+import { StickySectionAside } from './sticky-section-aside.jsx';
 import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
@@ -133,7 +134,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
           {tasks.find(other => other.id === item.id)?.title ?? item.id} · {humanize(item.state)}
         </li>)}</ul></section>}
       </div>
-      <div className="task-command-deck">
+      <StickySectionAside className="task-command-deck">
         <nav aria-label="Task actions" className="task-command-actions">
           {[...options, ...(unsatisfiedCapabilities.length ? ['satisfy'] : [])]
             .sort((a,b)=> Number(featuredAction===b)-Number(featuredAction===a))
@@ -203,7 +204,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
     </motion.form>}
     {error && <p className="notice error" role="alert">{error}</p>}
     {result && <p role="status">{result}</p>}
-      </div>
+      </StickySectionAside>
     </div>
   </>;
 }
