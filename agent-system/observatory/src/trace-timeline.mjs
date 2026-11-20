@@ -46,6 +46,20 @@ export function traceTimeline(events) {
   };
 }
 
+export function observedTaskTraceCoverage(tasks,attempts,events) {
+  const taskIds=new Set(tasks.map(task=>task.id));
+  const attemptKey=item=>JSON.stringify([item.task_id,item.attempt_id??item.id,item.revision]);
+  const known=new Set(attempts.filter(attempt=>taskIds.has(attempt.task_id)).map(attemptKey));
+  const linked=events.filter(event=>event.attempt_id&&known.has(attemptKey(event)));
+  const timeline=traceTimeline(linked);
+  const complete=timeline.spans.filter(span=>span.complete);
+  return {
+    coveredMs:timeline.coveredMs,
+    tasks:new Set(complete.map(span=>span.task)).size,
+    spans:complete.length,
+  };
+}
+
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
