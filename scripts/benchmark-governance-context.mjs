@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseRegistry } from "./governance-router.mjs";
-import { buildGovernanceIndex, buildContext } from "./governance-context.mjs";
+import { buildGovernanceIndex, buildContext, formatContext, formatCompactContext } from "./governance-context.mjs";
 const root=resolve(dirname(fileURLToPath(import.meta.url)),"..");
 const config=JSON.parse(readFileSync(resolve(root,"config/governance-routes.json"),"utf8"));
 const registry=parseRegistry(readFileSync(resolve(root,"governance/README.md"),"utf8"));
@@ -25,12 +25,14 @@ const fixtures=[
 const data=[];
 for(const f of fixtures){
  const r=buildContext({config,registry,index,...f,maxSections:2});
+ const markdownBytes=Buffer.byteLength(formatContext(r));
+ const compactMarkdownBytes=Buffer.byteLength(formatCompactContext(r));
  const actual=new Set(r.selected.map(s=>s.id));
  const missing=f.expected.filter(id=>!actual.has(id));
  assert.deepEqual(missing,[],"Routing coverage for "+f.task);
  assert.deepEqual(r.coverage.missingRequired,[],"Explicit requirements for "+f.task);
  assert.ok(!r.metrics.budgetExceeded);
- data.push({task:f.task,expectedDomains:f.expected,selectedDomains:[...actual],selectedSections:r.selected.filter(x=>x.mode==="section").map(x=>({charter:x.id,title:x.title,lines:x.range})),fullFallbacks:r.selected.filter(x=>x.mode==="full-fallback").map(x=>x.id),requiredIds:f.requiredIds,fullRoutedCharacters:r.metrics.fullRoutedCharacters,selectedCharacters:r.metrics.selectedCharacters,estimatedTokenProxy:r.metrics.estimatedTokens,reductionPercent:r.metrics.characterReductionPercent,missingDomains:missing});
+ data.push({task:f.task,expectedDomains:f.expected,selectedDomains:[...actual],selectedSections:r.selected.filter(x=>x.mode==="section").map(x=>({charter:x.id,title:x.title,lines:x.range})),fullFallbacks:r.selected.filter(x=>x.mode==="full-fallback").map(x=>x.id),requiredIds:f.requiredIds,fullRoutedCharacters:r.metrics.fullRoutedCharacters,selectedCharacters:r.metrics.selectedCharacters,estimatedTokenProxy:r.metrics.estimatedTokens,reductionPercent:r.metrics.characterReductionPercent,missingDomains:missing,markdownBytes,compactMarkdownBytes});
 }
 const summary={
  benchmark:"source-character context selection, not model token usage or task quality",
@@ -38,7 +40,10 @@ const summary={
  meanReductionPercent:Number((data.reduce((sum,x)=>sum+x.reductionPercent,0)/data.length).toFixed(2)),
  totalFullCharacters:data.reduce((s,x)=>s+x.fullRoutedCharacters,0),
  totalSelectedCharacters:data.reduce((s,x)=>s+x.selectedCharacters,0),
+ markdownBytes:data.reduce((sum,x)=>sum+x.markdownBytes,0),
+ compactMarkdownBytes:data.reduce((sum,x)=>sum+x.compactMarkdownBytes,0),
  passed:true,results:data
 };
 assert.ok(summary.totalSelectedCharacters<summary.totalFullCharacters,"Scoped selection must reduce source characters overall");
+assert.ok(summary.compactMarkdownBytes<summary.markdownBytes,"Compact display must reduce serialized Markdown bytes overall");
 console.log(JSON.stringify(summary,null,2));

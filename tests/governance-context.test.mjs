@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { parseRegistry } from "../scripts/governance-router.mjs";
-import { buildGovernanceIndex, buildContext, formatContext } from "../scripts/governance-context.mjs";
+import { buildGovernanceIndex, buildContext, formatContext, formatCompactContext } from "../scripts/governance-context.mjs";
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),"..");
 const config=JSON.parse(readFileSync(resolve(root,"config/governance-routes.json"),"utf8"));
@@ -43,6 +43,8 @@ test("CLI rejects malformed optional arguments with actionable diagnostics",()=>
   [["--task","x","--max-sections","0"],"--max-sections must be a positive integer"],
   [["--task","x","--budget-tokens","9007199254740992"],"--budget-tokens must be a safe integer"],
   [["--requirement","AW-FAKE-999"],"Unknown or unindexed requirement ID"],
+  [["--compact","--json"],"only available for Markdown"],
+  [["--compact","--index"],"only available for Markdown"],
   [["--mystery"],"Unknown argument"],
  ]) {
   const result=cli(args);
@@ -268,4 +270,27 @@ test("property check: every charter retains all owned requirements under unrecog
   for(const requirement of all)assert.ok(available.has(requirement.id),doc.id+" missing "+requirement.id);
   assert.ok(r.selected.filter(x=>x.id===doc.id).every(x=>x.authority===doc.authority));
  }
+});
+
+test("compact Markdown retains authoritative text, citations and warnings", () => {
+ const r=context({task:"Optimize GPU particle rendering",paths:["src/rendering/particles.ts"],budgetTokens:1});
+ const actual=formatCompactContext(r);
+ const standard=formatContext(r);
+ assert.match(actual,/Source documents/);
+ assert.ok(r.normative.length > 0);
+ assert.ok(r.warnings.length > 0);
+ for(const entry of [...r.selected,...r.normative,...r.dependencies]){
+  assert.ok(actual.includes(entry.text), "Verbatim source content missing");
+  const source=actual.split("\n").find(line=>line.includes(entry.path) && line.includes(entry.documentSha256));
+  assert.ok(source, "Document provenance missing for "+entry.path);
+  assert.ok(source.includes(entry.authority));
+  const id=source.split(" ")[0];
+  const line=Array.isArray(entry.range)?entry.range[0]:entry.line;
+  assert.ok(actual.includes(id+":"+line), "Unresolvable source line for "+entry.path);
+ }
+ for(const warning of r.warnings)assert.ok(actual.includes(warning));
+ assert.ok(Buffer.byteLength(actual)<Buffer.byteLength(standard), "Compact output should reduce serialized bytes");
+ const fromCli=cli(["--task",r.task,"--path",r.paths[0],"--budget-tokens","1","--compact"],dirname(root));
+ assert.equal(fromCli.status,0,fromCli.stderr);
+ assert.equal(fromCli.stdout,actual+"\n");
 });
