@@ -21,7 +21,6 @@ function safeReference(value) {
 }
 const refKinds = ['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation'];
 const sessionPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const requirementKinds = ['git', 'requirement', 'document', 'artifact', 'issue', 'pull_request', 'url'];
 const revisionPattern = /^[a-f0-9]{40}$/;
 const agentCommands = new Set(['edit', 'associate']);
 const claimStates = new Set(['admitted', 'queued', 'scheduled']);
@@ -91,21 +90,15 @@ function publicLifecycle(row, rows, now) {
   return { ...lifecycle, cycle_attempts:cycleAttempts(stored), max_attempt_minutes:attemptLimit(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
 }
 
-function requirementReferences(fields) {
-  const references = fields.requirements;
-  if (references === undefined) return undefined;
-  if (!Array.isArray(references) || references.length > 50 || !references.every(ref =>
-    ref && requirementKinds.includes(ref.kind) && typeof ref.uri === 'string' && ref.uri.trim() &&
-    ref.uri.length <= 1000 && (ref.revision === undefined ||
-      (typeof ref.revision === 'string' && revisionPattern.test(ref.revision))))) {
-    throw Error('Invalid requirement references');
+function validateReferenceRevisions(requirements) {
+  if ((requirements??[]).some(ref=>ref.revision!==undefined&&!revisionPattern.test(ref.revision))) {
+    throw Error('Task requirement and input revisions must be 40-character Git hashes');
   }
-  return references.map(({ kind, uri, revision }) => ({ kind, uri: uri.trim(), ...(revision ? { revision } : {}) }));
 }
 
 function editTask(task, fields) {
-  const requirements = requirementReferences(fields);
   const input = validateNewTask(fields);
+  validateReferenceRevisions(input.requirements);
   const previous = [...task.acceptance.criteria];
   const criteria = input.accept.map(({ description }) => {
     const index = previous.findIndex(item => item.description === description);
@@ -113,7 +106,8 @@ function editTask(task, fields) {
   });
   return {
     ...task, title: input.title, objective: input.objective,
-    ...(requirements === undefined ? {} : { requirements }),
+    ...(input.requirements===undefined?{}:{requirements:input.requirements}),
+    ...(input.deliverables===undefined?{}:{deliverables:input.deliverables}),
     classification: { ...task.classification, primary: input.primary },
     prerequisites: { task_ids: unique(input.ids), capabilities: unique(input.capabilities) },
     acceptance: { profile_id: input.profile, criteria },
@@ -394,8 +388,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     let task;
     try {
       task = proposedTask(body.fields, source.revision ?? source, () => body.operation_id);
-      const requirements = requirementReferences(body.fields);
-      if (requirements !== undefined) task.requirements = requirements;
+      validateReferenceRevisions(task.requirements);
     }
     catch (error) { return failure(400, error.message); }
     if (!validate(task) || task.prerequisites.task_ids.some(id => !taskId(id))) return failure(400, 'Invalid Task record');
@@ -473,7 +466,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     ...(action?.type === 'admit' ? { max_attempt_minutes:attemptLimit(change.lifecycle), start_at:timestamp(change.lifecycle.start_at) } : {}),
     ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
     ...(action?.type === 'edit' ? { fields:[
-      ...['title','objective','classification','prerequisites','requirements','acceptance'].filter(key =>
+      ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
         JSON.stringify(task[key]) !== JSON.stringify(nextTask[key])),
       ...(change.priority!==currentRow.priority?['priority']:[]),
     ] } : {}),

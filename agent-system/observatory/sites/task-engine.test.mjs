@@ -11,7 +11,7 @@ import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkspaceTelemetryScope, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkspaceTelemetryScope, codexTaskPrompt, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
 import { buildEngineeringAnalytics } from '../src/engineering-analytics.mjs';
 
@@ -151,6 +151,25 @@ test('archive keeps accepted prerequisites and feedback reopens at the accepted 
   assert.equal(next.attempt.attempt_number,2);
   assert.equal(next.attempt.revision,candidate);
   assert.ok(next.task.objective.endsWith(feedback));
+});
+
+test('versioned Task scope reaches the Codex worker with its input references and outcomes', async t => {
+  const {call,register,command}=setup(t);
+  const task=await register('task scope');
+  const requirements=[{kind:'artifact',uri:'private-artifact:received-sample',revision:rev}];
+  const deliverables=['Sample verification report','Candidate implementation'];
+  const changed=await command(task,'edit',{fields:{...fields('task scope'),priority:'normal',requirements,deliverables}});
+  assert.equal(changed.status,200);
+  assert.deepEqual(changed.body.task.requirements,requirements);
+  assert.deepEqual(changed.body.task.deliverables,deliverables);
+  assert.deepEqual(changed.body.events.at(-1).fields,['requirements','deliverables']);
+  await command(changed.body,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  assert.deepEqual(claim.task.deliverables,deliverables);
+  assert.deepEqual(claim.task.requirements,requirements);
+  const prompt=codexTaskPrompt(claim.task,claim.attempt);
+  assert.ok(prompt.includes(requirements[0].uri));
+  assert.ok(deliverables.every(item=>prompt.includes(item)));
 });
 
 test('owner time limits constrain the claim deadline and leave a specific receipt at expiry', async t => {
