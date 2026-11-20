@@ -218,3 +218,12 @@ The tool does not authorize Tasks or move canonical state to D1.
 Projection admission rejects generation timestamps more than five minutes ahead of the Worker clock. A caller can keep at most eight verification namespaces plus its live projection; quota enforcement occurs inside the atomic SQLite insert, so concurrent first imports cannot exceed it. Existing namespaces remain updateable at quota. Reuse a verification namespace rather than generating one for every refresh. Each projection is bounded to 1 MiB at ingress; no raw-history accumulation occurs in D1. No automatic deletion of owner records is introduced.
 
 Evidence presentation is deliberately non-authoritative: a reported passing result, even with `synthetic: false`, matching revision and linked attempt, is **reported pass unverified**, never criterion acceptance. Missing or inconsistent attempt linkage displays **unverified missing attempt**. Partial projections remain admitted so bounded snapshots do not silently discard useful claims. Neither schema validity, linkage, a digest receipt nor a Site login authenticates the underlying evidence or an owner decision. Canonical task state is not rewritten by this display classification.
+
+### Task retry context
+
+Retry remains an explicit owner command and retains the existing three-attempt limit.
+A Task cannot be retried with an already used changed assumption after normalization
+of case and whitespace. The next claim pins the prior failed or orphaned Attempt ID,
+its disposition, and the bounded owner note. The worker uses that context to check
+the changed assumption before revisiting the failed approach. Raw executor diagnostic
+text remains outside the retry prompt. Claim replay returns the same retry context.

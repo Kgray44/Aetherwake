@@ -55,8 +55,13 @@ function termination(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
-  const prompt = [
+export function buildTaskPrompt(task, attempt) {
+  const retry = attempt.retry && {
+    prior_attempt_id: attempt.retry.prior_attempt_id,
+    prior_state: attempt.retry.prior_state,
+    changed_assumption: attempt.retry.changed_assumption,
+  };
+  return [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
@@ -64,7 +69,15 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
     'Task: ' + task.id + ' (' + attempt.id + ')',
     task.title, task.objective, 'Acceptance criteria:',
     ...task.acceptance.criteria.map(item => item.id + ' ' + item.description),
+    ...(retry ? [
+      'Prior failed attempt (owner-approved retry context): ' + JSON.stringify(retry),
+      'Check the changed assumption before repeating the prior approach. Keep the original scope and acceptance criteria.',
+    ] : []),
   ].join('\n');
+}
+
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
+  const prompt = buildTaskPrompt(task, attempt);
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
   const args = [

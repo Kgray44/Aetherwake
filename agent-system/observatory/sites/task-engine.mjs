@@ -64,6 +64,10 @@ function hasCycle(id, task, rows) {
   return false;
 }
 
+function normalizeAssumption(value) {
+  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+}
+
 function exposeAttempt({ lease, ...attempt }) {
   return attempt;
 }
@@ -176,7 +180,14 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
       return failure(400, 'A changed assumption is required before retrying');
     }
-    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: action.changed_assumption.trim() } };
+    const changedAssumption = action.changed_assumption.trim();
+    const priorAssumptions = [
+      lifecycle.changed_assumption, ...lifecycle.attempts.map(attempt => attempt.retry?.changed_assumption),
+    ];
+    if (priorAssumptions.some(prior => typeof prior === 'string' && normalizeAssumption(prior) === normalizeAssumption(changedAssumption))) {
+      return failure(409, 'This changed assumption was already used for this Task');
+    }
+    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: changedAssumption } };
   }
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {
     return { lifecycle: { ...lifecycle, state: current === 'running' ? 'pausing' : 'paused' } };
@@ -415,6 +426,15 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       attempt.resume_session_id = checkpoint.session_id;
       attempt.revision = checkpoint.checkpoint_revision;
     }
+    const previous = lifecycle.attempts.at(-1);
+    if (!attempt.resume_session_id && ['failed', 'orphaned'].includes(previous?.state) && lifecycle.changed_assumption) {
+      attempt.retry = {
+        prior_attempt_id: previous.id,
+        prior_state: previous.state,
+        changed_assumption: lifecycle.changed_assumption,
+      };
+    }
+    delete lifecycle.changed_assumption;
     delete lifecycle.resume_attempt_id;
     lifecycle.state = 'running';
     lifecycle.attempts.push(attempt);
