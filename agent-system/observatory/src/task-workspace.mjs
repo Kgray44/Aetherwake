@@ -1,17 +1,24 @@
 const idPattern = /^[A-Za-z0-9_.:-]{1,160}$/;
 const priorities = ['urgent', 'high', 'normal', 'low'];
+export const workLabels={
+  active:'Executing',waiting:'Queued or paused',review:'Awaiting review',issues:'At risk',accepted:'Accepted',
+  succeeded:'Successful attempts',reportedRunning:'Reported running',unlinked:'No execution linked',archived:'Archived',
+};
 
-export function taskHref(id) {
-  return id === undefined ? '#tasks' : '#tasks/' + encodeURIComponent(id).replaceAll('%3A', ':');
+export function taskHref(id,work) {
+  if(id!==undefined)return '#tasks/'+encodeURIComponent(id).replaceAll('%3A',':');
+  return work&&Object.hasOwn(workLabels,work)?'#tasks?work='+work:'#tasks';
 }
 
 export function parseTaskHref(hash) {
   if (hash === '#tasks') return { id: null };
+  const work=/^#tasks\?work=([a-zA-Z]+)$/.exec(hash)?.[1];
+  if(work&&Object.hasOwn(workLabels,work))return {id:null,work};
   const id = hash.startsWith('#tasks/') && hash.slice(7);
   return id && idPattern.test(id) ? { id } : null;
 }
 
-export function organizeTasks(tasks, filters, controls = {}) {
+export function organizeTasks(tasks, filters, controls = {}, workByTask) {
   const query = (filters.query ?? '').trim().toLowerCase();
   const hasControl = task => Object.hasOwn(controls, task.id);
   const rank = task => {
@@ -20,7 +27,8 @@ export function organizeTasks(tasks, filters, controls = {}) {
   };
   const visible = tasks.filter(task =>
     (filters.source !== 'private' || hasControl(task) && controls[task.id].source !== 'published') &&
-    ((!filters.state || filters.state === 'all') ? task.state !== 'archived' : task.state === filters.state) &&
+    (!filters.work||filters.work==='all'||workByTask?.get(task.id)===filters.work) &&
+    ((!filters.state||filters.state==='all') ? task.state!=='archived'||filters.work==='archived' : task.state===filters.state) &&
     [task.title, task.objective, task.id, task.classification?.primary].join(' ').toLowerCase().includes(query));
   visible.sort((a, b) => {
     const newest = String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''));
@@ -91,29 +99,34 @@ export function taskActivity(task,attempts,events,lifecycle,workerAccess) {
   return { label: 'No execution reported', at: null };
 }
 
-export function workspaceCounts(tasks, attempts, summaries) {
+export function workspaceActivity(tasks, attempts, summaries) {
   const latest = new Map();
   const stamp = attempt => attempt.finished_at ?? attempt.started_at ?? attempt.created_at ?? '';
   for (const attempt of attempts) {
     const previous = latest.get(attempt.task_id);
     if (!previous || stamp(attempt) > stamp(previous)) latest.set(attempt.task_id, attempt);
   }
-  const counts = { active: 0, accepted: 0, succeeded: 0, review: 0, waiting: 0, issues: 0, unlinked: 0, reportedRunning: 0 };
+  const counts=Object.fromEntries(Object.keys(workLabels).map(key=>[key,0]));
+  const byTask=new Map();
   for (const task of tasks) {
-    const engine = summaries.get(task.id)?.lifecycle;
-    const state = engine?.state ?? task.state;
-    const report = latest.get(task.id);
-    if (inactiveStates.has(state)) continue;
-    if (task.owner_acceptance === 'accepted' && ['completed', 'accepted'].includes(state)) counts.accepted++;
-    else if (engine && ['running','pausing','cancelling'].includes(state)) counts.active++;
-    else if (state === 'verifying') counts.review++;
-    else if (engine && waitingStates.has(state)) counts.waiting++;
-    else if (['failed','blocked'].includes(state) || report?.state === 'failed') counts.issues++;
-    else if (report?.state === 'succeeded') counts.succeeded++;
-    else if (report?.state === 'running') counts.reportedRunning++;
-    else if (!report && !engine?.executor) counts.unlinked++;
+    const summary=summaries.get(task.id);
+    const engine=summary?.lifecycle;
+    const state=engine?.state??task.state;
+    const report=latest.get(task.id);
+    let group;
+    if(state==='archived')group='archived';
+    else if(inactiveStates.has(state))continue;
+    else if((summary?.task?.owner_acceptance??task.owner_acceptance)==='accepted'&&['completed','accepted'].includes(state))group='accepted';
+    else if(engine&&['running','pausing','cancelling'].includes(state))group='active';
+    else if(state==='verifying')group='review';
+    else if(engine&&waitingStates.has(state))group='waiting';
+    else if(['failed','blocked'].includes(state)||report?.state==='failed')group='issues';
+    else if(report?.state==='succeeded')group='succeeded';
+    else if(report?.state==='running')group='reportedRunning';
+    else if(!report&&!engine?.executor)group='unlinked';
+    if(group){byTask.set(task.id,group);counts[group]++;}
   }
-  return counts;
+  return {counts,byTask};
 }
 
 export function attemptEvents(attempt, events) {
