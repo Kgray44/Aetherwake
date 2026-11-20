@@ -61,7 +61,7 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
   }
   for (const event of eventData.items) {
     const scope = sessions.get(event.session_id);
-    if (!scope || scope.attemptIds.size || !scope.revisions.has(event.revision) ||
+    if (!scope || !scope.revisions.has(event.revision) ||
         event.kind !== 'measurement' || event.attempt_id) continue;
     const observed = dedicatedReading(event);
     if (observed) scope.readings.push({observed,at:event.occurred_at,id:event.event_id});
@@ -77,9 +77,10 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
 
   const sessionRows = [...sessions.values()].map(({id,attemptIds,readings}) => {
     const conflict = (cumulativeCounts.get(id)??0) > 1;
-    if (attemptIds.size) {
-      const linked = usable.filter(row => attemptIds.has(row.attemptId));
-      return {id,attemptIds:[...attemptIds],observed:addObserved(linked.map(row=>row.observed)),
+    const linked = usable.filter(row => attemptIds.has(row.attemptId));
+    const attemptObserved = addObserved(linked.map(row=>row.observed));
+    if (conflict || attemptObserved.totalTokens!==null) {
+      return {id,attemptIds:[...attemptIds],observed:attemptObserved,
         basis:conflict?'Conflicting cumulative receipts':'Linked attempt receipts'};
     }
     readings.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||a.id.localeCompare(b.id));
@@ -89,18 +90,18 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
         Date.parse(item.at)===Date.parse(prior.at) && JSON.stringify(item.observed)!==JSON.stringify(prior.observed));
     });
     const latest = inconsistent ? null : readings.at(-1);
-    return {id,attemptIds:[],observed:latest?.observed??addObserved([]), receiptId:latest?.id, observedAt:latest?.at,
+    return {id,attemptIds:[...attemptIds],observed:latest?.observed??attemptObserved, receiptId:latest?.id, observedAt:latest?.at,
       basis:inconsistent?'Conflicting cumulative receipts':latest?'Reported dedicated session snapshot':'Usage unavailable'};
   });
 
-  const external = sessionRows.filter(row => row.receiptId);
   const coverage = {
     attemptTotals:usable.filter(row=>row.observed.totalTokens!==null).length, attempts:taskAttempts.length,
     sessionTotals:sessionRows.filter(row=>row.observed.totalTokens!==null).length, sessions:sessionRows.length,
     conflicts:eventData.conflicts+sessionRows.filter(row=>row.basis==='Conflicting cumulative receipts').length,
   };
   return {rows,sessionRows,coverage,billing:'Unknown',observed:addObserved([
-    ...usable.map(row=>row.observed), ...external.map(row=>row.observed),
+    ...usable.filter(row=>!attemptSessions.has(row.attemptId)).map(row=>row.observed),
+    ...sessionRows.map(row=>row.observed),
   ]),desktop:desktopSessionTokens(task.id,eventData.items.filter(event=>!event.session_id)),
-  scope:'Counts include available attempt receipts and reported dedicated session totals. Session views of attempt receipts are counted once. Coverage may be partial, and cumulative input can include repeated context.'};
+  scope:'Task totals count each linked session once. When a session has no attempt totals, a revision-linked dedicated receipt can supply its session total. Coverage may be partial, and cumulative input can include repeated context.'};
 }

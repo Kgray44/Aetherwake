@@ -409,6 +409,16 @@ test('Task usage deduplicates attempt and session scopes and keeps unknown billi
   const disputed = taskUsageAccounting({...input,events:[...events,conflict]});
   assert.equal(disputed.observed.totalTokens,80);
   assert.equal(disputed.coverage.conflicts,1);
+
+  const fallbackInput = {...input,events:events.filter(event=>event.event_id!==first.event_id)};
+  const fallback = taskUsageAccounting(fallbackInput);
+  const reportedSession = fallback.sessionRows.find(row=>row.id===managed);
+  assert.equal(reportedSession.receiptId,'managed-overlap');
+  assert.deepEqual(reportedSession.attemptIds,[attempt.id,resumed.id]);
+  assert.equal(fallback.observed.totalTokens,100);
+  assert.deepEqual(fallback.coverage,{attemptTotals:0,attempts:2,sessionTotals:2,sessions:3,conflicts:0});
+  assert.match(JSON.stringify(taskReportDefinition(fallbackInput).content),
+    /Attempt totals 0 of 2 · Session totals 2 of 3 · Conflicts 0 · Billing Unknown/);
 });
 
 test('heartbeat receipts update one executor indicator and stay out of the Timeline', () => {
