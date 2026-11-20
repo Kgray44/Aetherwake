@@ -50,16 +50,19 @@ export function createOpenAIModelPricing(fetcher, clock = Date.now) {
         const response = await fetcher(openAIModelPage(model) + '.md', {
           headers: {accept: 'text/markdown'}, redirect: 'error', signal: controller.signal,
         });
-        if (response.ok && response.headers.get('content-type')?.startsWith('text/markdown')) {
+        const mediaType = response.headers.get('content-type')?.split(';')[0];
+        if (response.ok && mediaType === 'text/markdown') {
           const usdPerMillion = parseOpenAIModelPricing(model, await readBounded(response.body, 64 * 1024));
           if (usdPerMillion) {
             const retrieved = clock();
             quote = {model, usdPerMillion, retrievedAt: new Date(retrieved).toISOString(),
               expiresAt: new Date(retrieved + refreshInterval).toISOString()};
-          }
+          } else console.warn('OpenAI pricing document layout unrecognized', model);
+        } else if (response.status !== 404) {
+          console.warn('OpenAI pricing response unavailable', model, response.status, mediaType);
         }
-      } catch {
-        // The provider page can be unavailable or change format. Leave the estimate unknown.
+      } catch (error) {
+        console.warn('OpenAI pricing retrieval failed', model, String(error).slice(0, 180));
       } finally {
         clearTimeout(timeout);
       }
