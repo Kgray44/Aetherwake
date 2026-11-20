@@ -1,0 +1,87 @@
+import React, {useEffect,useMemo,useRef,useState} from 'react';
+import {motion,useReducedMotion} from 'motion/react';
+import {Activity, ArrowRight, CheckCircle2, ClipboardCheck, FileCheck2, Flag, GitCommitHorizontal} from 'lucide-react';
+import {buildTaskTimeline} from './task-timeline.mjs';
+import {taskActivityHref} from './github-activity.mjs';
+import {useCardMotion} from './card-motion.jsx';
+
+const icons={Task:Flag,Attempt:GitCommitHorizontal,Audit:ClipboardCheck,Trace:Activity,Evidence:FileCheck2};
+const time = value => new Date(value).toLocaleString(undefined,{hour:'numeric',minute:'2-digit',second:'2-digit'});
+const day = value => new Date(value).toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'});
+const categories=['All','Task','Attempt','Audit','Trace','Evidence'];
+
+export function TaskTimeline({task,attempts,events,audits,evidence,records}) {
+  const reduce=useReducedMotion();
+  const interaction=useCardMotion(true);
+  const items=useMemo(()=>buildTaskTimeline({task,attempts,events,audits,evidence,records}),[task,attempts,events,audits,evidence,records]);
+  const [filter,setFilter]=useState('All');
+  const [selected,setSelected]=useState('');
+  const [limit,setLimit]=useState(14);
+  const focusDetails=useRef(false);
+  const heading=useRef(null);
+  const visible=filter==='All'?items:items.filter(item=>item.type===filter);
+  const event=visible.find(item=>item.id===selected)??visible[0];
+  const activeId=event?.id;
+  const activity=taskActivityHref(event?.href);
+  useEffect(()=>{
+    if(!focusDetails.current||!heading.current)return;
+    focusDetails.current=false;
+    heading.current.focus({preventScroll:true});
+    heading.current.scrollIntoView({block:'nearest',behavior:reduce?'instant':'smooth'});
+  },[activeId,reduce]);
+  function open(id){
+    if(id===activeId){
+      heading.current?.focus({preventScroll:true});
+      heading.current?.scrollIntoView({block:'nearest',behavior:reduce?'instant':'smooth'});
+      return;
+    }
+    focusDetails.current=true;
+    setSelected(id);
+  }
+
+  return <section className="task-timeline" aria-label="Task timeline">
+    <nav aria-label="Timeline filters" className="task-timeline-filters">
+      {categories.filter(kind=>kind==='All'||items.some(item=>item.type===kind)).map(kind=>
+        <button type="button" className="quiet-button" key={kind} aria-pressed={filter===kind} onClick={()=>{setFilter(kind);setLimit(14);}}>{kind}</button>)}
+    </nav>
+    <div className="task-timeline-grid">
+      <div>
+        {visible.length===0 ? <p>No dated events are available for this Task.</p> :
+          <ol className="task-timeline-list">{visible.slice(0,limit).map((item,index)=>{
+            const Icon=item.milestone?CheckCircle2:icons[item.type];
+            const startsDay=index===0||day(item.at)!==day(visible[index-1].at);
+            return <li key={item.id} className={'task-timeline-entry'+(startsDay?' starts-day':'')}>
+              {startsDay&&<strong className="task-timeline-day">{day(item.at)}</strong>}
+              <motion.button type="button" className={'task-timeline-event'+(item.milestone?' milestone':'')} aria-current={item.id===activeId?'true':undefined}
+                aria-controls="task-timeline-details" onClick={()=>open(item.id)}
+                {...interaction}>
+                <span className={'task-timeline-node node-'+item.type.toLowerCase()}><Icon size={16} aria-hidden="true"/></span>
+                <span className="task-timeline-label"><strong>{item.title}</strong>{item.description&&<small>{item.description}</small>}</span>
+                <time dateTime={item.at}>{time(item.at)}</time><ArrowRight size={14} aria-hidden="true"/>
+              </motion.button>
+            </li>;
+          })}</ol>}
+        {visible.length>limit&&<button type="button" className="quiet-button" onClick={()=>setLimit(previous=>previous+14)}>Show earlier events</button>}
+      </div>
+      {event&&<aside id="task-timeline-details" className="task-timeline-details" aria-label="Selected timeline event">
+        <motion.div key={event.id} initial={reduce?false:{opacity:0,y:3}} animate={{opacity:1,y:0}} transition={{duration:reduce?0:.18}}>
+          <span className="task-timeline-kind">{event.milestone?'Owner acceptance':event.type}</span>
+          <h3 ref={heading} tabIndex={-1}>{event.title}</h3>
+          <p><time dateTime={event.at}>{new Date(event.at).toLocaleString()}</time></p>
+          {event.description&&<p>{event.description}</p>}
+          {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+          {event.measurements?.length>0&&<ul className="task-timeline-measurements">{event.measurements.map((metric,index)=><li key={index}>
+            {human(metric.name)} · {metric.availability==='unavailable'?'Unavailable':metric.value??'Unavailable'} {metric.unit} · {metric.availability}
+          </li>)}</ul>}
+          {activity&&<a className="text-button" href={activity}>Open linked activity <ArrowRight size={14} aria-hidden="true"/></a>}
+          {event.reviewedEvidence?.length>0&&<ul>{event.reviewedEvidence.map(item=>{
+            const href=taskActivityHref(item.uri);
+            return <li key={item.criterion_id}>{href?<a href={href}>{item.criterion_id}</a>:item.criterion_id} · {item.revision}</li>;
+          })}</ul>}
+        </motion.div>
+      </aside>}
+    </div>
+  </section>;
+}
+
+const human = value => String(value??'').replaceAll('_',' ');

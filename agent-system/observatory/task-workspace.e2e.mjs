@@ -66,7 +66,10 @@ async function start(t, { canonical = false } = {}) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = 'http://127.0.0.1:' + server.address().port;
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => new Promise(resolve => {
+    server.close(resolve);
+    server.closeAllConnections();
+  }));
   async function executor(body) {
     const { taskOperation } = await import('./sites/task-engine.mjs');
     const result = await taskOperation({ db: DB, owner, namespace: 'verification:' + namespace,
@@ -122,7 +125,7 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
   assert.equal(await editor.getByLabel('Task title').inputValue(), editTitle);
   assert.equal(await editor.getByLabel('Priority').inputValue(), 'urgent');
   await page.getByRole('heading', { name: 'Dependency graph' }).waitFor();
-  await page.getByRole('heading', { name: 'Execution timeline' }).waitFor();
+  await page.getByRole('heading', { name: 'Task Timeline', exact: true }).waitFor();
   await page.getByText('Change history', { exact: true }).click();
   await page.getByText(/Version 2 · edit/).waitFor();
 
@@ -273,6 +276,32 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
   assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
+  await page.getByText('Task complete',{exact:true}).waitFor();
+  const timeline=page.getByRole('region',{name:'Task timeline'});
+  await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
+  await timeline.getByRole('button',{name:/Task created/}).waitFor();
+  await timeline.getByRole('button',{name:/Task submitted/}).waitFor();
+  await timeline.getByRole('button',{name:'Attempt',exact:true}).click();
+  await timeline.getByRole('button',{name:/Attempt 1 started/}).click();
+  const selected=timeline.getByRole('complementary',{name:'Selected timeline event'});
+  await page.waitForFunction(()=>document.activeElement?.textContent==='Attempt 1 started');
+  assert.ok((await selected.innerText()).includes('Attempt ID'));
+  await page.getByRole('button',{name:'Attach evidence link'}).click();
+  const association=page.getByRole('form',{name:'Attach evidence link'});
+  await association.getByLabel('Reference type').selectOption('pull_request');
+  await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/pull/319');
+  await association.getByRole('button',{name:'Confirm'}).click();
+  const pull=evidence.getByRole('link',{name:'pull request',exact:true});
+  await pull.waitFor();
+  assert.equal(await pull.getAttribute('href'),'#pull-requests/319');
+  assert.equal(await pull.getAttribute('target'),null);
+  await page.getByRole('button',{name:'Attach evidence link'}).click();
+  await association.getByLabel('Reference type').selectOption('ci_run');
+  await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/actions/runs/5321');
+  await association.getByRole('button',{name:'Confirm'}).click();
+  const run=evidence.getByRole('link',{name:'ci run',exact:true});
+  await run.waitFor();
+  assert.equal(await run.getAttribute('href'),'#ci-runs/5321');
   const actionCard = page.getByRole('button',{name:'Attach evidence link'});
   await actionCard.hover();
   assert.equal(await actionCard.evaluate(el => getComputedStyle(el).transform), 'none');
@@ -291,6 +320,48 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
+  await page.evaluate(()=>{
+    Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async options=>{
+      window.savedReportName=options.suggestedName;
+      return {createWritable:async()=>({
+        write:async blob=>{window.savedReportSignature=await blob.slice(0,5).text();},
+        close:async()=>{window.savedReportClosed=true;},
+      })};
+    }});
+  });
+  await page.getByRole('button',{name:'Export PDF'}).click();
+  await page.getByText('Task report saved.',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>[window.savedReportName,window.savedReportSignature,window.savedReportClosed]),
+    [execution.task.id+'-report.pdf','%PDF-',true]);
+  await page.evaluate(()=>Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
+  const [download]=await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button',{name:'Export PDF'}).click(),
+  ]);
+  assert.equal(download.suggestedFilename(),execution.task.id+'-report.pdf');
+  if (process.env.OBSERVATORY_REPORT_RECEIPT) await download.saveAs(process.env.OBSERVATORY_REPORT_RECEIPT);
+  const pdf=await download.createReadStream();
+  const chunks=[];
+  for await (const chunk of pdf) chunks.push(chunk);
+  assert.equal(Buffer.concat(chunks).subarray(0,5).toString(),'%PDF-');
+  await page.getByRole('button',{name:'Archive Task'}).click();
+  await page.getByRole('form',{name:'Archive Task'}).getByRole('button',{name:'Confirm'}).click();
+  await page.getByText(/Task archived · Owner accepted/).waitFor();
+  await page.getByRole('button',{name:'Reopen with feedback'}).click();
+  const feedback=page.getByRole('form',{name:'Reopen with feedback'});
+  await feedback.getByLabel('Feedback for the next attempt').fill('Include the second verification result.');
+  await feedback.getByRole('button',{name:'Confirm'}).click();
+  await page.getByText(/Stored state queued/).waitFor();
+  await timeline.getByRole('button',{name:'Audit',exact:true}).click();
+  await timeline.getByRole('button',{name:/Task reopened with feedback/}).click();
+  await selected.getByText('Include the second verification result.').waitFor();
+  await pull.click();
+  await page.waitForURL(url => url.hash === '#pull-requests/319');
+  await page.getByRole('heading',{name:'Pull request',exact:true}).waitFor();
+  await page.goBack();
+  await run.click();
+  await page.waitForURL(url=>url.hash==='#ci-runs/5321');
+  await page.getByRole('heading',{name:'CI run',exact:true}).waitFor();
   await page.getByRole('button',{name:'Overview',exact:true}).click();
   const overviewCard = page.locator('.metric').filter({hasText:'Registered tasks'});
   await overviewCard.hover();
