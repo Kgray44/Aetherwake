@@ -246,4 +246,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const reviewed = evidence.getByRole('link', { name: 'Review the candidate result' });
   assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
   assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
+  await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
+  await page.setViewportSize({width:820,height:620});
+  await page.locator('footer').scrollIntoViewIfNeeded();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
 });

@@ -215,3 +215,8 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-counts, .task-row-state, .task-activity-label { display: grid; gap: .2rem; }
 .task-row-state small, .task-counts small, .task-activity-label time { color: var(--muted); font-size: .73rem; }
 .task-activity-label strong { font-size: .79rem; color: var(--ink); }
+.detail-layout > div, .analytics-grid > div { min-width: 0; }
+.trace-rows, .analytics-table, .json { max-height: none; }
+.task-attempt-records { padding: 0; list-style: none; }
+.task-attempt-records code, .task-attempt-records li { overflow-wrap: anywhere; }
+@media (max-width: 860px) { .detail-layout { grid-template-columns: minmax(0,1fr); } .panel-heading { flex-wrap: wrap; } }

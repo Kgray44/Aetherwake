@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dependencyGraph, organizeTasks, parseTaskHref, taskActivity, taskHref } from './src/task-workspace.mjs';
+import { attemptEvents, dependencyGraph, organizeTasks, parseTaskHref, taskActivity, taskHref, workspaceCounts } from './src/task-workspace.mjs';
 
 const accepted = { id: 'accepted', title: 'Ready input', state: 'accepted', classification: { primary: 'integration' } };
 const blocked = { id: 'blocked', title: 'Build runtime', state: 'blocked', classification: { primary: 'integration' } };
@@ -81,4 +81,17 @@ test('owner evidence pins the candidate revision rather than the attempt base', 
   assert.equal(reviewRevision({ revision: base, candidate_revision: candidate }), candidate);
   assert.equal(reviewRevision({ revision: base }), base);
   assert.equal(reviewRevision(undefined), null);
+});
+
+test('work counters separate live execution, historical attempts and explicit acceptance', () => {
+  const tasks = ['active','old','done','bad','none','reported','review'].map(id=>({id,state:id==='done'?'accepted':'proposed',owner_acceptance:id==='done'?'accepted':'not_reviewed'}));
+  const attempts = [{task_id:'old',state:'succeeded'},{task_id:'bad',state:'failed'},{task_id:'reported',state:'running'}];
+  const summaries = new Map([['active',{lifecycle:{state:'running'}}], ['review',{lifecycle:{state:'verifying'}}]]);
+  assert.deepEqual(workspaceCounts(tasks,attempts,summaries),{active:1,accepted:1,succeeded:1,review:1,waiting:0,issues:1,unlinked:1,reportedRunning:1});
+});
+
+test('attempt details only include events bound to the Task, attempt and revision', () => {
+  const attempt={id:'a',task_id:'t',revision:'v'};
+  const event={attempt_id:'a',task_id:'t',revision:'v',occurred_at:'2'};
+  assert.deepEqual(attemptEvents(attempt,[event,{...event,revision:'stale'}, {...event,task_id:'other'}, {...event,occurred_at:'1'}]),[{...event,occurred_at:'1'},event]);
 });

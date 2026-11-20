@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
-import { dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
+import { evidenceClaimStatus } from './evidence-status.mjs';
+import { attemptEvents, dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
 
 const defaultFilters = { query: '', source: 'all', state: 'all', sort: 'newest', group: 'none' };
 const labels = value => value.replaceAll('_', ' ');
@@ -116,4 +117,78 @@ export function TaskCapabilitySummary({ manageable }) {
 
 export function TaskActivityLabel({ activity }) {
   return <span className="task-activity-label"><strong>{activity.label}</strong>{activity.at&&<time dateTime={activity.at}>{new Date(activity.at).toLocaleString()}</time>}</span>;
+}
+
+export function TaskAttemptHistory({ attempts, events, Status }) {
+  const [expanded, setExpanded] = useState({});
+  if (!attempts.length) return <p>No execution attempt has been linked to this Task yet.</p>;
+  const displayTime = value => value ? new Date(value).toLocaleString() : 'Unavailable';
+  return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt => {
+    const trace = attemptEvents(attempt, events);
+    return <li className="record" key={attempt.id}>
+      <div className="record-title"><strong>Attempt {attempt.attempt_number}</strong><Status value={attempt.state}/></div>
+      <dl className="github-facts">
+        <div><dt>Started</dt><dd>{displayTime(attempt.started_at)}</dd></div>
+        <div><dt>Finished</dt><dd>{displayTime(attempt.finished_at)}</dd></div>
+        <div><dt>Executor</dt><dd>{[attempt.provider, attempt.model].filter(Boolean).join(' / ') || 'Unavailable from source'}</dd></div>
+        <div><dt>Revision</dt><dd><code>{attempt.revision}</code></dd></div>
+        {attempt.branch && <div><dt>Branch</dt><dd>{attempt.branch}</dd></div>}
+      </dl>
+      {attempt.failure_diagnosis && <p>{attempt.failure_diagnosis}</p>}
+      {trace.length ? <details open={attempt === attempts.at(-1)}>
+        <summary>{trace.length} recorded execution events</summary>
+        <ol>{trace.slice(-(expanded[attempt.id] ?? 12)).map((event,index) => <li key={event.event_id ?? index}>
+          <strong>{labels(event.phase ?? event.kind ?? 'event')}</strong>{' · '}{labels(event.state ?? event.kind ?? 'recorded')}{' · '}
+          <time dateTime={event.occurred_at}>{displayTime(event.occurred_at)}</time>
+          {event.measurements?.length > 0 && <ul>{event.measurements.map((metric,i) => <li key={i}>
+            {labels(metric.name)} {metric.value ?? 'Unavailable'} {metric.unit} · {metric.availability}
+          </li>)}</ul>}
+        </li>)}</ol>
+        {trace.length > (expanded[attempt.id] ?? 12) && <button type="button" className="quiet-button" onClick={() => setExpanded(previous => ({ ...previous, [attempt.id]:(previous[attempt.id] ?? 12)+24 }))}>Show earlier events</button>}
+      </details> : <p>No execution events were supplied for this attempt.</p>}
+    </li>;
+  })}</ol>;
+}
+
+function EvidenceArtifact({ artifact }) {
+  const uri = artifact?.uri;
+  if (!uri) return <span>No artifact reference was recorded.</span>;
+  try {
+    const url = new URL(uri);
+    if (url.protocol === 'https:' && !url.username && !url.password && !url.search) {
+      return <a href={url.href} target="_blank" rel="noreferrer">Open evidence artifact</a>;
+    }
+  } catch { /* Local references are displayed as private identifiers only. */ }
+  return <details><summary>Private artifact · link unavailable</summary>{uri.startsWith('private-artifact:') && <code>{uri}</code>}</details>;
+}
+
+export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status }) {
+  const criteria = new Map((task.acceptance?.criteria ?? []).map(item => [item.id,item.description]));
+  if (!evidence.length && !reviewed.length) return <p>No verification results have been linked to this Task yet.</p>;
+  const ordered = [...evidence].sort((a,b)=>String(b.observed_at??b.created_at).localeCompare(String(a.observed_at??a.created_at)));
+  return <>
+    {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3><ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
+      <strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><small>Reviewed revision <code>{item.revision}</code></small>
+      <EvidenceArtifact artifact={{uri:item.uri}}/>
+    </li>)}</ul></section>}
+    {ordered.map(item=>{
+      const attempt = attempts.find(run=>run.id===item.attempt_id && run.task_id===item.task_id && run.revision===item.revision);
+      const stamp = item.observed_at ?? item.created_at;
+      return <article className="record task-links" key={item.id}>
+        <div className="record-title"><strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><Status value={evidenceClaimStatus(item,attempts)}/></div>
+        <dl className="github-facts">
+          <div><dt>Evidence type</dt><dd>{labels(item.kind)}{item.synthetic ? ' · Synthetic' : ''}</dd></div>
+          <div><dt>Attempt</dt><dd>{attempt ? 'Attempt '+attempt.attempt_number : 'No matching attempt in the feed'}</dd></div>
+          <div><dt>{item.observed_at?'Observed':'Recorded'}</dt><dd>{stamp?new Date(stamp).toLocaleString():'Unavailable'}</dd></div>
+          <div><dt>Evidence revision</dt><dd><code>{item.revision}</code></dd></div>
+        </dl>
+        <EvidenceArtifact artifact={item.artifact}/>
+      </article>;
+    })}
+  </>;
+}
+
+export function RawTaskRecord({ records }) {
+  const [open, setOpen] = useState(false);
+  return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>Inspect raw records</summary>{open&&<pre className="json">{JSON.stringify(records,null,2)}</pre>}</details>;
 }
