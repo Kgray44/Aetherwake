@@ -14,7 +14,7 @@ import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
-import {hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
+import {codexThreadHref,hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
 import {useCardMotion} from './card-motion.jsx';
 import {TaskTimeline} from './task-timeline.jsx';
 import {StickySectionAside} from './sticky-section-aside.jsx';
@@ -265,6 +265,7 @@ const reviewedCriteria=current?ownerReviewByCriterion(canonical?.task??current,c
 const detailState=canonical?.lifecycle.state??summaries.get(current?.id)?.lifecycle.state??current?.state;
 const taskEvents=demo||!current?[]:(execution?.events??[]).filter(event=>event.task_id===current.id);
 const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyHistory?.receipts:[])??[];
+const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attempt));
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
 const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
 const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
@@ -364,6 +365,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   records={records} events={execution?.events} github={demo?null:github} execution={demo?null:execution}
   ready={!demo&&hasLiveFeed} ui={githubUi}/></Suspense>}
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
+{conversation&&<a className="primary-button" href={codexThreadHref(conversation)}>Open in Codex</a>}
 <TaskReportExport key={current.id} disabled={!demo&&(!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
   snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,records,events:taskEvents,audits:taskAudits,github:demo?null:github,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
