@@ -5,13 +5,14 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkspaceTelemetryScope, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkspaceTelemetryScope, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 
 const rev = 'a'.repeat(40);
 const fields = name => ({
@@ -133,6 +134,57 @@ test('scheduled execution, cancellation propagation and checkpoint recovery', as
   advance(40_000);
   assert.equal((await claim()).body.claim, null);
   assert.equal((await get(b)).lifecycle.state, 'cancelled');
+});
+
+test('an admitted Task receives an isolated pinned checkout without a workspace mapping', async t => {
+  const { call, register, get, command, pin } = setup(t);
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'aads-automatic-checkout-')));
+  t.after(() => rm(parent, { force:true, recursive:true }));
+  const source = join(parent, 'source');
+  const root = join(parent, 'worker');
+  await mkdir(source);
+  await mkdir(root);
+  const exec = promisify(execFile);
+  const git = async (cwd, ...args) => (await exec('git', args, { cwd, windowsHide:true })).stdout.trim();
+  await git(source, 'init');
+  await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
+    'commit', '--allow-empty', '-m', 'pinned');
+  const baseline = await git(source, 'rev-parse', 'HEAD');
+  await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
+    'commit', '--allow-empty', '-m', 'new upstream head');
+  pin(baseline);
+  const task = await register('Provisioned');
+  assert.equal((await command(task, 'admit', { executor:'codex' })).status, 200);
+  const send = async request => {
+    const response = await call(request, 'worker');
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    return response.body;
+  };
+  const { claim } = await send({ op:'claim', operation_id:crypto.randomUUID() });
+  const author = { name:'Test worker', email:'test@example.test' };
+  const provision = input => provisionTaskWorkspace({ root, author, cloneOrigin:pathToFileURL(source).href, ...input });
+  const workspace = join(root, task.task.id);
+  const signal = AbortSignal.timeout(25_000);
+  await runClaim({
+    claim, send, signal, admitStorage:async () => {},
+    prepareWorkspace:provision,
+    execute:async ({ cwd }) => {
+      assert.equal(cwd, workspace);
+      assert.equal(await git(cwd, 'rev-parse', 'HEAD'), baseline);
+      await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", "worker output")'], { cwd });
+      return { ok:true };
+    },
+  });
+  const candidate = await get(task);
+  assert.equal(candidate.lifecycle.state, 'verifying');
+  const revision = candidate.attempts[0].candidate_revision;
+  assert.notEqual(revision, baseline);
+  assert.equal(await git(workspace, 'show', revision + ':artifact.txt'), 'worker output');
+  assert.equal(await git(workspace, 'rev-parse', revision + '^'), baseline);
+  assert.equal(await provision({ task:claim.task, attempt:{ revision }, signal }), workspace);
+  await assert.rejects(provision({
+    task:{ ...claim.task, id:'../unassigned' }, attempt:claim.attempt, signal,
+  }), /Invalid Task checkout identity/);
 });
 
 test('real subprocess demo persists two artifacts before verified A admits B', async t => {

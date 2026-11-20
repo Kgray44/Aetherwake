@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFile, realpath, open, unlink } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -17,7 +17,7 @@ const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
 function git(cwd, ...args) {
   return runFile('git', ['--no-optional-locks', '-C', cwd, ...args], {
-    windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+    windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024,
   }).then(({ stdout }) => stdout.trim());
 }
 
@@ -33,6 +33,86 @@ export async function checkoutIdentity(path, base) {
   }
   await git(path, 'merge-base', '--is-ancestor', base, revision);
   return { branch, revision, dirty: Boolean(dirty) };
+}
+
+const provisionRevision = /^[a-f0-9]{40}$/;
+const provisionOrigin = 'https://github.com/Kgray44/Aetherwake.git';
+
+function gitProvisioningIdentity(settings) {
+  const { name, email } = settings ?? {};
+  if (typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n\0]/.test(name) ||
+      typeof email !== 'string' || email.length > 160 || !/^[^\s@<>]+@[^\s@<>]+$/.test(email)) {
+    throw Error('Automatic checkout provisioning requires a Git author name and email');
+  }
+  return { name, email };
+}
+
+// Only worker-approved claims can reach this provisioner. The Task controls the
+// pinned revision; the worker owns the origin and every filesystem destination.
+export async function provisionTaskWorkspace({ root, task, attempt, author, signal,
+  cloneOrigin = provisionOrigin }) {
+  if (!taskIdPattern.test(task?.id ?? '') || task.repository !== 'Kgray44/Aetherwake' ||
+      !provisionRevision.test(attempt?.revision ?? '')) throw Error('Invalid Task checkout identity');
+  const { name, email } = gitProvisioningIdentity(author);
+  const parent = await realpath(root);
+  const destination = join(parent, task.id);
+  const branch = 'codex/aads-task-' + task.id.slice(5);
+  const existing = await lstat(destination).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  if (existing) {
+    if (!existing.isDirectory() || existing.isSymbolicLink() || await realpath(destination) !== destination) {
+      throw Error('Task checkout is not an isolated directory');
+    }
+    const identity = await checkoutIdentity(destination, attempt.revision);
+    if (identity.branch !== branch) throw Error('Task checkout belongs to another branch');
+    return destination;
+  }
+  if (attempt.resume_session_id) throw Error('The original checkout is required to resume a Codex session');
+  signal?.throwIfAborted();
+
+  const staging = await mkdtemp(join(parent, '.aads-provision-'));
+  const env = { ...process.env, GIT_TERMINAL_PROMPT:'0' };
+  delete env.AADS_TASK_WORKER_KEY;
+  const run = (...args) => runFile('git', args, {
+    cwd:staging, env, signal, windowsHide:true, timeout:180_000, maxBuffer:64 * 1024,
+  });
+  try {
+    await run('init', '--quiet');
+    await run('remote', 'add', 'origin', cloneOrigin);
+    await run('fetch', '--quiet', '--depth=1', '--no-tags', 'origin', attempt.revision);
+    await run('remote', 'set-url', 'origin', provisionOrigin);
+    await run('config', '--local', 'user.name', name);
+    await run('config', '--local', 'user.email', email);
+    await run('-c', 'core.hooksPath=' + join(staging, '.git', 'aads-disabled-hooks'),
+      'switch', '--quiet', '-c', branch, attempt.revision);
+    const candidate = await checkoutIdentity(staging, attempt.revision);
+    if (candidate.revision !== attempt.revision || candidate.dirty) throw Error('Provisioned checkout is not clean and pinned');
+    signal?.throwIfAborted();
+    for (let retry = 0; ; retry++) {
+      try {
+        await rename(staging, destination);
+        break;
+      } catch (error) {
+        if (retry === 6 || !['EBUSY','EPERM'].includes(error.code)) throw error;
+        await sleep(250, undefined, { signal });
+      }
+    }
+    return destination;
+  } finally {
+    try {
+      const leftover = await realpath(staging).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      if (leftover === staging && dirname(leftover) === parent) {
+        await rm(staging, { recursive:true, force:true, maxRetries:6, retryDelay:250 });
+      }
+    } catch {
+      console.error('The worker retained an incomplete provisioning directory for inspection.');
+    }
+  }
 }
 
 async function checkpointCandidate(workspace, { branch, revision }, task, attempt) {
@@ -102,7 +182,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
-  verificationNamespace, interval = 12_000 }) {
+  verificationNamespace, prepareWorkspace, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -131,11 +211,13 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   };
   const update = async () => {
     await admitStorage();
+    if (workspace) await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
     await confirmControl();
   };
   let monitoring;
   let lock;
   let outcome;
+  let provisioning = false;
   let telemetryStarted = false;
   let executionState = 'failed';
   const telemetry = async (callback, payload) => {
@@ -143,12 +225,6 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   try {
-    await admitStorage();
-    identity = await identify(workspace, attempt.revision);
-    lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
-    if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
-      throw Error('Workspace must match the attempt revision and cleanliness policy');
-    }
     await update();
     monitoring = (async () => {
       while (!workerSignal.aborted && !heartbeats.signal.aborted) {
@@ -159,6 +235,18 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         catch { leaseLost = true; controller.abort(); }
       }
     })();
+    if (prepareWorkspace) {
+      provisioning = true;
+      workspace = await prepareWorkspace({ task, attempt, signal:workerSignal });
+      provisioning = false;
+    }
+    workerSignal.throwIfAborted();
+    identity = await identify(workspace, attempt.revision);
+    lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
+    if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
+      throw Error('Workspace must match the attempt revision and cleanliness policy');
+    }
+    await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
     telemetryStarted = true;
     await telemetry(onTelemetryStart, { verificationNamespace });
     outcome = await execute({ executable, cwd: workspace, task, attempt,
@@ -177,8 +265,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       return;
     }
     if (!desired && outcome?.ok) await confirmControl();
-    if (desired && (outcome?.stopped || outcome?.ok)) {
-      const checkpoint = desired === 'pausing' ? await identify(workspace, attempt.revision).catch(() => null) : null;
+    if (desired && (outcome?.stopped || outcome?.ok || workerSignal.aborted)) {
+      const checkpoint = desired === 'pausing' && identity ? await identify(workspace, attempt.revision).catch(() => null) : null;
       await report('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
@@ -203,7 +291,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       if (workerSignal.aborted) executionState = 'interrupted';
       await report('failed', { failure: workerSignal.aborted
         ? 'Executor interrupted before producing a candidate.'
-        : 'Executor or workspace failed before producing a candidate.' });
+        : provisioning ? 'The worker could not provision the pinned Task checkout.'
+          : 'Executor or workspace failed before producing a candidate.' });
     }
   } finally {
     if (telemetryStarted) await telemetry(onTelemetryEnd, { measurements: outcome?.measurements ?? [], state: executionState });
@@ -226,7 +315,7 @@ async function main(configPath) {
   const credential = process.env.AADS_TASK_WORKER_KEY;
   if (!credential || credential.length < 32) throw Error('AADS_TASK_WORKER_KEY is required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
-  if (!isAbsolute(config.codex_bin) || !isAbsolute(config.workspace_root) || !config.workspaces ||
+  if (!isAbsolute(config.codex_bin) || !isAbsolute(config.workspace_root) || (!config.workspaces && !config.auto_provision) ||
       !Array.isArray(config.storage_check) || !config.storage_check.length || !config.storage_check.every(value => typeof value === 'string') ||
       !isAbsolute(config.storage_check[0])) throw Error('Worker configuration is incomplete');
   const verification = config.verification;
@@ -234,8 +323,9 @@ async function main(configPath) {
     throw Error('Worker verification must be a namespace UUID');
   }
   const root = await realpath(config.workspace_root);
+  const author = config.auto_provision ? gitProvisioningIdentity(config.auto_provision) : null;
   const workspaces = new Map();
-  for (const [id, path] of Object.entries(config.workspaces)) {
+  for (const [id, path] of Object.entries(config.workspaces ?? {})) {
     if (!taskIdPattern.test(id) || !isAbsolute(path)) throw Error('Invalid Task workspace mapping');
     const workspace = await realpath(path);
     if (relative(root, dirname(workspace)) || [...workspaces.values()].includes(workspace)) {
@@ -244,7 +334,10 @@ async function main(configPath) {
     await checkWorkspaceTelemetryScope(workspace, verification);
     workspaces.set(id, workspace);
   }
-  if (!workspaces.size || workspaces.size > 500) throw Error('Worker requires 1 to 500 Task workspace mappings');
+  if ((!author && !workspaces.size) || workspaces.size > 500) throw Error('Worker requires 1 to 500 Task workspace mappings');
+  const scope = config.auto_provision?.task_ids ?? (author ? undefined : [...workspaces.keys()]);
+  if (scope !== undefined && (!Array.isArray(scope) || !scope.length || scope.length > 500 ||
+      !scope.every(id => taskIdPattern.test(id)))) throw Error('Invalid automatic checkout Task scope');
 
   const controller = new AbortController();
   for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => controller.abort());
@@ -266,19 +359,17 @@ async function main(configPath) {
       if (active.size < 2) {
         try {
           await admitStorage();
-          const request = { op: 'claim', operation_id: randomUUID(), task_ids: [...workspaces.keys()] };
+          const request = { op:'claim', operation_id:randomUUID(), ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
             if (error.status && error.status < 500) throw error;
             return send(request);
           });
           if (result.claim && !signal.aborted) {
             const workspace = workspaces.get(result.claim.task.id);
-            const job = runClaim({ claim: result.claim, send, workspace, executable: config.codex_bin, signal,
-              verificationNamespace: verification ?? null,
-              admitStorage: async () => {
-                await admitStorage();
-                await checkWorkspaceTelemetryScope(workspace, verification);
-              } }).catch(() => {
+            const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
+              verificationNamespace:verification ?? null,
+              ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
+              admitStorage }).catch(() => {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');
               }).finally(() => active.delete(job));
             active.add(job);
