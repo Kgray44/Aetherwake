@@ -17,7 +17,7 @@ const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
 function git(cwd, ...args) {
   return runFile('git', ['--no-optional-locks', '-C', cwd, ...args], {
-    windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+    windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024,
   }).then(({ stdout }) => stdout.trim());
 }
 
@@ -76,7 +76,7 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   const env = { ...process.env, GIT_TERMINAL_PROMPT:'0' };
   delete env.AADS_TASK_WORKER_KEY;
   const run = (...args) => runFile('git', args, {
-    cwd:staging, env, signal, windowsHide:true, timeout:45_000, maxBuffer:64 * 1024,
+    cwd:staging, env, signal, windowsHide:true, timeout:180_000, maxBuffer:64 * 1024,
   });
   try {
     await run('init', '--quiet');
@@ -90,15 +90,27 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
     const candidate = await checkoutIdentity(staging, attempt.revision);
     if (candidate.revision !== attempt.revision || candidate.dirty) throw Error('Provisioned checkout is not clean and pinned');
     signal?.throwIfAborted();
-    await rename(staging, destination);
+    for (let retry = 0; ; retry++) {
+      try {
+        await rename(staging, destination);
+        break;
+      } catch (error) {
+        if (retry === 6 || !['EBUSY','EPERM'].includes(error.code)) throw error;
+        await sleep(250, undefined, { signal });
+      }
+    }
     return destination;
   } finally {
-    const leftover = await realpath(staging).catch(error => {
-      if (error.code !== 'ENOENT') throw error;
-      return null;
-    });
-    if (leftover === staging && dirname(leftover) === parent) {
-      await rm(staging, { recursive:true, force:true });
+    try {
+      const leftover = await realpath(staging).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      if (leftover === staging && dirname(leftover) === parent) {
+        await rm(staging, { recursive:true, force:true, maxRetries:6, retryDelay:250 });
+      }
+    } catch {
+      console.error('The worker retained an incomplete provisioning directory for inspection.');
     }
   }
 }
