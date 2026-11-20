@@ -5,6 +5,7 @@ import { traceTimeline } from './trace-timeline.mjs';
 import { executionTiming,timingLegend } from './execution-timing.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
+import { taskDataCoverage } from './task-data-coverage.mjs';
 import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 
 const words = value => value.replaceAll('_',' ');
@@ -108,6 +109,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents});
   const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
+  const dataCoverage=taskDataCoverage({task,canonical,attempts:taskAttempts,usage,diagnostics,events:taskEvents,telemetrySource});
   const latestCoverage=diagnostics.coverage.at(-1);
   const latestTokens=tokens.at(-1)?.observed;
   const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
@@ -149,6 +151,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       ...allocationBar(latestTokens?.cachedInputTokens,latestTokens?.inputTokens),
       {text:'Costs depend on a qualified pricing or billing source.',style:'muted',margin:[0,4,0,0]},
       {toc:{title:{text:'Report contents',style:'section'}},pageBreak:'before'},
+      section('Data coverage'),
+      grid(['Data','Coverage','Evidence'],dataCoverage.map(row=>[row.topic,row.label,row.basis]),[105,100,'*']),
       section('Execution diagnostics',diagnostics.findings.length),
       ...blocks(diagnostics.findings,item=>item.title,item=>[['Observation',item.detail]]),
       section('Task record and acceptance criteria'),

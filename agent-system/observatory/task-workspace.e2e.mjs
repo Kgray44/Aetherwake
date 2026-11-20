@@ -597,8 +597,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
   await telemetry.getByRole('heading',{name:'Observed Task token usage'}).waitFor();
-  await telemetry.getByText('Billing',{exact:true}).waitFor();
-  await telemetry.getByText('Unknown',{exact:true}).waitFor();
+  const dataCoverage=telemetry.getByRole('region',{name:'Data coverage'});
+  await dataCoverage.getByRole('row',{name:/Telemetry arrival Observed/}).waitFor();
+  await dataCoverage.getByRole('row',{name:/Owner review Verified/}).waitFor();
+  await dataCoverage.getByRole('row',{name:/Billing Unavailable/}).waitFor();
+  const billing = telemetry.locator('dl').filter({has:page.getByText('Billing',{exact:true})});
+  await billing.getByText('Unknown',{exact:true}).waitFor();
   const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
   await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
   await usageTable.getByText('Source event fixture-delayed-trace').waitFor();

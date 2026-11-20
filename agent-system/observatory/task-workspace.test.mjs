@@ -6,6 +6,8 @@ import { developmentNoteBytes, taskDevelopmentNotes } from './development-notes.
 import { taskReportDefinition } from './src/task-report.mjs';
 import { executionTiming } from './src/execution-timing.mjs';
 import { loadedSessionUsage, taskUsageAccounting } from './src/task-usage-accounting.mjs';
+import { taskDataCoverage } from './src/task-data-coverage.mjs';
+import { traceTimeline } from './src/trace-timeline.mjs';
 
 test('linked work before and after execution is shared by the chronology and report', () => {
   const task={id:'task_activity',created_at:'2026-01-02T00:00:00Z',title:'Review changes',objective:'Review linked activity'};
@@ -495,6 +497,36 @@ test('live App Server usage is scoped, separately reported and superseded by the
   assert.equal(finished.observed.totalTokens,1000);
   assert.equal(finished.progressRows.length,0);
   assert.equal(taskUsageAccounting({...input,attempts:[{...attempt,resume_session_id:attempt.session_id}]}).progressRows.length,0);
+});
+
+test('Workspace and PDF distinguish coverage, source reports and owner receipts',()=>{
+  const task={id:'task_coverage',repository:'Kgray44/Aetherwake',title:'Coverage fixture',objective:'Compare source evidence',
+    state:'accepted',owner_acceptance:'accepted',acceptance:{criteria:[{id:'c1',description:'Inspect candidate'}]}};
+  const revision='a'.repeat(40),candidate_revision='b'.repeat(40);
+  const started_at='2026-11-17T00:00:00Z',finished_at='2026-11-17T00:00:13Z';
+  const attempt={task_id:task.id,id:'attempt',attempt_number:1,revision,candidate_revision,state:'succeeded',
+    started_at,finished_at,execution_identity:{model:'observed-model',provider:'openai',source:'codex_app_server_thread_start'}};
+  const receipt={kind:'accept',attempt_id:attempt.id,revision:candidate_revision,at:finished_at};
+  const canonical={task,attempts:[attempt],lifecycle:{state:'completed',stored_state:'completed',
+    evidence:[{criterion_id:'c1',revision:candidate_revision,uri:'https://example.test/artifact'}]},events:[receipt]};
+  const common={task_id:task.id,attempt_id:attempt.id,repository:task.repository,phase:'implementation',revision,trace_id:'trace',span_id:'span',measurements:[]};
+  const events=[{...common,kind:'span_start',event_id:'start',occurred_at:started_at},
+    {...common,kind:'span_end',event_id:'end',occurred_at:finished_at}];
+  const records=[{...common,id:'evidence',record_type:'evidence',kind:'test',criterion_id:'c1',result:'passed',synthetic:false}];
+  const telemetrySource={task_id:task.id,event_receipts:{start:finished_at}};
+  const input={task,canonical,attempts:[attempt],events,records,telemetrySource};
+  const usage=taskUsageAccounting(input);
+  const trace=traceTimeline(events);
+  const diagnostics=taskExecutionDiagnostics({...input,tokens:usage.rows,trace});
+  const layout=taskDataCoverage({...input,usage,diagnostics});
+  assert.deepEqual(layout.map(row=>row.status),['observed','observed','unavailable','observed','verified','reported','unavailable']);
+  const pdf=JSON.stringify(taskReportDefinition(input).content);
+  for (const row of layout) assert.ok(pdf.includes(row.basis),row.topic);
+  const empty={...input,canonical:{...canonical,attempts:[]},attempts:[],events:[],records:[]};
+  const unavailable=taskDataCoverage({...empty,usage:taskUsageAccounting(empty),
+    diagnostics:taskExecutionDiagnostics({...empty,trace:traceTimeline([]),tokens:[]})});
+  assert.equal(unavailable.find(row=>row.topic==='Attempt timing').status,'inapplicable');
+  assert.equal(unavailable.find(row=>row.topic==='Telemetry arrival').status,'unavailable');
 });
 
 test('Task usage deduplicates attempt and session scopes and keeps unknown billing', () => {

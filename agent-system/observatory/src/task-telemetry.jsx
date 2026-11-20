@@ -5,6 +5,7 @@ import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
+import { taskDataCoverage } from './task-data-coverage.mjs';
 
 const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const words = value => String(value ?? '').replaceAll('_', ' ');
@@ -39,7 +40,7 @@ function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
 }
 
-export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records }) {
+export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records, telemetrySource }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
   const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events}), [task,canonical,attempts,events]);
@@ -47,6 +48,8 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
   const diagnostics = useMemo(() => taskExecutionDiagnostics({
     task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
   }), [task,canonical,attempts,timeline,tokens,records]);
+  const dataCoverage = useMemo(() => taskDataCoverage({task,canonical,attempts,usage,diagnostics,events,telemetrySource}),
+    [task,canonical,attempts,usage,diagnostics,events,telemetrySource]);
   const coverageRows = diagnostics.coverage.slice(-8).flatMap(row => [
     {label:'Attempt ' + row.attemptNumber + ' · measured',value:row.coveredMs,display:time(row.coveredMs)},
     {label:'Attempt ' + row.attemptNumber + ' · untraced',value:row.untracedMs,display:time(row.untracedMs)},
@@ -86,6 +89,13 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       {desktop.length>0&&<MeasurementChart title="Desktop-session token counters" rows={desktop.map(metric=>({label:words(metric.name.replace(/^desktop_/,'')),value:metric.value,display:format.format(metric.value)+' tokens'}))}/>}
       {[...resourceGroups].map(([unit, rows]) => <MeasurementChart key={unit} title={'Latest resource readings ('+unit+')'} rows={rows}/>)}
     </div>
+    <section aria-label="Data coverage">
+      <h3>Data coverage</h3>
+      <div className="analytics-table"><table>
+        <thead><tr><th scope="col">Data</th><th scope="col">Coverage</th><th scope="col">Evidence</th></tr></thead>
+        <tbody>{dataCoverage.map(row=><tr key={row.topic}><th scope="row">{row.topic}</th><td>{row.label}</td><td>{row.basis}</td></tr>)}</tbody>
+      </table></div>
+    </section>
     {usage.progressRows.length>0&&<section aria-label="Codex usage snapshots">
       <h3>Codex usage snapshots</h3>
       {usage.progressRows.map(row=><p key={row.receiptId}>
