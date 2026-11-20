@@ -1,3 +1,5 @@
+import { taskTokenRows } from './task-engine-client.mjs';
+
 const TURN_SOURCE = 'codex_exec_json_turn_completed';
 const STREAM_SOURCE = 'codex_exec_jsonl';
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
@@ -32,7 +34,7 @@ function observed(turns) {
   const samples = Object.fromEntries(Object.keys(totals).map(key => [key, 0]));
   for (const turn of turns) {
     for (const [key, value] of Object.entries(turn)) {
-      if (value === null) continue;
+      if (value == null || !Object.hasOwn(totals,key)) continue;
       // Keep intermediate sums exact. An overflowing field remains unavailable.
       if (samples[key] === 0) totals[key] = 0n;
       totals[key] += BigInt(value);
@@ -48,6 +50,28 @@ function observed(turns) {
 function group(map, key, create) {
   if (!map.has(key)) map.set(key, create());
   return map.get(key);
+}
+
+export function accountLoadedAttemptReceipts({tasks,attempts,events,cutoff,turnAccounting}) {
+  const scopes = new Map(tasks.map(task=>[task.id,{task,attempts:[],events:[],rows:[]}]));
+  for (const attempt of attempts) scopes.get(attempt.task_id)?.attempts.push(attempt);
+  for (const event of events) {
+    if (event.kind==='measurement'&&Date.parse(event.occurred_at)<=cutoff) {
+      scopes.get(event.task_id)?.events.push(event);
+    }
+  }
+  for (const row of turnAccounting.byAttempt) scopes.get(row.taskId)?.rows.push(row);
+  const byTask = [...scopes.values()].map(({task,attempts,events,rows})=>({
+    taskId:task.id,
+    rows:taskTokenRows({schemaVersion:1,byAttempt:rows},task.id,attempts,events,task.repository),
+  }));
+  const summarize = rows => {
+    const {turns,samples,...tokens}=observed(rows.map(row=>row.observed));
+    return {tokens,attemptsWithTotals:rows.filter(row=>row.observed.totalTokens!=null).length,
+      attempts:rows.length,appServerReceipts:rows.filter(row=>row.source==='Codex App Server').length};
+  };
+  return {totals:summarize(byTask.flatMap(task=>task.rows)),
+    byTask:byTask.map(task=>({...task,totals:summarize(task.rows)})),billing:'Unknown'};
 }
 
 function completeStream({starts, ends, turns}) {

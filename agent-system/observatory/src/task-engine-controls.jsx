@@ -197,7 +197,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         </label>)}
       </>}
       {action === 'associate' && <>
-        <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation']
+        <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session']
           .map(kind => <option key={kind} value={kind}>{humanize(kind)}</option>)}</select></label>
         <label>Evidence URL <input name="uri" type="url" required maxLength={1000}/></label>
         <label>Revision <input name="revision" pattern="[a-f0-9]{40}" defaultValue={candidateRevision ?? task.revision} required/></label>
@@ -252,7 +252,7 @@ export function TaskTokenAccounting({ rows }) {
   const display = value => value == null ? 'Unavailable' : value.toLocaleString();
   return <div className="analytics-table">
     <table>
-      <caption>Observed Codex token receipts by attempt. Costs require a billing source.</caption>
+      <caption>Observed Codex token receipts by attempt.</caption>
       <thead><tr><th scope="col">Attempt</th><th scope="col">Model</th><th scope="col">Input</th><th scope="col">Cached</th>
         <th scope="col">Output</th><th scope="col">Total</th><th scope="col">Coverage</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.attemptId + ':' + row.revision}>

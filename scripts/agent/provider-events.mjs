@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
+import { parseDevelopmentNote } from '../../agent-system/observatory/development-notes.mjs';
 
 // Codex exec JSONL only. The invocation owner explicitly selects this adapter.
 // https://github.com/openai/codex/blob/rust-v0.153.3/sdk/typescript/src/events.ts
@@ -38,7 +39,8 @@ function observation(name, value, unit = 'count') {
 }
 
 /** Consume a bounded stream without retaining its contents or upstream identifiers. */
-export async function observeCodexStream(stream, { onUsage, onSession, forward, maxLineBytes = MAX_LINE_BYTES } = {}) {
+export async function observeCodexStream(stream, { onUsage, onSession, onDevelopmentNote, onTurnStarted, onTurnFinished,
+  forward, maxLineBytes = MAX_LINE_BYTES } = {}) {
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1 || maxLineBytes > MAX_LINE_BYTES) {
     throw Error('Invalid Codex JSONL line limit');
   }
@@ -92,11 +94,13 @@ export async function observeCodexStream(stream, { onUsage, onSession, forward, 
       case 'turn.started':
         if (open) gaps++;
         open = true;
+        await onTurnStarted?.();
         return;
       case 'turn.completed': {
         if (!open) gaps++;
         open = false;
         completed++;
+        await onTurnFinished?.('completed');
         const usage = codexUsage(event);
         coreUsage &&= ['provider_input_tokens', 'provider_output_tokens'].every(name =>
           usage.some(metric => metric.name === name && metric.availability === 'observed'));
@@ -119,12 +123,18 @@ export async function observeCodexStream(stream, { onUsage, onSession, forward, 
         if (!open) gaps++;
         open = false;
         failed++;
+        await onTurnFinished?.('failed');
         return;
       case 'error':
         errors++;
         return;
       case 'item.completed':
         switch (event.item?.type) {
+          case 'agent_message': {
+            const note = parseDevelopmentNote(event.item.text);
+            if (note && typeof event.item.id==='string') await onDevelopmentNote?.(event.item.id,note);
+            break;
+          }
           case 'command_execution':
             commandEvents++;
             if (event.item.status === 'failed') failedCommands++;

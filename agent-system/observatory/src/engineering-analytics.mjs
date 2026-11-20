@@ -1,5 +1,5 @@
 import { compareEngineeringExperiments } from './engineering-experiments.mjs';
-import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
+import { accountEngineeringTokens, accountLoadedAttemptReceipts } from './engineering-token-accounting.mjs';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { activityId } from './github-activity.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
@@ -65,6 +65,11 @@ function unique(items, identity) {
     }
   }
   return { items: [...retained.values()], conflicts: rejected.size };
+}
+
+export function uniqueEngineeringEvents(events) {
+  return unique(events, event => typeof event.event_id === 'string' && event.event_id ?
+    JSON.stringify([event.task_id, event.event_id]) : null);
 }
 
 function githubGroup(group, kind) {
@@ -175,7 +180,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
   const traceSource = Array.isArray(events);
   const recordData = unique(recordSource ? records : [], record => typeof record.id === 'string' && record.id ?
     JSON.stringify([record.record_type, record.id]) : null);
-  const eventData = unique(traceSource ? events : [], event => typeof event.event_id === 'string' && event.event_id ? event.event_id : null);
+  const eventData = uniqueEngineeringEvents(traceSource ? events : []);
   const byType = type => recordData.items.filter(record => record.record_type === type);
   const tasks = byType('task'), attempts = byType('attempt'), evidence = byType('evidence');
   const attemptsById = new Map(attempts.map(attempt => [attempt.id, attempt]));
@@ -207,6 +212,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
   const spanCounts = counts(complete, span => span.phase);
   const sourceConflicts = recordData.conflicts + eventData.conflicts;
   const tokenAccounting = accountEngineeringTokens({tasks,attempts,events:eventData.items,days,cutoff,sourceConflicts});
+  const attemptReceiptAccounting = accountLoadedAttemptReceipts({tasks,attempts,events:eventData.items,cutoff,turnAccounting:tokenAccounting});
   const telemetry = byType('telemetry');
 
   return {
@@ -244,6 +250,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
       byPhase:timeline.phases.map(phase => ({...phase, spans:spanCounts[phase.phase]})),
     },
     tokenAccounting,
+    attemptReceiptAccounting,
     experiments:compareEngineeringExperiments({
       pairs:experimentPairs,tasks,attempts,telemetry,cutoff,accounting:tokenAccounting,
       conflicted:sourceConflicts > 0 || tokenAccounting.unattributedTurns > 0,

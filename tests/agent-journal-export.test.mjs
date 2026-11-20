@@ -8,9 +8,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { projectJournal } from '../scripts/agent/export-journal.mjs';
 import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
-import { journalDelivery, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
+import { journalDelivery, recoverWorkerTelemetry, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
 import { applyTelemetryDelta } from '../agent-system/observatory/telemetry-delta.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
+import { recordEngineeringActivity } from '../scripts/agent/record-engineering-activity.mjs';
 import { persistRecord } from '../scripts/agent/record-journal.mjs';
 
 const cli = fileURLToPath(new URL('../scripts/agent/export-journal.mjs', import.meta.url));
@@ -39,6 +40,136 @@ async function fixture(t) {
   const run = () => spawnSync(process.execPath, [cli, '--task', taskFile, '--journal', directory], {encoding:'utf8'});
   return { task, attempt, directory, run, taskFile, root };
 }
+
+test('external activity survives export with stable identities and no source paths', async t=>{
+  const {task,directory,taskFile,root}=await fixture(t);
+  const receipt={kind:'deployment',source:'sites',source_id:'provider_run_42',revision,occurred_at:time,outcome:'succeeded',
+    artifact_digest:'a'.repeat(64)};
+  const first=await recordEngineeringActivity({task,directory,receipt});
+  assert.equal(first.recorded,true);
+  const receiptFile=join(root,'activity.json');
+  await writeFile(receiptFile,JSON.stringify(receipt));
+  const recorder=fileURLToPath(new URL('../scripts/agent/record-engineering-activity.mjs',import.meta.url));
+  const replay=spawnSync(process.execPath,[recorder,'--task',taskFile,'--journal',directory,'--receipt',receiptFile],{encoding:'utf8'});
+  assert.equal(replay.status,0,replay.stderr);
+  assert.deepEqual(JSON.parse(replay.stdout),{...first,recorded:false});
+  const git = spawnSync('git',['init','--quiet'],{cwd:root,encoding:'utf8'});
+  assert.equal(git.status,0,git.stderr);
+  const unconfigured=spawnSync(process.execPath,
+    [recorder,'--task',taskFile,'--journal',directory,'--receipt',receiptFile,'--sync'],
+    {cwd:root,encoding:'utf8'});
+  assert.equal(unconfigured.status,1,unconfigured.stderr);
+  assert.deepEqual(JSON.parse(unconfigured.stdout),{...first,recorded:false,delivery:'not_configured'});
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'failed'}}),/Conflicting event identity/);
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,source_id:'D:\\private\\working-copy'}}),/Invalid engineering activity receipt/);
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'accepted'}}),/Invalid engineering trace/);
+  const start=await recordEngineeringActivity({task,directory,receipt:{...receipt,occurred_at:'2026-11-16T00:00:00Z',outcome:'started'}});
+  assert.notEqual(start.event_id,first.event_id);
+  const json=await projectJournal({task,directory});
+  const projected=JSON.parse(json);
+  assert.equal(projected.events.length,2);
+  assert.deepEqual(projected.events.map(event=>event.activity.outcome),['started','succeeded']);
+  assert.equal(projected.events[0].activity.operation_id,projected.events[1].activity.operation_id);
+  assert.equal(projected.events[1].activity.artifact_digest,receipt.artifact_digest);
+  assert.doesNotMatch(json,/provider_run_42|working-copy/);
+});
+
+test('a post-attempt receipt can retry private delivery without changing the completed attempt', async t=>{
+  const {task,attempt,directory,root}=await fixture(t);
+  const scope='11111111-1111-4111-8111-111111111111';
+  const syncDirectory=join(root,'observatory-sync');
+  const completed={...attempt,state:'succeeded',finished_at:'2026-11-17T00:01:00.000Z'};
+  await persistRecord(directory,completed);
+  let baseline, offline=false;
+  const managedConnection={async call({task_id,verification,change}) {
+    assert.equal(task_id,task.id);
+    assert.equal(verification,scope);
+    if (offline) throw Error('Temporarily unavailable');
+    if (!change) return {baseline:baseline??null};
+    assert.equal(change.base,baseline?.digest??null);
+    const projection=applyTelemetryDelta(baseline?.projection,change);
+    const digest=createHash('sha256').update(JSON.stringify(projection)).digest('hex');
+    const received_at=new Date().toISOString();
+    baseline={digest,received_at,projection};
+    return {digest,received_at,generated_at:projection.generated_at,events:projection.events.length,records:projection.records.length};
+  }};
+  const syncOptions={directory:syncDirectory,verificationNamespace:scope,managedConnection};
+  const initial=await startObservatorySync({task,journal:directory,...syncOptions});
+  assert.equal((await initial.finish()).events,0);
+  const receipt={kind:'verification',source:'verification_runner',source_id:'verify_42',revision,
+    occurred_at:'2026-11-17T00:02:00.000Z',outcome:'succeeded'};
+  offline=true;
+  const queued=await recordEngineeringActivity({task,directory,receipt,syncOptions});
+  assert.equal(queued.delivery,'pending');
+  assert.equal(queued.recorded,true);
+  offline=false;
+  const replay=await recordEngineeringActivity({task,directory,receipt,syncOptions});
+  assert.equal(replay.event_id,queued.event_id);
+  assert.equal(replay.recorded,false);
+  assert.equal(replay.delivery,'synchronized');
+  assert.equal(baseline.projection.records.find(record=>record.id===attempt.id).state,'succeeded');
+  assert.deepEqual(baseline.projection.events.map(event=>event.event_id),[queued.event_id]);
+});
+
+test('independent release receipts synchronize across interleaved worker updates without replacing worker records',async t=>{
+  const {task,attempt,directory,root}=await fixture(t);
+  const releases=join(root,'release-journal');
+  const completed={...attempt,state:'succeeded',finished_at:'2026-11-17T00:01:00.000Z'};
+  await persistRecord(directory,completed);
+  let baseline=null;
+  let writes=0;
+  const connector={async call({task_id,change}) {
+    assert.equal(task_id,task.id);
+    if (!change) return {baseline};
+    if (change.base!==(baseline?.digest??null)) throw Object.assign(Error('Stale baseline'),{status:409});
+    const projection=applyTelemetryDelta(baseline?.projection,change);
+    const digest=createHash('sha256').update(JSON.stringify(projection)).digest('hex');
+    baseline={projection,digest,received_at:new Date().toISOString()};
+    writes++;
+    return {digest,received_at:baseline.received_at,generated_at:projection.generated_at,
+      records:projection.records.length,events:projection.events.length};
+  }};
+  const worker=journalDelivery({task,journal:directory,statePath:join(root,'worker.state'),connector});
+  await worker();
+  const oldTask={...task,state:'proposed',title:'Older task title'};
+  const release=()=>journalDelivery({task:oldTask,journal:releases,
+    statePath:join(root,'release.state'),connector,activityOnly:true});
+  const deployed=await recordEngineeringActivity({task:oldTask,directory:releases,receipt:{
+    kind:'deployment',source:'sites',source_id:'release_42',revision,
+    occurred_at:'2026-11-17T00:02:00.000Z',outcome:'succeeded',
+  }});
+  await release()();
+  assert.equal(baseline.projection.records.find(item=>item.record_type==='task').state,'running');
+  const workerReceipt=await recordEngineeringActivity({task,directory,receipt:{
+    kind:'test',source:'local_runner',source_id:'worker_test',revision,attempt_id:attempt.id,
+    occurred_at:'2026-11-17T00:00:30.000Z',outcome:'succeeded',
+  }});
+  await assert.rejects(worker({force:true}),/baseline changed/);
+  await worker({force:true});
+  const validation=await recordEngineeringActivity({task:oldTask,directory:releases,receipt:{
+    kind:'deployment_validation',source:'sites',source_id:'release_42',revision,
+    occurred_at:'2026-11-17T00:03:00.000Z',outcome:'succeeded',
+  }});
+  await assert.rejects(release()({force:true}),/baseline changed/);
+  await release()({force:true});
+  assert.deepEqual(baseline.projection.events.map(event=>event.event_id),[
+    deployed.event_id,workerReceipt.event_id,validation.event_id,
+  ]);
+  assert.equal(baseline.projection.records.find(item=>item.id===attempt.id).state,'succeeded');
+  assert.equal(baseline.projection.records.find(item=>item.id===task.id).state,'running');
+  await release()({force:true});
+  assert.equal(writes,4);
+  const invalid={
+    kind:'verification',source:'sites',source_id:'invalid_attempt_binding',attempt_id:attempt.id,revision,
+    occurred_at:'2026-11-17T00:04:00.000Z',outcome:'succeeded',
+  };
+  await assert.rejects(recordEngineeringActivity({task:oldTask,directory:releases,receipt:invalid,
+    syncOptions:{activityOnly:true}}),/cannot bind an attempt/);
+  assert.equal((await readdir(releases)).filter(name=>name.endsWith('.json')).length,2);
+  await recordEngineeringActivity({task:oldTask,directory:releases,receipt:invalid});
+  await assert.rejects(release()({force:true}),/unbound engineering receipts/);
+  assert.equal(writes,4);
+});
 
 test('staging preserves a retryable snapshot on unchanged input and on corrupt new journal data', async t => {
   const { task, attempt, directory, taskFile, root } = await fixture(t);
@@ -131,6 +262,47 @@ test('managed telemetry can deliver for a new checkout using the admitted worker
   assert.equal(receipt?.error,null);
   assert.equal(receipt.events,1);
   assert.deepEqual(baseline?.projection.events.map(item=>item.event_id),[event.event_id]);
+});
+
+test('idle worker replays pending telemetry and flushes later journal entries without another claim',async t=>{
+  const {task,attempt,root:telemetryDirectory}=await fixture(t);
+  const journal=join(telemetryDirectory,'claimed-execution.journal');
+  const directory=join(telemetryDirectory,'observatory-sync');
+  const first=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,first);
+  let online=false, projection=null, receipt=null;
+  const updates=[];
+  const connector={async call({task_id,change,verification}) {
+    assert.equal(task_id,task.id);
+    assert.equal(verification,undefined);
+    if (!change) return {baseline:receipt&&{...receipt,projection}};
+    updates.push(change);
+    if (!online) throw Error('Site unavailable');
+    assert.equal(change.base,receipt?.digest??null);
+    projection=applyTelemetryDelta(projection,change);
+    receipt={digest:createHash('sha256').update(JSON.stringify(projection)).digest('hex'),
+      records:projection.records.length,events:projection.events.length,generated_at:projection.generated_at,
+      received_at:new Date().toISOString()};
+    return receipt;
+  }};
+  const delivery=await startObservatorySync({task,journal,directory,managedConnection:connector});
+  assert.equal((await delivery.finish()).error,'delivery_unavailable');
+  const pending=updates[0];
+  const preserved=updates.length;
+  online=true;
+  const second=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,second);
+  const recover=options=>recoverWorkerTelemetry({taskId:task.id,telemetryDirectory,connector,...options});
+  assert.equal(await recover({verification:'11111111-1111-4111-8111-111111111111'}),null);
+  assert.equal((await recover()).events,2);
+  assert.deepEqual(updates[preserved],pending);
+  assert.deepEqual(updates[preserved+1].events.map(entry=>entry.event_id),[second.event_id]);
+  assert.equal(await recover(),null);
+  assert.equal(updates.length,preserved+2);
+  const third=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,third);
+  assert.equal((await recover()).events,3);
+  assert.deepEqual(updates.at(-1).events.map(entry=>entry.event_id),[third.event_id]);
 });
 
 test('CLI reconstructs latest Attempts and retains incomplete spans across Task revisions', async t => {

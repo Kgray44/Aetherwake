@@ -24,7 +24,7 @@ export function attemptTraceCoverage(attempts, spans) {
 export function traceTimeline(events) {
   const grouped = new Map();
   for (const event of events) {
-    if (event.kind === 'lifecycle') continue;
+    if (event.kind === 'lifecycle' || event.kind === 'engineering_activity') continue;
     const key = JSON.stringify([event.task_id, event.attempt_id, event.revision, event.trace_id, event.span_id]);
     const group = grouped.get(key) ?? [];
     group.push(event);

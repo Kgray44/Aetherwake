@@ -5,6 +5,7 @@ import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,CircleX,Circl
 import {demoRecords} from './demo-data.js';
 import {observedTaskTraceCoverage} from './trace-timeline.mjs';
 import {ExecutionFeed,TraceWaterfall} from './execution-feed.jsx';
+import {TaskExecutionTiming} from './task-execution-timing.jsx';
 import {useAutomaticTelemetry} from './automatic-telemetry.jsx';
 import {ownerReviewByCriterion} from './evidence-status.mjs';
 import {GitHubFeed} from './github-feed.jsx';
@@ -14,10 +15,13 @@ import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
-import {codexThreadHref,hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
+import {codexThreadHref,hasLiveTaskWork,taskEngineRequest,taskNextAction} from './task-engine-client.mjs';
+import { taskExecutionStatus } from './task-timeline.mjs';
+import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 import {useCardMotion} from './card-motion.jsx';
 import {TaskTimeline} from './task-timeline.jsx';
 import {StickySectionAside} from './sticky-section-aside.jsx';
+import {useOpenAIPricing} from './use-openai-pricing.jsx';
 import {TaskReportExport} from './task-report-export.jsx';
 import {mergeTaskAttempts} from './task-attempts.mjs';
 import {readTaskScope,TaskScopeFields,TaskScopeSummary} from './task-scope.jsx';
@@ -104,7 +108,8 @@ const [githubFilters,setGitHubFilters]=useState({
   runs:{query:'',state:'',group:'',oldest:false}
 });
 const page=githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute.id ? 'detail' : 'tasks') : localPage;
-const activeNavigation=githubView?.kind ?? (page==='detail'?'tasks':page);
+const onTaskDetail=page==='detail';
+const activeNavigation=githubView?.kind ?? (onTaskDetail?'tasks':page);
 useEffect(()=>{
   const sync=()=>setRouteHash(window.location.hash);
   window.addEventListener('hashchange',sync);
@@ -144,6 +149,7 @@ const refreshEngine=useCallback(signal=>{
 },[]);
 const refresh=async(mode=demo,{quiet=false,signal}={})=>{
   if(quiet&&foregroundRequest.current)return;
+  const cacheOnly=quiet&&onTaskDetail;
   const id=++refreshId.current;
   foregroundRequest.current=!quiet&&!mode;
   if(mode){setHasLiveFeed(false);setRecords(demoRecords());setError('');setLoading(false);return}
@@ -166,8 +172,8 @@ const refresh=async(mode=demo,{quiet=false,signal}={})=>{
       setError('');
       return true;
     };
-    const feed=await loadFeed(quiet?'/api/overview':'/api/overview?prefer=cached');
-    if(showFeed(feed)&&feed.github_refresh_pending){
+    const feed=await loadFeed(quiet&&!cacheOnly?'/api/overview':'/api/overview?prefer=cached');
+    if(showFeed(feed)&&feed.github_refresh_pending&&!cacheOnly){
       foregroundRequest.current=false;
       setLoading(false);
       try { showFeed(await loadFeed('/api/overview')); }
@@ -219,7 +225,7 @@ useEffect(()=>{
     window.clearInterval(timer);
     document.removeEventListener('visibilitychange',update);
   };
-},[watchingTasks]);
+},[watchingTasks,onTaskDetail]);
 const automaticTelemetry=useAutomaticTelemetry({scope:!demo&&hasLiveFeed?telemetryScope:null,headers:verificationHeaders,refresh:()=>refresh(false)});
 const by=type=>records.filter(r=>r.record_type===type);
 const usingEngineRegistry=!demo&&!hasLiveFeed&&engine.status==='available';
@@ -265,8 +271,16 @@ const reviewedCriteria=current?ownerReviewByCriterion(canonical?.task??current,c
 const detailState=canonical?.lifecycle.state??summaries.get(current?.id)?.lifecycle.state??current?.state;
 const taskEvents=demo||!current?[]:(execution?.events??[]).filter(event=>event.task_id===current.id);
 const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyHistory?.receipts:[])??[];
+const taskTelemetrySource=demo||!current?null:execution?.sources?.find(source=>source.task_id===current.id);
 const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attempt));
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
+const {pricing,loadingPrice}=useOpenAIPricing(taskAttempts,page==='detail'&&!demo,verificationHeaders);
+const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
+const nextAction=taskNextAction(canonical,workerAccess);
+const executionStatus=canonical?taskExecutionStatus({taskId:canonical.task.id,state:detailState,
+  attempt:canonical.attempts.at(-1),events:taskEvents,audits:taskAudits}):null;
+const statusBanner=executionStatus??nextAction;
+const statusSection=nextAction?.section??'task-attempts';
 const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
 const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
 const select=id=>{
@@ -363,29 +377,47 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
     openTask: taskId => { navigate('detail'); select(taskId); } }}/></Suspense>}
 {page==='analytics'&&<Suspense fallback={<p role="status">Loading engineering analytics…</p>}><EngineeringAnalyticsPage
   records={records} events={execution?.events} github={demo?null:github} execution={demo?null:execution}
-  ready={!demo&&hasLiveFeed} ui={githubUi}/></Suspense>}
+  ready={!demo&&hasLiveFeed} ui={githubUi} headers={verificationHeaders}/></Suspense>}
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 {conversation&&<a className="primary-button" href={codexThreadHref(conversation)}>Open in Codex</a>}
-<TaskReportExport key={current.id} disabled={!demo&&(!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
-  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,records,events:taskEvents,audits:taskAudits,github:demo?null:github,
+<TaskReportExport key={current.id} disabled={!demo&&(loadingPrice||!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
+  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,workerAccess,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-timeline')}>Timeline</button>
+  <button className="quiet-button" onClick={()=>jumpToTaskSection('task-development-notes')}>Development notes</button>
   {(proposalControls||canonical&&hasLiveFeed&&!publishedIntake)&&<button className="quiet-button" onClick={()=>jumpToTaskSection('task-editor')}>Task editor</button>}
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-attempts')}>Attempts</button>
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-evidence')}>Evidence</button>
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-telemetry')}>Telemetry</button>
 </nav>
 {detailState==='completed'&&<div className="task-completion" role="status"><CheckCircle2 size={24} aria-hidden="true"/><div><strong>Task complete</strong><small>Owner accepted the verified result.</small></div></div>}
+{statusBanner&&<div className={'task-completion task-execution-banner '+(statusBanner.tone??'neutral')} role="status">
+  {statusBanner.tone==='error'?<CircleAlert size={24} aria-hidden="true"/>:<Activity size={24} aria-hidden="true"/>}
+  <div><strong>{statusBanner.title}</strong>{statusBanner.description&&<small>{statusBanner.description}</small>}
+    {statusBanner.at&&<small><time dateTime={statusBanner.at}>{fmt(statusBanner.at)}</time></small>}
+    {executionStatus&&nextAction&&<small>{nextAction.description}</small>}</div>
+  <button className="quiet-button" onClick={()=>jumpToTaskSection(statusSection)}>{
+    ({'task-evidence':'View evidence','task-attempts':'View attempts','task-controls':'View controls'})[statusSection]}</button>
+</div>}
 {detailState==='archived'&&<p className="notice" role="status">Task archived{(canonical?.task??current).owner_acceptance==='accepted'?' · Owner accepted the final result.':''}</p>}
 {engineSummary&&hasLiveFeed&&<Rise><Panel id="task-controls" title="Execution controls">
   {engineTask.error&&<p role="alert">{engineTask.error}</p>}
   {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} workerAccess={workerAccess} publishedIntake={publishedIntake} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
 </Panel></Rise>}
-<Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
+<Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} canonical={canonical} github={demo?null:github} telemetrySource={taskTelemetrySource} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
   executorAttempt={canonical?.attempts.at(-1)} executorState={canonical?.lifecycle.state}
   evidence={related(current.id,'evidence')} records={records} onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/></Panel></Rise>
+<Rise><Panel id="task-development-notes" title="Development Notes"
+  right={developmentNotes.length>0&&<small className="panel-meta" title="The provider includes these messages in turn-level usage. Separate note token counts are unavailable.">
+    {developmentNotes.length} notes · {developmentNoteBytes(developmentNotes)} text bytes
+  </small>}>
+  {developmentNotes.length?<ul className="task-development-notes">{developmentNotes.map(note=><li key={note.event_id}>
+    <strong>{notesCategory(note.development_note.category)}</strong><span>{note.development_note.text}</span>
+    <time dateTime={note.occurred_at}>{fmt(note.occurred_at)}</time>
+  </li>)}</ul>:<p className="muted">No notes recorded.</p>}
+</Panel></Rise>
 {canonical&&hasLiveFeed&&!publishedIntake&&<Rise><Panel id="task-editor" title="Task editor">
   <ProposalControls key={current.id} task={canonical.task} control={canonical} tasks={canonicalTasks} summaries={summaries} Status={Status} classes={types}
     headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false,{quiet:true})}
@@ -399,13 +431,16 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
     onHistory={setLegacyHistory} manageable={task=>Object.hasOwn(privateControls,task.id)}/>
 </Panel></Rise>}
 <div className="detail-layout"><div className="detail-left"><Rise><Panel title={current.title} kicker={current.id} right={<Status value={canonical?.lifecycle.state??current.state}/>}><div className="objective">{(canonical?.task??current).objective}</div><TaskScopeSummary task={canonical?.task??current}/><DetailLine name="Execution activity" value={<TaskActivityLabel activity={activityFor(current)}/>}/>{!demo&&<DetailLine name="Telemetry last imported" value={execution?.events?.some(event=>event.task_id===current.id)?fmt(execution.generated_at):"No trace in current snapshot"}/>}{!demo&&proposals?.stale_revision_tasks?.includes(current.id)&&<div className="notice"><span>This proposal uses the last observed GitHub main revision. Confirm its source revision before starting work.</span></div>}{!demo&&proposals?.publication?.[current.id]==='published'&&<p><a className="proposal-link" href={githubProposalFolder.replace('/tree/','/blob/')+'/'+current.id+'.json'}>View proposal on GitHub</a></p>}{!demo&&proposals?.publication?.[current.id]==='pending'&&<div className="notice"><span>{publishError||'Saved privately. GitHub publication is pending.'}</span>{proposals.publication_configured&&<button className="quiet-button" disabled={saving} onClick={retryPublication}>Retry publication</button>}</div>}<div className="task-tags"><span>{current.classification?.primary}</span>{(current.classification?.secondary||[]).map(x=><span key={x}>{x}</span>)}</div></Panel></Rise><Rise delay={.08}><Panel title="Acceptance matrix" kicker="REQUIRED OUTCOMES" right={<span className="panel-meta">{current.acceptance?.criteria?.length||0} CRITERIA</span>}><TaskAcceptanceMatrix task={canonical?.task??current} canonical={canonical} evidence={related(current.id,'evidence')}
-  attempts={taskAttempts} reviewed={reviewedCriteria} Status={Status}/></Panel></Rise><Rise><Panel id="task-attempts" title="Execution attempts"><TaskAttemptHistory key={current.id} attempts={taskAttempts} events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} Status={Status}/></Panel></Rise><Rise><Panel id="task-evidence" title="Evidence ledger"><TaskEvidenceLedger task={canonical?.task??current} evidence={related(current.id,'evidence')} attempts={taskAttempts} reviewed={[...reviewedCriteria.values()]} Status={Status}/></Panel></Rise></div><StickySectionAside className="detail-right"><Rise delay={.05}><Panel title="Task record">{!engineSummary&&<TaskCapabilitySummary manageable={Boolean(proposalControls)}/>}<DetailLine name="Revision" value={<code>{short(current.revision)}</code>}/><DetailLine name="Created" value={fmt(current.created_at)}/><DetailLine name="Owner decision" value={(canonical?.task??current).owner_acceptance||'Unavailable'}/><DetailLine name="Verification" value={current.acceptance?.profile_id}/><DetailLine name="Context snapshots" value={related(current.id,'context_snapshot').length}/><DetailLine name="Artifacts" value={current.artifacts?.length||0}/></Panel></Rise><Rise delay={.1}><Panel title="Dependency graph"><TaskDependencies task={canonical?.task??current} tasks={tasks} lifecycle={canonical?.lifecycle} summaries={engineSummary?summaries:undefined} Status={Status}/></Panel></Rise></StickySectionAside></div></>:loading?<p role="status">Loading Task…</p>:<Empty title="Task not found" body="This Task is unavailable in the current feed."/>)}
+  attempts={taskAttempts} reviewed={reviewedCriteria} Status={Status}/></Panel></Rise><Rise><Panel id="task-attempts" title="Execution attempts"><TaskAttemptHistory key={current.id} attempts={taskAttempts} events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} Status={Status}/></Panel></Rise><Rise><Panel id="task-evidence" title="Evidence ledger"><TaskEvidenceLedger task={canonical?.task??current} evidence={related(current.id,'evidence')} attempts={taskAttempts} reviewed={[...reviewedCriteria.values()]} events={taskEvents} telemetrySource={taskTelemetrySource} Status={Status}/></Panel></Rise></div><StickySectionAside className="detail-right"><Rise delay={.05}><Panel title="Task record">{!engineSummary&&<TaskCapabilitySummary manageable={Boolean(proposalControls)}/>}<DetailLine name="Revision" value={<code>{short(current.revision)}</code>}/><DetailLine name="Created" value={fmt(current.created_at)}/><DetailLine name="Owner decision" value={(canonical?.task??current).owner_acceptance||'Unavailable'}/><DetailLine name="Verification" value={current.acceptance?.profile_id}/><DetailLine name="Context snapshots" value={related(current.id,'context_snapshot').length}/><DetailLine name="Artifacts" value={current.artifacts?.length||0}/></Panel></Rise><Rise delay={.1}><Panel title="Dependency graph"><TaskDependencies task={canonical?.task??current} tasks={tasks} lifecycle={canonical?.lifecycle} summaries={engineSummary?summaries:undefined} Status={Status}/></Panel></Rise></StickySectionAside></div></>:loading?<p role="status">Loading Task…</p>:<Empty title="Task not found" body="This Task is unavailable in the current feed."/>)}
 {page==='detail'&&current&&<Rise><Panel id="task-telemetry" title="Telemetry"><Suspense fallback={<p role="status">Loading Task telemetry…</p>}>
   <TaskTelemetry key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts} telemetry={related(current.id,'telemetry')}
-    events={(demo?[]:execution?.events??[]).filter(event=>event.task_id===current.id)} records={demo?null:records}/>
+    events={taskEvents} records={demo?null:records} telemetrySource={taskTelemetrySource} pricing={pricing}/>
 </Suspense></Panel></Rise>}
-{page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution trace">
-  <TraceWaterfall events={(execution?.events??[]).filter(event=>event.task_id===current.id)} fixedTask={current.id}/>
+{page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution timing">
+  <TaskExecutionTiming key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts}
+    events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} github={github} telemetrySource={taskTelemetrySource}
+    onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/>
+  <details><summary>Raw execution trace</summary><TraceWaterfall events={taskEvents} fixedTask={current.id}/></details>
 </Panel></Rise>}
 {page==='detail'&&!demo&&current&&hasLiveFeed&&
   <Suspense fallback={<p role="status">Loading failure investigation…</p>}><TaskFailureInvestigation key={current.id} task={current} records={records}

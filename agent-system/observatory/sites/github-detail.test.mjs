@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail, peekTaskGitHubDetails } from './github-cache.mjs';
 import { createWorker } from './worker.mjs';
+import { runItems } from './github.mjs';
 
 const provider = 'https://api.github.com/repos/Kgray44/Aetherwake';
 const full_name = 'Kgray44/Aetherwake';
@@ -22,6 +23,7 @@ function database(t) {
       const stmt = sql.prepare(statement);
       return { bind: (...args) => ({
         first: async () => stmt.get(...args) ?? null,
+        all: async () => ({results:stmt.all(...args)}),
         run: async () => stmt.run(...args),
       }) };
     },
@@ -67,6 +69,18 @@ test('CI identity migration refreshes old run projections without dropping fallb
   assert.deepEqual(JSON.parse(details[1].validators), { jobs: 'jobs' });
 });
 
+test('workflow snapshots retain only provider-linked pull numbers at the run revision and base repository',()=>{
+  const repo=123;
+  const row={...workflow(100),repository:{full_name,id:repo},pull_requests:[
+    {number:1,head:{sha},base:{repo:{id:repo}}},
+    {number:1,head:{sha},base:{repo:{id:repo}}},
+    {number:2,head:{sha:'b'.repeat(40)},base:{repo:{id:repo}}},
+    {number:3,head:{sha},base:{repo:{id:99}}},
+  ]};
+  assert.deepEqual(runItems([row])[0].pull_requests,[1]);
+  assert.equal(runItems([{...row,repository:{full_name:'another/repo',id:repo}}])[0].pull_requests,undefined);
+});
+
 test('reads a bounded workflow history pinned to the selected run and rejects unrelated rows', async t => {
   const db = database(t);
   const target = { ...workflow(123), workflow_id: 42, head_repository: { id: 88 }, event: 'push',
@@ -106,8 +120,11 @@ test('owner-only GET validates the route and shares bounded PR detail between is
     if (url === provider + '/pulls/12/reviews?per_page=20') return Response.json([
       { id: 42, user: { login: 'reviewer' }, state: 'APPROVED', body: 'never-copy-private-provider-fields' },
     ]);
+    if (url === provider + '/pulls/12/commits?per_page=20') return Response.json([
+      { sha, commit: { committer: { date:'2026-01-02T00:00:00Z' }, message:'never-copy-private-provider-fields' } },
+    ]);
     assert.equal(url, provider + '/pulls/12');
-    return Response.json({ ...pull(12), body: 'a'.repeat(8001) }, { headers: { etag: '"first"' } });
+    return Response.json({ ...pull(12), commits:1, body: 'a'.repeat(8001) }, { headers: { etag: '"first"' } });
   };
   const request = (path, options) => createWorker({ assets: {}, validate: allow, fetcher })
     .fetch(new Request('https://example.test' + path, options), { DB, GITHUB_READ_TOKEN: 'detail-token' });
@@ -129,7 +146,51 @@ test('owner-only GET validates the route and shares bounded PR detail between is
   assert.deepEqual(first.detail.reviews[0], { id: 42, author: 'reviewer', state: 'APPROVED', submitted_at: null });
   assert.equal(first.detail.files_status, 'available');
   assert.equal(first.detail.reviews_status, 'available');
-  assert.equal(calls, 3);
+  const ref=uri=>({uri});
+  const references=[ref(first.detail.url),ref(first.detail.url+'/files'),
+    ref('https://github.com/other/project/pull/12'),ref('https://github.com/Kgray44/Aetherwake/pull/99')];
+  const snapshots=await peekTaskGitHubDetails(DB,'detail-token',references);
+  assert.equal(snapshots.length,1);
+  assert.deepEqual(snapshots[0].reviews,[{id:42,state:'APPROVED',submitted_at:null}]);
+  assert.deepEqual(snapshots[0].commit_items,[{revision:sha,committed_at:'2026-01-02T00:00:00.000Z'}]);
+  assert.equal(snapshots[0].commit_head,sha);
+  assert.equal(snapshots[0].commits_status,'available');
+  assert.equal(Object.hasOwn(snapshots[0],'files'),false);
+  assert.equal(Object.hasOwn(snapshots[0],'body'),false);
+  assert.equal((await peekTaskGitHubDetails(DB,'detail-token',[ref(first.detail.url)],Date.now()+24*60*60000))[0].status,'stale');
+  assert.deepEqual(await peekTaskGitHubDetails(DB,'wrong-credential',references),[]);
+  assert.deepEqual(await peekTaskGitHubDetails(DB,'detail-token',[ref('https://github.com/other/project/pull/12')]),[]);
+  assert.equal(calls, 4);
+});
+
+test('an inconsistent commit list after a PR head change leaves commit coverage unavailable',async t=>{
+  const db = database(t);
+  const changed = 'b'.repeat(40);
+  const start = Date.now();
+  let head = sha;
+  let status = 200;
+  const respond = async (url,{headers})=>{
+    if (url === provider+'/pulls/12') return Response.json({...pull(12),head:{ref:'topic',sha:head},commits:1});
+    if (url.includes('/files?')) return Response.json([
+      {filename:'one',status:'added'}, {filename:'two',status:'added'},
+    ]);
+    if (url.includes('/reviews?')) return Response.json([]);
+    assert.equal(url,provider+'/pulls/12/commits?per_page=20');
+    assert.equal(headers['If-None-Match'],status===304?'"commits"':undefined);
+    if (status===304) return new Response(null,{status,headers:{etag:'"commits"'}});
+    return Response.json([{sha}],{headers:{etag:'"commits"'}});
+  };
+  const first = await cachedGitHubDetail(db,respond,'fixture-token','pulls',12,start);
+  assert.equal(first.detail.commits_status,'available');
+  status = 304;
+  const unchanged = await cachedGitHubDetail(db,respond,'fixture-token','pulls',12,start+16*60000);
+  assert.deepEqual(unchanged.detail.commit_items,first.detail.commit_items);
+  assert.equal(unchanged.detail.commits_status,'available');
+  head = changed;
+  status = 200;
+  const mismatch = await cachedGitHubDetail(db,respond,'fixture-token','pulls',12,start+32*60000);
+  assert.equal(mismatch.detail.commits_status,'unavailable');
+  assert.deepEqual(mismatch.detail.commit_items,[]);
 });
 
 test('uses conditional exact-attempt job reads, limits jobs and suppresses raw provider data', async t => {

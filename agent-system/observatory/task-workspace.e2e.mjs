@@ -13,12 +13,14 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { chromium } from 'playwright';
 import { createWorker } from './sites/worker.mjs';
+import { sha256 } from './sites/task-telemetry.mjs';
 
 const read = (path, type = 'utf8') => readFileSync(new URL(path, import.meta.url), type);
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const taskTitle = 'Worker-backed workspace verification';
 const editTitle = 'Worker-backed editor verification';
 const owner = 'isolated-browser-test';
+const githubToken = 'isolated-github-fixture';
 
 async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
   const sql = new DatabaseSync(':memory:');
@@ -49,6 +51,10 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     assets, validate, validateEvent, sourceRevision: revision,
     fetcher: async url => {
       const path = new URL(url).pathname;
+      if (path === '/api/docs/models/gpt-6.2-sol.md') return new Response([
+        '# Model', 'Model ID: `gpt-6.2-sol`', '## Pricing', '### Text tokens',
+        '| Input | $2 | 1M tokens |', '| Cached input | $0.1 | 1M tokens |', '| Output | $10 | 1M tokens |',
+      ].join('\n'),{headers:{'content-type':'text/markdown'}});
       if (path.endsWith('/git/ref/heads/main')) return Response.json({ ref: 'refs/heads/main', object: { sha: revision } });
       if (path.endsWith('/actions/runs')) return Response.json({ total_count: 0, workflow_runs: [] });
       return Response.json([]);
@@ -64,7 +70,7 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     });
     const response = !canonical && new URL(request.url).pathname === '/api/task-engine/v1'
       ? new Response(null, { status: 404 })
-      : await worker.fetch(request, { DB, OBSERVATORY_TASK_ENGINE_OWNER_ID: owner });
+      : await worker.fetch(request, { DB, OBSERVATORY_TASK_ENGINE_OWNER_ID: owner, ...(canonical?{GITHUB_READ_TOKEN:githubToken}:{}) });
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
   });
@@ -81,7 +87,12 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     assert.equal(result.status, 200, JSON.stringify(result.body));
     return result.body;
   }
-  return { origin, executor };
+  async function seedGithubDetail(key, detail, observed_at) {
+    const credential = await sha256(githubToken);
+    sql.prepare("INSERT INTO github_details(cache_key,credential_key,retry_at,stored_at,payload,validators) VALUES(?,?,?,?,?,'{}')")
+      .run(key,credential,Date.now()+600_000,Date.now(),JSON.stringify({detail,observed_at,status:'available'}));
+  }
+  return { origin, executor, seedGithubDetail };
 }
 
 test('keyboard, reduced motion, versioned edits, dependency admission and reload in the real workspace', { timeout: 120_000 }, async t => {
@@ -194,7 +205,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await git('config', 'user.email', 'workspace@example.test');
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Verification baseline');
   const baseline = await git('rev-parse', 'HEAD');
-  const { origin, executor } = await start(t, { canonical: true, revision: baseline });
+  const { origin, executor, seedGithubDetail } = await start(t, { canonical: true, revision: baseline });
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
@@ -323,6 +334,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('form', { name: 'Admit to Codex queue' }).getByRole('button', { name: 'Confirm' }).click();
   await page.getByText(/Stored state admitted/).waitFor();
   await page.getByText('Waiting for Codex worker access',{exact:true}).waitFor();
+  await page.getByRole('status').filter({hasText:'Configure Codex worker access'}).waitFor();
   const overviewRoute=url=>url.pathname==='/api/overview';
   let unblockFeed;
   const heldFeed=new Promise(resolve=>{unblockFeed=resolve;});
@@ -348,6 +360,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       // Only the provider boundary is replaced. The worker checkpoints and reports the real Git result.
       execute: async ({ cwd, task, signal, onSession }) => {
         await onSession(conversationId);
+        await executor({op:'report',task_id:task.id,operation_id:crypto.randomUUID(),attempt_id:claim.attempt.id,lease:claim.lease,
+          report:{type:'heartbeat',session_id:conversationId,execution_identity:{provider:'openai',model:'gpt-6.2-sol',source:'codex_app_server_thread_start'}}});
         assert.equal((await send({op:'get',task_id:task.id})).attempts[0].session_id,conversationId);
         await runFile(process.execPath, ['-e',
           'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id,
@@ -394,10 +408,107 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
   assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
     document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
+  const sessionId = '10000000-0000-4000-8000-000000000002';
+  await page.getByRole('button',{name:'Attach evidence link'}).click();
+  const sessionLink = page.getByRole('form',{name:'Attach evidence link'});
+  await sessionLink.getByLabel('Reference type').selectOption('executor_session');
+  await sessionLink.getByLabel('Evidence URL').fill('https://chatgpt.com/c/' + sessionId);
+  await sessionLink.getByLabel('Revision').fill(candidate);
+  await sessionLink.getByRole('button',{name:'Confirm'}).click();
+  await evidence.getByRole('link',{name:'executor session',exact:true}).waitFor();
+  const telemetryHeaders = { 'x-observatory-verification': namespace };
+  const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
+  const { telemetry_scope: scope } = await overview.json();
+  const firstAttempt = detail.attempts[0];
+  const operationId = 'e'.repeat(64);
+  const timedEvent = (phase, kind, offset) => ({
+    trace_version:1,event_id:phase+'-'+kind,task_id:execution.task.id,attempt_id:firstAttempt.id,
+    trace_id:'timing-window',span_id:phase,repository:execution.task.repository,revision:firstAttempt.revision,
+    occurred_at:new Date(Date.parse(firstAttempt.started_at)+offset).toISOString(),kind,phase,measurements:[],
+  });
+  const received = await page.request.post(origin + '/api/task-telemetry/' + execution.task.id, {
+    headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
+    data: {
+      base: null, generated_at: new Date().toISOString(), records: [execution.task],
+      events: [{
+        trace_version:1,event_id:'activity_'+operationId+'_result',task_id:execution.task.id,
+        trace_id:operationId,span_id:operationId,repository:execution.task.repository,revision:candidate,
+        occurred_at:'2026-01-02T00:00:00.000Z',kind:'engineering_activity',phase:'verification',measurements:[],
+        activity:{kind:'deployment_validation',source:'sites',operation_id:operationId,outcome:'succeeded'},
+      },timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
+        timedEvent('integration','span_end',350),timedEvent('implementation','span_end',300),{
+        ...timedEvent('implementation','measurement',280),
+        measurements:[['total',90],['input',80],['cached_input',60],['output',10],['cache_write_input',0]].map(([key,value])=>({
+          name:'provider_'+key+'_tokens',value,unit:'tokens',availability:'observed',
+          source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
+        })),
+      },{
+        trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
+        trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
+        revision: candidate, occurred_at: '2026-01-01T08:00:00.000Z', session_id: sessionId,
+        kind: 'measurement', phase: 'verification', measurements: [{
+          name:'desktop_total_tokens',value:137,unit:'tokens',availability:'observed',
+          source:'codex_desktop_session_usage',method:'task_dedicated_session_total',
+        }],
+      }],
+    },
+  });
+  assert.equal(received.status(), 200, await received.text());
+  const { received_at: traceReceivedAt } = await received.json();
+  const lateRefreshes=[];
+  const rememberRefresh=request=>{
+    const url=new URL(request.url());
+    if(url.pathname==='/api/overview') lateRefreshes.push(url.searchParams.get('prefer'));
+  };
+  const staleGitHub=async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,json:{...await response.json(),github_refresh_pending:true}});
+  };
+  await page.route(overviewRoute,staleGitHub);
+  page.on('request',rememberRefresh);
+  await page.clock.fastForward(31_000);
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
   await jump.getByRole('button',{name:'Timeline',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
   const timeline=page.getByRole('region',{name:'Task timeline'});
+  await timeline.getByText('Formal Task Engine attempts',{exact:true}).waitFor();
+  await timeline.getByText('Known executor sessions',{exact:true}).waitFor();
+  const search=timeline.getByRole('searchbox',{name:'Search timeline'});
+  const filterToggle=timeline.getByRole('button',{name:'Filters',exact:true});
+  assert.equal(await timeline.getByLabel('Outcome',{exact:true}).isVisible(),false);
+  await filterToggle.click();
+  await timeline.getByLabel('Through',{exact:true}).fill('2025-12-31');
+  await timeline.getByText('No events match these filters.').waitFor();
+  await timeline.getByRole('button',{name:'Filters (1)',exact:true}).click();
+  await timeline.getByRole('button',{name:'Clear filters'}).click();
+  await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({width:360,height:820});
+  await filterToggle.click();
+  const inputBounds = await search.boundingBox();
+  const filterBounds = await filterToggle.boundingBox();
+  assert.ok(inputBounds.x>=0 && inputBounds.width>=90 && filterBounds.x+filterBounds.width<=360);
+  assert.ok(await timeline.locator('#timeline-filter-fields').evaluate(element=>element.scrollWidth<=element.clientWidth+1));
+  await filterToggle.click();
+  await page.setViewportSize(originalViewport);
+  await search.fill('no such timeline event');
+  await timeline.getByText('No events match these filters.').waitFor();
+  await search.fill('fixture-receipt-trace');
+  await timeline.getByRole('button',{name:/verification · measurement/}).click();
+  const receiptDetail = timeline.getByRole('complementary',{name:'Selected timeline event'});
+  await receiptDetail.getByText('Observatory first received',{exact:true}).waitFor();
+  assert.equal(await receiptDetail.getByText(traceReceivedAt,{exact:true}).count(), 1);
+  assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
+  await timeline.getByText(/First-receipt timestamps are available for 7 of 7 journal events/).waitFor();
+  const reportedEvidence=page.locator('#task-evidence').getByRole('region',{name:'Reported verification activity'});
+  await reportedEvidence.getByText(/Reported deployment validation · succeeded/).click();
+  await reportedEvidence.getByText('Reported by the source journal',{exact:true}).waitFor();
+  await reportedEvidence.getByText(traceReceivedAt,{exact:true}).waitFor();
+  page.off('request',rememberRefresh);
+  await page.unroute(overviewRoute,staleGitHub);
+  assert.ok(lateRefreshes.length>0);
+  assert.ok(lateRefreshes.every(preference=>preference==='cached'));
+  await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();
   await timeline.getByRole('button',{name:/Task submitted/}).waitFor();
@@ -410,6 +521,16 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.waitForFunction(()=>document.activeElement?.textContent==='Attempt 1');
   await page.getByRole('button',{name:'Attach evidence link'}).click();
   const association=page.getByRole('form',{name:'Attach evidence link'});
+  const observedAt = new Date().toISOString();
+  const mergeCommit = 'c'.repeat(40);
+  const pullCommit = 'd'.repeat(40);
+  await seedGithubDetail('pulls:319',{
+    kind:'pull',number:319,title:'Review fixture',state:'closed',created_at:observedAt,
+    merged_at:observedAt,merge_commit_sha:mergeCommit,
+    head:{sha:pullCommit},commit_items:[{revision:pullCommit,committed_at:observedAt}],
+    commits_observed_at:observedAt,commits_status:'available',
+    reviews:[{id:81,state:'APPROVED',submitted_at:observedAt}],reviews_observed_at:observedAt,reviews_status:'available',
+  },observedAt);
   await association.getByLabel('Reference type').selectOption('pull_request');
   await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/pull/319');
   await association.getByRole('button',{name:'Confirm'}).click();
@@ -418,12 +539,32 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await pull.getAttribute('href'),'#pull-requests/319');
   assert.equal(await pull.getAttribute('target'),null);
   await page.getByRole('button',{name:'Attach evidence link'}).click();
+  await seedGithubDetail('runs:5321',{
+    kind:'run',id:5321,title:'Engineering validation',head:{sha:candidate},attempt:2,
+    created_at:observedAt,started_at:observedAt,status:'completed',conclusion:'success',
+    jobs:[{id:91,name:'Observatory browser tests',status:'completed',conclusion:'success',completed_at:observedAt}],
+    jobs_observed_at:observedAt,
+  },observedAt);
   await association.getByLabel('Reference type').selectOption('ci_run');
   await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/actions/runs/5321');
   await association.getByRole('button',{name:'Confirm'}).click();
   const run=evidence.getByRole('link',{name:'ci run',exact:true});
   await run.waitFor();
   assert.equal(await run.getAttribute('href'),'#ci-runs/5321');
+  await timeline.getByRole('button',{name:'Engineering',exact:true}).click();
+  await timeline.getByRole('button',{name:/Review submitted on pull request #319/}).waitFor();
+  await timeline.getByRole('button',{name:/Pull request #319 merged/}).click();
+  assert.equal(await selected.getByRole('link',{name:mergeCommit,exact:true}).getAttribute('href'),
+    'https://github.com/Kgray44/Aetherwake/commit/'+mergeCommit);
+  await timeline.getByRole('button',{name:new RegExp('Commit '+pullCommit.slice(0,10))}).click();
+  await selected.getByText('Git commit committer time',{exact:true}).waitFor();
+  assert.equal(await selected.getByRole('link',{name:'Open linked activity'}).getAttribute('href'),
+    'https://github.com/Kgray44/Aetherwake/commit/'+pullCommit);
+  await timeline.getByRole('button',{name:/Reported deployment validation · succeeded/}).click();
+  await timeline.getByText('Reported by the source journal',{exact:true}).waitFor();
+  await timeline.getByRole('button',{name:/CI job finished.*Observatory browser tests/}).click();
+  await timeline.getByText('Job ID',{exact:true}).waitFor();
+  await timeline.getByRole('button',{name:'All',exact:true}).click();
   const actionCard = page.getByRole('button',{name:'Attach evidence link'});
   await actionCard.hover();
   assert.equal(await actionCard.evaluate(el => getComputedStyle(el).transform), 'none');
@@ -437,6 +578,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   });
   await page.setViewportSize({width:1440,height:660});
   const hoverRow=timeline.getByRole('button',{name:/Task created/});
+  if (!(await hoverRow.count())) await timeline.getByRole('button',{name:'Show earlier events'}).click();
   await hoverRow.hover();
   await page.waitForFunction(()=>{
     const label=document.querySelector('.task-timeline-event:hover .task-timeline-label');
@@ -461,7 +603,28 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await page.locator('#task-timeline-details').evaluate(node=>getComputedStyle(node).position),'static');
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
-  await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();
+  await telemetry.getByRole('heading',{name:'Observed Task token usage'}).waitFor();
+  const dataCoverage=telemetry.getByRole('region',{name:'Data coverage'});
+  await dataCoverage.getByRole('row',{name:/Telemetry arrival Observed/}).waitFor();
+  await dataCoverage.getByRole('row',{name:/Owner review Verified/}).waitFor();
+  await dataCoverage.getByRole('row',{name:/Billing Unavailable/}).waitFor();
+  const billing = telemetry.locator('dl').filter({has:page.getByText('Actual billing',{exact:true})});
+  await billing.getByText('Unknown',{exact:true}).waitFor();
+  await telemetry.getByRole('table',{name:/OpenAI API reference estimates for 1 of 1 attempts/})
+    .getByRole('cell',{name:'$0.000146',exact:true}).waitFor();
+  const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
+  await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
+  await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
+  const timing = page.getByRole('region',{name:'Execution timing'});
+  await timing.getByText('Time with overlapping spans').waitFor();
+  await timing.getByRole('button',{name:/Admission to claim.*Lifecycle interval/}).click();
+  await timing.getByRole('region',{name:'Selected timing details'}).getByText('Task Engine audit receipts',{exact:true}).waitFor();
+  await timing.getByText('100 ms',{exact:true}).waitFor();
+  await timing.getByRole('button',{name:/implementation.*Trace span/}).click();
+  const timingDetails = timing.getByRole('region',{name:'Selected timing details'});
+  await timingDetails.getByText('Matched journal span',{exact:true}).waitFor();
+  await timingDetails.getByRole('button',{name:'Open attempt details'}).waitFor();
+  await telemetry.getByText('90 tokens',{exact:true}).first().waitFor();
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
@@ -529,4 +692,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await waitingView.waitFor();
   assert.equal(await waitingView.getAttribute('aria-current'),'page');
   await page.getByRole('link',{name:/Candidate review verification.*Manage/}).waitFor();
+  await page.getByRole('button',{name:'Engineering analytics',exact:true}).click();
+  await page.getByRole('heading',{name:'Codex token accounting',exact:true}).waitFor();
+  const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output total'});
+  await attemptTotal.getByText('90',{exact:true}).waitFor();
+  await page.locator('.analytics-counts > div').filter({hasText:'App Server receipts'}).getByText('1',{exact:true}).waitFor();
+  await page.getByText('Attempt breakdown',{exact:true}).click();
+  await page.getByRole('link',{name:'$0.000146',exact:true}).waitFor();
+  await page.locator('.analytics-counts > div').filter({hasText:'Observed session-only tokens'}).getByText('137',{exact:true}).waitFor();
 });

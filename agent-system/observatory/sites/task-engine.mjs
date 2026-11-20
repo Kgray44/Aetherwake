@@ -20,7 +20,7 @@ function safeReference(value) {
     return Boolean(url.hostname && !url.username && !url.password && !url.search);
   } catch { return false; }
 }
-const refKinds = ['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation'];
+const refKinds = ['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session'];
 const sessionPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const revisionPattern = /^[a-f0-9]{40}$/;
 const agentCommands = new Set(['edit', 'associate']);

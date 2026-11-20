@@ -126,6 +126,10 @@ Start the host with node scripts/agent/observatory-task-worker.mjs and the path 
 
 Use the same workspaces and Codex session storage when restarting a paused executor. If the host dies while an execution is active, the next Task read or scheduler pass after the lease deadline records the orphaned attempt. Inspect the workspace and process state before removing a stale local lock or approving a retry. Effects from an orphaned attempt can remain in the checkout. The host verifies checkout identity and records a local candidate commit from the dedicated checkout after a successful Codex turn. The configured Git identity authors that commit. The worker never pushes the commit or grants acceptance. Codex runs with workspace-write sandboxing and approval escalation disabled. The worker uses the existing bounded AADS Codex event observer. Its runClaim telemetry callbacks receive the original Task and canonical Attempt. onTelemetryStart begins an execution observation, onUsage delivers normalized completed-turn measurements, and onTelemetryEnd delivers the observer summary and execution disposition. The execution disposition does not grant Task acceptance.
 
+Fresh App Server executors publish up to one cumulative usage snapshot every 15 seconds, capped at 16 snapshots per turn. The Task view and PDF show the latest snapshot until a final receipt is available. Task totals use final receipts. The worker leaves resumed-thread attribution unavailable because the provider counter includes earlier turns.
+
+After a restart or a temporary delivery failure, an idle worker revisits journals in its configured Task scope once a minute. It reuses the saved upload and then syncs newer journal entries. It skips unchanged checkpoints and uses the existing authenticated telemetry connection.
+
 The subprocess integration test executes real artifact-producing steps with an explicit test executor. It proves queueing and evidence transitions across separate checkouts. Verify the hosted MCP deployment, owner controls and signed-in Codex provider execution independently before production acceptance.
 
 ### CI controls
@@ -160,6 +164,12 @@ same owner, namespace, and expected version. A proposal may be blocked, cancelle
 with a reason, and a blocked proposal may return to proposed. Public proposals and Tasks with a
 local execution projection are outside this editing path. Proposal state cannot grant owner
 acceptance or authorize execution.
+
+External tools can append a bounded receipt to an existing Task journal with `node scripts/agent/record-engineering-activity.mjs --task PATH --journal DIRECTORY --receipt PATH`. A receipt supplies `kind`, `source`, a stable non-secret `source_id`, `revision`, `occurred_at` (UTC), and `outcome`. It may include an artifact SHA-256, a Codex session UUID, or an attempt ID. Use the same operation ID for a start and its final result. The exporter publishes the derived operation hash through the existing private synchronization path. Receipts populate the chronology as reported activity and do not change Task Engine state or owner acceptance.
+
+A release or test tool with its own private journal can use `--sync --activity-only` with the same command and the existing Task JSON. This mode accepts engineering receipts without an attempt ID and keeps the worker’s synchronized records intact. It can seed a projection with the supplied Task when no projection exists. Retries use the source’s stable operation ID. Use ordinary `--sync` when writing into the worker’s journal.
+
+Run from the Task checkout and pass `--sync` after the receipt path to deliver through its configured private Observatory connection, including after its worker has exited. Use the existing Task journal and the same verification namespace, if configured. The command returns the local event ID and delivery status. A pending or unconfigured delivery exits nonzero and preserves the journal entry. Repeating the same command retries delivery without duplicating the receipt.
 
 The shared GitHub D1 cache serializes refreshes and uses authenticated ETag revalidation for main, issues, pull requests and CI. The feed shows the latest reported API budget and reset time alongside data refresh timestamps. The shared cooldown honors GitHub retry and primary-reset headers. Unauthenticated GitHub delivery cannot reach the owner-private Site, so this deployment uses conditional refreshes. An approved authenticated ingress would be needed to use signed webhook delivery.
 

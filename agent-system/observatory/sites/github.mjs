@@ -300,6 +300,13 @@ function pullItems(data) {
   }));
 }
 
+export function linkedPullNumbers(run) {
+  return Array.isArray(run.pull_requests)&&run.repository?.full_name===REPO&&positiveInteger(run.repository.id)
+    ? [...new Set(run.pull_requests.filter(pr=>positiveInteger(pr?.number)&&pr.base?.repo?.id===run.repository.id&&
+      pr.head?.sha===run.head_sha).map(pr=>pr.number))].slice(0,20)
+    : null;
+}
+
 export function runItems(data) {
   if (!Array.isArray(data)) throw new Error('Invalid GitHub workflow run list');
   return newestFirst(data.filter(item => positiveInteger(item?.id)).map(item => {
@@ -308,6 +315,7 @@ export function runItems(data) {
     const status = text(item.status);
     const conclusion = text(item.conclusion);
     const workflow = text(item.name);
+    const pullRequests = linkedPullNumbers(item);
     return {
       id: item.id,
       label: workflow ?? String(item.id),
@@ -324,6 +332,7 @@ export function runItems(data) {
       workflow_id: positiveInteger(item.workflow_id) ? item.workflow_id : null,
       head_repository_id: positiveInteger(item.head_repository?.id) ? item.head_repository.id : null,
       event: text(item.event),
+      ...(pullRequests ? {pull_requests:pullRequests} : {}),
       attempt: positiveInteger(item.run_attempt) ? item.run_attempt : null,
       status,
       conclusion,

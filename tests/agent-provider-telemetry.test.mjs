@@ -13,10 +13,69 @@ import { readJournal } from '../scripts/agent/journal.mjs';
 import { reconstructAttempts } from '../scripts/agent/record-journal.mjs';
 import { sanitizeExport } from '../scripts/agent/telemetry-export.mjs';
 import { observeCodexStream } from '../scripts/agent/provider-events.mjs';
+import { openObservatoryConnector } from '../scripts/agent/observatory-connector.mjs';
 
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
 const stream = chunks => Readable.from(chunks.map(chunk => Buffer.from(chunk)));
 const line = event => JSON.stringify(event) + '\n';
+
+test('App Server delivers a scoped live sample before the turn ends and preserves the newest cumulative total',async t=>{
+  const cwd=await mkdtemp(join(tmpdir(),'aads-app-server-usage-'));
+  t.after(()=>rm(cwd,{recursive:true,force:true,maxRetries:10,retryDelay:50}));
+  const session='11111111-1111-4111-8111-111111111111';
+  await writeFile(join(cwd,'app-server'),`
+    const {createInterface}=require('node:readline');
+    const threadId=${JSON.stringify(session)}, turnId='current';
+    const send=value=>console.log(JSON.stringify(value));
+    const notice=(method,params)=>send({method,params:{threadId,...params}});
+    const usage=(totalTokens,id=turnId)=>notice('thread/tokenUsage/updated',{turnId:id,tokenUsage:{total:{totalTokens}}});
+    createInterface({input:process.stdin}).on('line',line=>{
+      const {method,id,params}=JSON.parse(line);
+      if (method==='initialize') send({id,result:{}});
+      if (method==='thread/start') send({id,result:{thread:{id:threadId},sandbox:{type:'workspaceWrite',
+        networkAccess:false,writableRoots:[params.cwd]}}});
+      if (method==='turn/start') {
+        usage(100);
+        send({id,result:{turn:{id:turnId}}});
+        setTimeout(()=>{
+          usage(400,'unrelated'); usage(200); usage(125);
+          notice('turn/completed',{turn:{id:turnId,status:'completed'}});
+        },30);
+      }
+    });
+  `);
+  const connector=openObservatoryConnector({executable:process.execPath,cwd});
+  const observations=[];
+  try {
+    const result=await connector.runWorkspaceTurn({cwd,prompt:'Fixture',signal:AbortSignal.timeout(5000),onSession:()=>{},
+      onUsageSnapshot:(usage,{sessionId,occurredAt})=>observations.push([usage.totalTokens,sessionId,Date.parse(occurredAt)]),
+      onTurnFinished:()=>observations.push('finished')});
+    assert.deepEqual(observations.map(value=>Array.isArray(value)?value.slice(0,2):value),[[100,session],'finished']);
+    assert.ok(Number.isFinite(observations[0][2]));
+    assert.equal(result.usage.totalTokens,200);
+    assert.equal(result.sessionId,session);
+  } finally {connector.close();}
+});
+
+test('only explicit concise Codex messages become development notes',async()=>{
+  const messages=[
+    {id:'note',type:'agent_message',text:'Development note [warning]: Cache warmup masks the first-run regression.'},
+    {id:'plain',type:'agent_message',text:'Normal progress message'},
+    {id:'long',type:'agent_message',text:'Development note [finding]: '+'too long '.repeat(22)},
+    {id:'path',type:'agent_message',text:'Development note [decision]: Use C:/private/file'},
+    {id:'fake',type:'command_execution',aggregated_output:'Development note [finding]: raw process output'},
+  ];
+  const observed=[];
+  await observeCodexStream(stream([
+    line({type:'turn.started'}),...messages.map(item=>line({type:'item.completed',item})),
+    line({type:'turn.completed',usage:{input_tokens:20,output_tokens:10}}),
+  ]),{
+    onTurnStarted:()=>observed.push('started'),
+    onDevelopmentNote:(id,note)=>observed.push([id,note]),
+    onTurnFinished:state=>observed.push(state),
+  });
+  assert.deepEqual(observed,['started',['note',{category:'warning',text:'Cache warmup masks the first-run regression.'}],'completed']);
+});
 
 test('observes Codex token usage incrementally and forwards stdout unchanged', async () => {
   const frames = [
@@ -198,9 +257,14 @@ test('claimed execution journals usage against its immutable revision without pu
   const attempt = {id:'attempt_engine',revision:'d'.repeat(40)};
   const collector = createClaimTelemetry({journal:journalPath,task,attempt});
   await collector.start();
+  const note={itemId:'private-item',sessionId:'11111111-1111-4111-8111-111111111111',
+    occurredAt:'2026-11-20T00:00:00.000Z',note:{category:'finding',text:'The checksum matched.'}};
+  await collector.onDevelopmentNote(note);
+  await collector.onDevelopmentNote(note);
   const summary = await observeCodexStream(stream([usageFrames]), {onUsage:collector.onUsage});
   let events = await readJournal(journalPath);
-  assert.deepEqual(events.map(event => event.kind).sort(), ['measurement','span_start']);
+  assert.deepEqual(events.map(event => event.kind).sort(), ['development_note','measurement','span_start']);
+  assert.deepEqual(events.find(event=>event.kind==='development_note')?.development_note,note.note);
   assert.equal(events.every(event => event.attempt_id === attempt.id && event.revision === attempt.revision), true);
   assert.doesNotMatch(JSON.stringify(events), /private-thread|private-item|secret-path/);
   await collector.finish({measurements:summary,state:'completed'});
@@ -210,10 +274,10 @@ test('claimed execution journals usage against its immutable revision without pu
   assert.equal(findings(close.measurements).elapsed_wall_ms.availability, 'observed');
   const exported = JSON.parse(await projectJournal({task,directory:journalPath}));
   assert.deepEqual(exported.records.map(record => record.record_type), ['task']);
-  assert.equal(exported.events.length, 3);
+  assert.equal(exported.events.length, 4);
   const retry = createClaimTelemetry({journal:journalPath,task,attempt});
   await assert.rejects(retry.start(), /already exists|Conflicting/);
-  assert.equal((await readJournal(journalPath)).length, 3);
+  assert.equal((await readJournal(journalPath)).length, 4);
 });
 
 test('default engine hooks use the dedicated checkout journal with no connection required', async t => {

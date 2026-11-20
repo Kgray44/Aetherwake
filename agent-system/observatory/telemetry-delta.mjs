@@ -20,6 +20,17 @@ function canonical(value) {
 
 const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
+export function withIndependentActivity(snapshot, baseline, {activityOnly = false} = {}) {
+  const remote = baseline?.projection;
+  if (!remote) return snapshot;
+  const ids = new Set(snapshot.events.map(eventKey));
+  const retained = remote.events.filter(event=>!ids.has(eventKey(event)) &&
+    (activityOnly || (event.kind==='engineering_activity'&&!event.attempt_id)));
+  // An independent journal supplies receipts only. A full journal still has
+  // to reproduce the formal records and attempt-bound events it synchronized.
+  return { ...snapshot, records: activityOnly ? remote.records : snapshot.records, events: [...snapshot.events, ...retained] };
+}
+
 export function telemetryDelta(snapshot, baseline) {
   const before = baseline?.projection;
   function diff(current, previous, key, immutable) {

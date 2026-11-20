@@ -3,11 +3,12 @@ import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
-import { cachedGitHub, cachedGitHubDetail, peekGitHub } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail, peekGitHub, peekTaskGitHubDetails } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
 import { combinedTelemetry, ingestTaskTelemetry, sha256, telemetryBaseline } from './task-telemetry.mjs';
+import { createOpenAIModelPricing } from './openai-pricing.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
 
 const MAX_PROPOSALS = 500;
@@ -23,6 +24,7 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const error = (message, status) => json({ error: message }, status);
 
 export function createWorker({ assets, validate, sourceRevision, validateEvent, fetcher = fetch }) {
+  const lookupOpenAIPrice = createOpenAIModelPricing(fetcher);
   async function taskRevision(env) {
     const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN);
     return isRevision(main.revision) && (main.status === 'available' || (main.status === 'stale' && main.observed_at)) ? main : null;
@@ -35,6 +37,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
 
     const verification = request.headers.get('x-observatory-verification');
     if (verification !== null && !UUID.test(verification)) return error('Invalid verification namespace', 400);
+    const priceRoute = url.pathname.match(/^\/api\/openai-pricing\/([a-z0-9.-]+)$/);
+    if (priceRoute) {
+      if (request.method !== 'GET') return error('Method not allowed', 405);
+      return json({pricing: await lookupOpenAIPrice(priceRoute[1])});
+    }
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
@@ -72,6 +79,12 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       if (body.op==='list'&&result.status===200&&access==='owner') {
         const codex=isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY)?'configured':'not_configured';
         return json({...result.body,executor_access:{codex}});
+      }
+      if (result.status===200&&['get','command'].includes(body.op)&&result.body.lifecycle) {
+        const {links=[],evidence=[]}=result.body.lifecycle;
+        const snapshots=await peekTaskGitHubDetails(env.DB,env.GITHUB_READ_TOKEN||env.GITHUB_PROPOSAL_TOKEN,[...links,...evidence])
+          .catch(()=>[]);
+        return json({...result.body,engineering_snapshots:snapshots});
       }
       return json(result.body,result.status);
     }
@@ -146,15 +159,18 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         repository,
         readTaskRows({ db: env.DB, owner, namespace }),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
-        env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
+        env.DB.prepare('SELECT task_id, digest, received_at, payload, event_receipt_batches FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
           .bind(owner, namespace).all(),
         syncScope(),
       ]);
       const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
-      const authoritative = rows.filter(row => row.engine).flatMap(row => {
-        const task = JSON.parse(row.record);
-        return [task, ...JSON.parse(row.engine).attempts.map(attempt => taskAttemptRecord(task, attempt))];
+      const engineRows = rows.filter(row=>row.engine).map(row=>({task:JSON.parse(row.record),engine:JSON.parse(row.engine)}));
+      const authoritative = engineRows.flatMap(({task,engine})=>[task,...engine.attempts.map(attempt=>taskAttemptRecord(task,attempt))]);
+      const sessionBindings = engineRows.flatMap(({task,engine})=>{
+        const links = (engine.links??[]).filter(link=>link.kind==='executor_session');
+        const attempt_sessions = [...new Set(engine.attempts.map(attempt=>attempt.session_id??attempt.resume_session_id).filter(Boolean))];
+        return links.length||attempt_sessions.length ? [{task_id:task.id,links,attempt_sessions}] : [];
       });
       const authoritativeIds = new Set(authoritative.map(item => item.record_type + ':' + item.id));
       const canProject = item => !authoritativeIds.has(item.record_type + ':' + item.id);
@@ -171,7 +187,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           .concat((projection?.records ?? []).filter(canProject), authoritative),
         telemetry_scope: telemetryScope,
         execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events,
-          sources: projection.sources, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
+          sources: projection.sources, session_bindings:sessionBindings, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
         github: {
           ...snapshot,
           records: {

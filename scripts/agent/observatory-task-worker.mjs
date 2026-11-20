@@ -1,15 +1,15 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, open, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readdir, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
-import { readObservatoryConnection } from './observatory-sync.mjs';
+import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory-sync.mjs';
 
 const runFile = promisify(execFile);
 const verificationId = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -40,6 +40,22 @@ export async function checkoutIdentity(path, base) {
 const provisionRevision = /^[a-f0-9]{40}$/;
 const provisionOrigin = 'https://github.com/Kgray44/Aetherwake.git';
 
+async function existingPrivateDirectory(path) {
+  try {
+    const info = await lstat(path);
+    return info.isDirectory() && !info.isSymbolicLink() && await realpath(path) === path;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return false;
+  }
+}
+
+async function workerTelemetryDirectory(root, taskId, workspace) {
+  const current = join(root,'.aads-observatory',taskId);
+  const legacy = join(workspace??join(root,taskId),'.git','agent-harness');
+  return !await existingPrivateDirectory(current) && await existingPrivateDirectory(legacy) ? legacy : current;
+}
+
 function gitProvisioningIdentity(settings) {
   const { name, email } = settings ?? {};
   if (typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n\0]/.test(name) ||
@@ -52,7 +68,7 @@ function gitProvisioningIdentity(settings) {
 // Only worker-approved claims can reach this provisioner. The Task controls the
 // pinned revision; the worker owns the origin and every filesystem destination.
 export async function provisionTaskWorkspace({ root, task, attempt, author, signal,
-  cloneOrigin = provisionOrigin, observe = (_name, action) => action() }) {
+  cloneOrigin = provisionOrigin, gitCache, observe = (_name, action) => action() }) {
   if (!taskIdPattern.test(task?.id ?? '') || task.repository !== 'Kgray44/Aetherwake' ||
       !provisionRevision.test(attempt?.revision ?? '')) throw Error('Invalid Task checkout identity');
   const { name, email } = gitProvisioningIdentity(author);
@@ -82,8 +98,12 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   });
   try {
     await run('init', '--quiet');
-    await run('remote', 'add', 'origin', cloneOrigin);
-    await observe('checkout_fetch',() => run('fetch', '--quiet', '--depth=1', '--no-tags', 'origin', attempt.revision));
+    await observe('checkout_fetch',async () => {
+      const available = gitCache && await git(gitCache,'cat-file','-t',attempt.revision).catch(() => null);
+      const origin = available==='commit'?pathToFileURL(gitCache).href:cloneOrigin;
+      await run('remote','add','origin',origin);
+      await run('fetch','--quiet','--depth=1','--no-tags','origin',attempt.revision);
+    });
     await run('remote', 'set-url', 'origin', provisionOrigin);
     await run('config', '--local', 'user.name', name);
     await run('config', '--local', 'user.email', email);
@@ -147,6 +167,7 @@ export function codexTaskPrompt(task, attempt) {
     'Use targeted repository searches and governance sections. Keep command output focused and reuse facts already read unless the source changed or needs independent verification.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
+    'Only when useful, share a standalone progress message: Development note [finding|warning|follow_up|decision]: <one short sentence>. Pick one category. No secrets, paths, URLs or raw outputs.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
     task.title, task.objective,
     ...(references.length ? ['Task requirements and input references:', ...references,
@@ -157,7 +178,7 @@ export function codexTaskPrompt(task, attempt) {
   ].join('\n');
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, onDevelopmentNote, onTurnStarted, onTurnFinished, signal }) {
   const prompt = codexTaskPrompt(task,attempt);
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
@@ -183,7 +204,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
       session = id;
       return onSession(id);
     },
-    onUsage,
+    onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,
   });
   try {
     const [result, measurements] = await Promise.all([exited, observed]);
@@ -194,29 +215,33 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   }
 }
 
-async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,signal}) {
-  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
-    resumeSessionId:attempt.resume_session_id,signal,onSession});
-  if (result.usage&&onUsage) {
+async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,signal}) {
+  async function recordUsage(usage,method,scope) {
+    if (!usage||!onUsage) return;
     const fields={total:'totalTokens',input:'inputTokens',cached_input:'cachedInputTokens',
       cache_write_input:'cacheWriteInputTokens',output:'outputTokens',reasoning_output:'reasoningOutputTokens'};
     const metrics=Object.entries(fields).flatMap(([name,key])=>{
-      const value=result.usage[key];
+      const value=usage[key];
       return Number.isSafeInteger(value)&&value>=0 ? [{
         name:'provider_'+name+'_tokens',unit:'tokens',value,availability:'observed',
-        source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
+        source:'codex_app_server_token_usage_updated',method,
       }] : [];
     });
     if (metrics.length) {
-      try { await onUsage(metrics); }
+      try { await onUsage(metrics,scope); }
       catch { console.error('App Server token telemetry could not be recorded.'); }
     }
   }
+  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
+    resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
+    onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
+  if (result.status==='completed') await recordUsage(result.usage,'fresh_thread_total',{sessionId:result.sessionId});
   return {ok:result.status==='completed',stopped:signal.aborted};
 }
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
-  identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage,
+  identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart,
+  telemetryDirectory, onDevelopmentNote,
   verificationNamespace, prepareWorkspace, managedConnection, providerStream, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
@@ -262,24 +287,36 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let executionEnd;
   let provisioning = false;
   let telemetryStarted = false;
+  let liveStages = false;
   let executionState = 'failed';
+  let turnStarted;
+  const noteItems = new Set();
   const stages = [];
   async function measureStage(name, phase, action) {
     const startAt = new Date().toISOString(), started = performance.now();
+    if (liveStages) await telemetry(onTelemetryStageStart,{name,phase,startAt});
     let state = 'failed';
     try {
       const result = await action();
       state = 'completed';
       return result;
     } finally {
-      stages.push({name,phase,startAt,endAt:new Date().toISOString(),durationMs:performance.now()-started,state});
+      const stage = {name,phase,startAt,endAt:new Date().toISOString(),durationMs:performance.now()-started,state};
+      if (liveStages) await telemetry(onTelemetryStage,stage);
+      else stages.push(stage);
     }
   }
   const telemetry = async (callback, payload) => {
-    try { await callback?.({ task, attempt, ...payload }); }
+    try { await callback?.({ task, attempt, verificationNamespace, providerStream, ...payload }); }
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   try {
+    if (telemetryDirectory && !onTelemetryStart && !onUsage && !onTelemetryEnd) {
+      await admitStorage();
+      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart, onDevelopmentNote } =
+        createClaimTelemetryHooks(telemetryDirectory, {managedConnection}, telemetryDirectory));
+      telemetryStarted = liveStages = true;
+    }
     await measureStage('worker_initialization','queue',update);
     monitoring = (async () => {
       while (!workerSignal.aborted && !heartbeats.signal.aborted) {
@@ -307,7 +344,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
     });
     if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
-      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage } = createClaimTelemetryHooks(workspace,
+      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onDevelopmentNote } = createClaimTelemetryHooks(workspace,
         managedConnection ? { managedConnection } : undefined));
     }
     telemetryStarted = true;
@@ -327,7 +364,24 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           throw error;
         }
       },
-      onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
+      onUsage: onUsage && ((measurements,scope) => onUsage({ task, attempt, measurements,...scope })),
+      onDevelopmentNote:async (itemId,note,occurredAt=new Date().toISOString())=>{
+        if (!sessionId||noteItems.has(itemId)) return;
+        noteItems.add(itemId);
+        await telemetry(onDevelopmentNote,{itemId,note,occurredAt,sessionId});
+      },
+      onTurnStarted:async()=>{
+        if (turnStarted) return;
+        turnStarted={name:'codex_turn',phase:'implementation',startAt:new Date().toISOString(),monotonic:performance.now()};
+        await telemetry(onTelemetryStageStart,turnStarted);
+      },
+      onTurnFinished:async(status)=>{
+        if (!turnStarted) return;
+        const state=status==='completed'?'completed':status==='failed'?'failed':'interrupted';
+        await telemetry(onTelemetryStage,{...turnStarted,endAt:new Date().toISOString(),
+          durationMs:performance.now()-turnStarted.monotonic,state});
+        turnStarted=undefined;
+      },
       signal: workerSignal });
   } catch {
     outcome = { ok: false };
@@ -416,6 +470,14 @@ async function main(configPath) {
   }
   const root = await realpath(config.workspace_root);
   const author = config.auto_provision ? gitProvisioningIdentity(config.auto_provision) : null;
+  let gitCache;
+  if (config.provision_git_cache!==undefined) {
+    if (!author||!isAbsolute(config.provision_git_cache)) throw Error('Invalid provisioning Git cache configuration');
+    gitCache=await realpath(config.provision_git_cache);
+    const withinWorker=relative(root,gitCache);
+    if (!withinWorker||(!isAbsolute(withinWorker)&&!withinWorker.startsWith('..'))||
+        !repoUrl.test(await git(gitCache,'remote','get-url','origin'))) throw Error('Provisioning cache must use the trusted Aetherwake repository outside worker checkouts');
+  }
   const workspaces = new Map();
   for (const [id, path] of Object.entries(config.workspaces ?? {})) {
     if (!taskIdPattern.test(id) || !isAbsolute(path)) throw Error('Invalid Task workspace mapping');
@@ -449,6 +511,29 @@ async function main(configPath) {
   }
   const send = request => call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
   const managedConnection = { call:args => call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
+  let recoveryCursor = 0;
+  let nextRecovery = 0;
+  async function recoverIdleTelemetry() {
+    if (active.size || signal.aborted || Date.now()<nextRecovery) return;
+    nextRecovery=Date.now()+60_000;
+    const locations=[root,join(root,'.aads-observatory')];
+    const entries=await Promise.all(locations.map(path=>readdir(path,{withFileTypes:true}).catch(error=>{
+      if (error.code==='ENOENT') return [];
+      throw error;
+    })));
+    const taskIds=[...new Set([...workspaces.keys(),...entries.flat().filter(entry=>entry.isDirectory()&&
+      taskIdPattern.test(entry.name)).map(entry=>entry.name)])].filter(id=>!scope||scope.includes(id)).sort();
+    for (let scanned=0;scanned<Math.min(taskIds.length,4)&&!signal.aborted;scanned++) {
+      const taskId=taskIds[recoveryCursor++%taskIds.length];
+      const telemetryDirectory=await workerTelemetryDirectory(root,taskId,workspaces.get(taskId));
+      try {
+        if (await recoverWorkerTelemetry({taskId,telemetryDirectory,verification,connector:managedConnection})) break;
+      } catch {
+        console.error('A saved Task telemetry delivery is still pending.');
+        break;
+      }
+    }
+  }
   try {
     while (!signal.aborted) {
       if (active.size < 2) {
@@ -461,8 +546,10 @@ async function main(configPath) {
           });
           if (result.claim && !signal.aborted) {
             const workspace = workspaces.get(result.claim.task.id);
+            const taskId = result.claim.task.id;
+            const telemetryDirectory = await workerTelemetryDirectory(root,taskId,workspace);
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
-              verificationNamespace:verification ?? null,managedConnection,
+              verificationNamespace:verification ?? null,managedConnection,telemetryDirectory,
               ...(config.executor_transport==='app_server' ? {
                   execute:async options=>{
                     // The persistent conversation belongs to this attempt process.
@@ -472,13 +559,14 @@ async function main(configPath) {
                     finally { executor.close(); }
                   },providerStream:'codex_app_server',
               } : {}),
-              ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
+              ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, gitCache, ...input})}),
               admitStorage }).catch(() => {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');
               }).finally(() => active.delete(job));
             active.add(job);
             continue;
           }
+          await recoverIdleTelemetry();
         } catch (error) {
           if (error.status === 403 || error.status === 404) throw Error('Hosted Task worker is not configured or authorized');
           if (error.status !== 409) console.error('Worker admission or Task connection unavailable. Waiting.');

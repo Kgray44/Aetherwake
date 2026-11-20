@@ -43,6 +43,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
   sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0012_task_trace_receipts.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -103,7 +104,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
     sql.exec('UPDATE github_snapshot SET retry_at = 0');
     rateLimited = true;
   };
-  return { call, post, requests, hitLimit, writes };
+  return { call, post, requests, hitLimit, writes, sql };
 }
 
 test('hosted API checks identity and same-origin JSON before touching upstream', async t => {
@@ -219,7 +220,7 @@ test('private proposal control applies one versioned edit, fences concurrent wri
 });
 
 test('the automatic telemetry client resumes after a lost response, uploads only deltas and shows owner-scoped data', async t => {
-  const { call, post } = fixture(t);
+  const { call, post, sql } = fixture(t);
   const isolation = { 'x-observatory-verification': namespace };
   const headers = { ...ownerHeader, ...isolation };
   const { task } = await (await post(headers)).json();
@@ -239,6 +240,7 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   const generated = Date.now() - 1000;
   const event = {
     trace_version: 1, event_id: 'telemetry-probe-event', task_id: task.id, trace_id: 'trace-probe',
+    session_id: '10000000-0000-4000-8000-000000000001',
     span_id: 'span-probe', repository: task.repository, revision: task.revision,
     occurred_at: new Date(generated).toISOString(), kind: 'measurement', phase: 'verification',
     measurements: [{ name: 'elapsed_wall_ms', availability: 'observed', value: 45, unit: 'ms', source: 'fixture', method: 'fixture' }],
@@ -256,7 +258,9 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.equal((await client().synchronize(task.id, first)).changed, false);
   assert.equal(posted.length, 1);
   assert.equal(posted[0].records[0].objective, 'Private task details withheld');
-  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated + 1).toISOString() };
+  const firstReceipt = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.equal(firstReceipt.event_receipts[event.event_id], firstReceipt.received_at);
+  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated - 5000).toISOString() };
   const { snapshot: next } = await readStagedSnapshot(file(1, [event, event2]));
   assert.equal((await client().synchronize(task.id, next)).changed, true);
   assert.deepEqual(posted[1].records, []);
@@ -265,7 +269,13 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.equal(replay.status, 200);
   const overview = await (await call('/api/overview', { headers })).json();
   assert.equal(overview.execution.events.length, 2);
+  assert.equal(overview.execution.events.find(item=>item.event_id===event.event_id).session_id,event.session_id);
   assert.equal(overview.execution.sources[0].task_id, task.id);
+  assert.deepEqual(overview.execution.sources[0].event_receipts, {
+    [event.event_id]: firstReceipt.received_at,
+    [event2.event_id]: overview.execution.sources[0].received_at,
+  });
+  assert.equal((await replay.json()).received_at, overview.execution.sources[0].received_at);
   assert.equal(overview.proposals.controls[task.id], undefined);
   assert.equal((await (await call('/api/overview', { headers: ownerHeader })).json()).execution, null);
   assert.equal((await call(path, { headers: { ...headers, 'oai-authenticated-user-id': 'owner-2', 'x-observatory-sync-scope': scope } })).status, 403);
@@ -277,6 +287,31 @@ test('the automatic telemetry client resumes after a lost response, uploads only
     events: [{ ...event, event_id: 'outside-task', task_id: 'outside-task' }] };
   assert.equal((await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope },
     body: JSON.stringify(badChange) })).status, 400);
+  // An older worker can append events while leaving the previously recorded range untouched.
+  sql.prepare('UPDATE task_telemetry SET event_receipt_batches = ? WHERE task_id = ?')
+    .run(JSON.stringify([[0, 1, firstReceipt.received_at]]), task.id);
+  const rollbackSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.deepEqual(rollbackSource.event_receipts, { [event.event_id]: firstReceipt.received_at });
+  // An existing snapshot may predate the receipt migration. Its original arrivals stay unknown.
+  sql.prepare("UPDATE task_telemetry SET event_receipt_batches = '[]' WHERE task_id = ?").run(task.id);
+  const operation = 'a'.repeat(64);
+  const event3 = {...event,event_id:'activity_'+operation+'_result',trace_id:operation,span_id:operation,
+    kind:'engineering_activity',measurements:[],activity:{kind:'test',source:'local_runner',outcome:'succeeded',operation_id:operation}};
+  const badActivity = {...event3,activity:{...event3.activity,source_path:'private path'}};
+  assert.equal((await call(path,{method:'POST',headers:{...headers,origin,'content-type':'application/json','x-observatory-sync-scope':scope},
+    body:JSON.stringify({...badChange,events:[badActivity]})})).status,400);
+  const { snapshot: upgraded } = await readStagedSnapshot(file(3, [event, event2, event3]));
+  assert.equal((await client().synchronize(task.id, upgraded)).changed, true);
+  const upgradedSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.deepEqual(upgradedSource.event_receipts, { [event3.event_id]: upgradedSource.received_at });
+  const event4 = {...event,event_id:'worker-snapshot-after-independent-activity'};
+  const { snapshot: workerSnapshot } = await readStagedSnapshot(file(4, [event, event2, event4]));
+  assert.equal((await client().synchronize(task.id, workerSnapshot)).changed,true);
+  assert.deepEqual(posted.at(-1).events.map(item=>item.event_id),[event4.event_id]);
+  const combined = (await (await call('/api/overview', {headers})).json()).execution;
+  assert.equal(combined.events.length,4);
+  assert.equal(combined.sources[0].event_receipts[event3.event_id],upgradedSource.received_at);
+  assert.ok(combined.events.some(item=>item.event_id===event3.event_id));
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {
@@ -677,6 +712,24 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
 });
 
 
+test('live telemetry can start after eight Tasks and isolated capacity returns an actionable receipt',async t=>{
+  const {call}=fixture(t);
+  const generated_at=new Date().toISOString();
+  async function sync(index,verification) {
+    const record={...proposedTask(input,rev),id:'task_capacity_'+index};
+    const request={jsonrpc:'2.0',id:index,method:'tools/call',params:{name:'sync_task_telemetry',arguments:{
+      task_id:record.id,...(verification?{verification}:{}),change:{base:null,generated_at,records:[record],events:[]},
+    }}};
+    const response=await call('/mcp',{method:'POST',headers:{...ownerHeader,'content-type':'application/json'},body:JSON.stringify(request)});
+    const data=(await response.json()).result;
+    assert.equal(data.isError,false);
+    return JSON.parse(data.content[0].text);
+  }
+  for (let i=1;i<=9;i++) assert.equal((await sync(i)).status,200);
+  for (let i=1;i<=8;i++) assert.equal((await sync(i,namespace)).status,200);
+  assert.deepEqual(await sync(9,namespace),{status:413,error:'Private Task telemetry storage limit reached'});
+});
+
 test('fabricated passing evidence without an attempt never becomes accepted in the projected UI',async t=>{
  const {call}=fixture(t);
  const task=proposedTask(input,rev);
@@ -880,4 +933,30 @@ test('a scoped executor can claim the verification Task without activating its l
   assert.equal((await rpc(claim, { worker_key: key, verification: namespace })).claim.task.id, task_id);
   const states = await Promise.all([rpc({ op: 'get', task_id }), rpc({ op: 'get', task_id }, { verification: namespace })]);
   assert.deepEqual(states.map(item => item.lifecycle.state), ['proposed', 'running']);
+});
+
+test('owner pricing route refreshes exact OpenAI text rates and sends no Task data upstream', async () => {
+  const markdown = [
+    '# Model', 'Model ID: `gpt-6.2-sol`', '## Pricing', '### Text tokens',
+    '| Metric | Price | Unit |', '| --- | ---: | --- |',
+    '| Input | $2 | 1M tokens |', '| Cached input | $0.1 | 1M tokens |', '| Output | $10 | 1M tokens |',
+    '### Batch', '| Input | $1 | 1M tokens |',
+  ].join('\n');
+  const calls = [];
+  const worker = createWorker({fetcher:async (url, options) => {
+    calls.push([url, options]);
+    return new Response(markdown,{headers:{'content-type':'text/markdown; charset=utf-8'}});
+  }});
+  const get = (model, options = {}) => worker.fetch(new Request(origin+'/api/openai-pricing/'+model,options),{});
+  assert.equal((await get('gpt-6.2-sol')).status,401);
+  assert.equal((await get('gpt-6.2-sol',{headers:ownerHeader,method:'POST'})).status,405);
+  const [first, second] = await Promise.all([get('gpt-6.2-sol',{headers:ownerHeader}),get('gpt-6.2-sol',{headers:ownerHeader})]);
+  const {pricing} = await first.json();
+  assert.deepEqual(pricing.usdPerMillion,{input:2,cachedInput:0.1,output:10});
+  assert.deepEqual(await second.json(),{pricing});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0][0],'https://developers.openai.com/api/docs/models/gpt-6.2-sol.md');
+  assert.deepEqual(calls[0][1].headers,{accept:'text/markdown'});
+  assert.equal(calls[0][1].redirect,'manual');
+  assert.deepEqual(await (await get('gpt-other',{headers:ownerHeader})).json(),{pricing:null});
 });

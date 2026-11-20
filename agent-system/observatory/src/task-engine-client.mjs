@@ -42,6 +42,28 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   return result;
 }
 
+export function taskNextAction(detail, workerAccess) {
+  const lifecycle = detail?.lifecycle;
+  if (!lifecycle) return null;
+  const { state, executor, blockers = [], start_at: startAt } = lifecycle;
+  const action = (title, description, section, at) => ({title,description,section,at});
+  const options = executionActions(detail);
+  if (state === 'blocked' && blockers.length) return action('Resolve prerequisites',
+    blockers.length + (blockers.length === 1 ? ' prerequisite is outstanding.' : ' prerequisites are outstanding.'), 'task-controls');
+  if (state === 'scheduled') return action('Waiting for scheduled start', 'The Task is eligible for a worker claim at its scheduled start.', 'task-controls',
+    Number.isFinite(startAt) ? new Date(startAt).toISOString() : undefined);
+  if (['admitted','ready','queued'].includes(state) && executor) return workerAccess==='not_configured'
+    ? action('Configure Codex worker access', 'A worker credential is required before a worker can claim this Task.', 'task-controls')
+    : action('Waiting for worker claim', 'The Task is in the execution queue.', 'task-controls');
+  if (state === 'verifying') return action('Review the candidate', 'Review the linked evidence and record the owner decision.', 'task-evidence');
+  if (state === 'failed') return options.includes('retry')
+    ? action('Review the failure before retrying', 'Inspect the latest attempt and record what changed before restarting execution.', 'task-attempts')
+    : action('Inspect the latest attempt', 'The failure is recorded in the attempt history.', 'task-attempts');
+  if (state === 'paused' && options.includes('resume')) return action('Resume when ready', 'The Task is paused and can be returned to the queue.', 'task-controls');
+  if (options.includes('admit')) return action('Configure and admit the Task', 'Confirm its execution settings before submitting it to the queue.', 'task-controls');
+  return null;
+}
+
 export function codexThreadHref(attempt) {
   const id = attempt?.session_id;
   return attempt?.executor==='codex'&&typeof id==='string'&&
@@ -55,15 +77,27 @@ export function reviewRevision(attempt) {
 
 const appServerSource = 'codex_app_server_token_usage_updated';
 const appServerMethods = new Set(['single_ephemeral_thread_total','fresh_thread_total']);
+const progressMethods = new Set(['fresh_thread_progress']);
 
-function appServerTokenRow(taskId, repository, attempt, events) {
+export function isAppServerUsageProgress(event) {
+  return event.kind==='measurement'&&(event.measurements??[]).some(metric=>
+    metric.source===appServerSource&&progressMethods.has(metric.method));
+}
+
+function appServerTokenRow(taskId, repository, attempt, events, progress = false) {
+  if (attempt.resume_session_id) return null;
+  const methods = progress ? progressMethods : appServerMethods;
   const receipts = events.filter(event => event.kind === 'measurement' && event.task_id === taskId &&
     event.attempt_id === attempt.id && event.revision === attempt.revision && event.repository === repository &&
-    (event.measurements ?? []).some(metric => metric.source === appServerSource && appServerMethods.has(metric.method)));
-  if (receipts.length !== 1) return null;
+    (event.session_id ? event.session_id === attempt.session_id : !progress) &&
+    (event.measurements ?? []).some(metric => metric.source === appServerSource && methods.has(metric.method)));
+  if (!receipts.length || (!progress && receipts.length!==1)) return null;
+  if (progress) receipts.sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at)||
+    a.event_id.localeCompare(b.event_id));
+  const receipt=receipts[0];
   const tokens = name => {
-    const samples = receipts[0].measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
-      metric.source === appServerSource && appServerMethods.has(metric.method));
+    const samples = receipt.measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
+      metric.source === appServerSource && methods.has(metric.method));
     const metric = samples.length === 1 ? samples[0] : null;
     return metric?.availability === 'observed' && metric.unit === 'tokens' &&
       Number.isSafeInteger(metric.value) && metric.value >= 0 ? metric.value : null;
@@ -77,11 +111,21 @@ function appServerTokenRow(taskId, repository, attempt, events) {
     taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
     provider:attempt.execution_identity?.provider ?? attempt.provider ?? attempt.executor ?? 'codex',
     model:attempt.execution_identity?.model ?? attempt.model, identitySource:attempt.execution_identity?.source, state:attempt.state,
-    coverage:'observed', source:'Codex App Server',
+    coverage:progress?'in-progress':'observed', source:'Codex App Server', receiptId:receipt.event_id,
+    ...(progress?{observedAt:receipt.occurred_at}:{}),
     observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
       cacheWriteInputTokens:tokens('cache_write_input'),
-      uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:1 },
+      uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:progress?null:1 },
   };
+}
+
+export function taskTokenProgress(task, attempts, events, finalRows) {
+  const finalized = new Set(finalRows.filter(row=>row.observed.totalTokens!=null).map(row=>row.attemptId));
+  return attempts.flatMap(attempt=>{
+    if (finalized.has(attempt.id)) return [];
+    const row=appServerTokenRow(task.id,task.repository,attempt,events,true);
+    return row?[row]:[];
+  });
 }
 
 export function taskTokenRows(accounting, id, attempts = [], events = [], repository) {

@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useCardMotion } from './card-motion.jsx';
-import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
-import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
+import { formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs';
+import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
+import { taskDataCoverage } from './task-data-coverage.mjs';
 
 const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const words = value => String(value ?? '').replaceAll('_', ' ');
@@ -40,25 +41,22 @@ function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
 }
 
-export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records }) {
+export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records, telemetrySource, pricing }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
-  const accounting = useMemo(() => records ? buildEngineeringAnalytics({
-    records: records.filter(record => record.id === task.id || record.task_id === task.id), events,
-  }).tokenAccounting : null, [task.id, records, events]);
-  const tokens = useMemo(() => taskTokenRows(accounting, task.id, attempts, events, task.repository),
-    [accounting, task.id, attempts, events, task.repository]);
-  const desktop = desktopSessionTokens(task.id,events);
+  const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events,pricing}), [task,canonical,attempts,events,pricing]);
+  const {rows:tokens,desktop} = usage;
   const diagnostics = useMemo(() => taskExecutionDiagnostics({
     task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
   }), [task,canonical,attempts,timeline,tokens,records]);
+  const dataCoverage = useMemo(() => taskDataCoverage({task,canonical,attempts,usage,diagnostics,events,telemetrySource}),
+    [task,canonical,attempts,usage,diagnostics,events,telemetrySource]);
   const coverageRows = diagnostics.coverage.slice(-8).flatMap(row => [
     {label:'Attempt ' + row.attemptNumber + ' · measured',value:row.coveredMs,display:time(row.coveredMs)},
     {label:'Attempt ' + row.attemptNumber + ' · untraced',value:row.untracedMs,display:time(row.untracedMs)},
   ]);
   const measurements = useMemo(() => measurementRows(telemetry, events), [telemetry, events]);
   const measurable = measurements.filter(available);
-  const linkedTokenAttempts = new Set(tokens.filter(row => row.observed.turns > 0).map(row => row.attemptId));
   const timeRows = timeline.phases.slice(0, 8).map(phase => ({ label: words(phase.phase), value: phase.coveredMs, display: time(phase.coveredMs) }));
   const durationRows = attempts.flatMap(attempt => {
     const duration = Date.parse(attempt.finished_at) - Date.parse(attempt.started_at);
@@ -82,7 +80,7 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       <div><dt>Observed trace time</dt><dd>{time(timeline.coveredMs)}</dd></div>
       <div><dt>Linked execution events</dt><dd>{events.length}</dd></div>
       <div><dt>Recorded metrics with values</dt><dd>{measurable.length}</dd></div>
-      <div><dt>Attempts with token receipts</dt><dd>{linkedTokenAttempts.size} of {attempts.length}</dd></div>
+      <div><dt>Attempts with token receipts</dt><dd>{usage.coverage.attemptTotals} of {usage.coverage.attempts}</dd></div>
     </dl>
     <div className="task-telemetry-grid">
       <MeasurementChart title="Time by phase" rows={timeRows} empty="No matched trace intervals were supplied."/>
@@ -92,13 +90,57 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       {desktop.length>0&&<MeasurementChart title="Desktop-session token counters" rows={desktop.map(metric=>({label:words(metric.name.replace(/^desktop_/,'')),value:metric.value,display:format.format(metric.value)+' tokens'}))}/>}
       {[...resourceGroups].map(([unit, rows]) => <MeasurementChart key={unit} title={'Latest resource readings ('+unit+')'} rows={rows}/>)}
     </div>
+    <section aria-label="Data coverage">
+      <h3>Data coverage</h3>
+      <div className="analytics-table"><table>
+        <thead><tr><th scope="col">Data</th><th scope="col">Coverage</th><th scope="col">Evidence</th></tr></thead>
+        <tbody>{dataCoverage.map(row=><tr key={row.topic}><th scope="row">{row.topic}</th><td>{row.label}</td><td>{row.basis}</td></tr>)}</tbody>
+      </table></div>
+    </section>
+    {usage.progressRows.length>0&&<section aria-label="Codex usage snapshots">
+      <h3>Codex usage snapshots</h3>
+      {usage.progressRows.map(row=><p key={row.receiptId}>
+        Attempt {row.attemptNumber} · <strong>{format.format(row.observed.totalTokens)} tokens observed during the turn</strong>
+        {' · '}<time dateTime={row.observedAt}>{new Date(row.observedAt).toLocaleString()}</time>
+      </p>)}
+      <p className="low">Task totals use final usage receipts.</p>
+    </section>}
     {diagnostics.findings.length>0&&<section aria-label="Execution diagnostics">
       <h3>Execution diagnostics</h3>
       <ul>{diagnostics.findings.map(({title,detail,key})=><li key={key??title}><strong>{title}</strong><p>{detail}</p></li>)}</ul>
     </section>}
-    <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
+    <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt.</p>
     <h3>Model and token accounting</h3>
+    <h4>Observed Task token usage</h4>
+    <dl className="github-facts task-telemetry-coverage">
+      {usageFields.map(([key,label])=><div key={key}><dt>{label}</dt><dd>{usage.observed[key]?.toLocaleString()??'Unavailable'}</dd></div>)}
+      <div><dt>Sessions with token totals</dt><dd>{usage.coverage.sessionTotals} of {usage.coverage.sessions}</dd></div>
+      <div><dt>Actual billing</dt><dd>{usage.billing}</dd></div>
+      <div><dt>OpenAI API reference estimate</dt><dd>{usage.referencePrice.total === null ? 'Unavailable' : formatReferenceCost(usage.referencePrice.total)}</dd></div>
+    </dl>
+    <p className="low">{usage.scope}</p>
+    {usage.coverage.conflicts>0&&<p>Conflicting usage records excluded from the affected totals.</p>}
+    {usage.sessionRows.length>0&&<div className="analytics-table"><table>
+      <caption>Token usage by executor session</caption>
+      <thead><tr><th scope="col">Session</th><th scope="col">Basis</th>
+        {usageFields.map(([key,label])=><th key={key} scope="col">{label}</th>)}</tr></thead>
+      <tbody>{usage.sessionRows.map(row=><tr key={row.id}>
+        <th scope="row">{row.id}<small className="row-meta">{row.attemptIds.length} linked attempts</small></th>
+        <td>{row.basis}{row.receiptId&&<small className="row-meta">Source event {row.receiptId}</small>}</td>
+        {usageFields.map(([key])=><td key={key}>{row.observed[key]?.toLocaleString()??'Unavailable'}</td>)}
+      </tr>)}</tbody>
+    </table></div>}
     <TaskTokenAccounting rows={tokens}/>
+    {usage.referencePrice.attempts.length>0&&<div className="analytics-table"><table>
+      <caption>OpenAI API reference estimates for {usage.referencePrice.attempts.length} of {usage.coverage.attempts} attempts. {openAIReferenceBasis}</caption>
+      <thead><tr><th scope="col">Attempt</th><th scope="col">Pricing source</th><th scope="col">Rates per 1M tokens</th><th scope="col">Estimate</th></tr></thead>
+      <tbody>{usage.referencePrice.attempts.map(row=><tr key={row.attemptId}>
+        <th scope="row">{row.attemptNumber ?? row.attemptId}</th>
+        <td><a href={row.source} target="_blank" rel="noreferrer">{row.model}</a><small className="row-meta">Retrieved {new Date(row.retrievedAt).toLocaleString()}</small></td>
+        <td>{formatReferenceCost(row.rate.input)} input · {formatReferenceCost(row.rate.cachedInput)} cached · {formatReferenceCost(row.rate.output)} output</td>
+        <td>{formatReferenceCost(row.usd)}</td>
+      </tr>)}</tbody>
+    </table></div>}
     <h3>Recorded measurements</h3>
     {measurements.length ? <>
       <div className="analytics-table"><table>

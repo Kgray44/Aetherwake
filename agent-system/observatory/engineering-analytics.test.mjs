@@ -212,6 +212,42 @@ test('class throughput includes failed attempts and withholds ratios for incompl
   assert.equal(query(records, [...events,interrupted]).tokensPerVerifiedTask, null);
 });
 
+test('loaded attempt totals select each receipt once while daily trends retain CLI scope', () => {
+  const repo='Kgray44/Aetherwake';
+  const rows=[{...task,repository:repo},{...attempt,repository:repo},
+    {...task,id:'second',repository:repo},{...attempt,id:'second-attempt',task_id:'second',repository:repo},
+    {...attempt,id:'uncovered',task_id:'second',repository:repo}];
+  const source=(name,unit,value,producer)=>({...obs(name,unit,value),source:producer});
+  const cli=[
+    event('start','cli','span_start','implementation',0),
+    event('turn','cli','measurement','implementation',1,[
+      source('provider_input_tokens','tokens',30,'codex_exec_json_turn_completed'),
+      source('provider_output_tokens','tokens',10,'codex_exec_json_turn_completed'),
+    ]),
+    event('end','cli','span_end','implementation',2,[
+      source('provider_core_usage_complete','boolean',1,'codex_exec_jsonl'),
+      source('provider_usage_recorded_turn_count','count',1,'codex_exec_jsonl'),
+    ]),
+  ].map(item=>({...item,repository:repo}));
+  const receipt=(id,task_id,attempt_id)=>({
+    ...event(id,'app','measurement','implementation',3,[['total',90],['input',80],['cached_input',60],['output',10]]
+      .map(([field,value])=>({...source('provider_'+field+'_tokens','tokens',value,'codex_app_server_token_usage_updated'),
+        method:'fresh_thread_total'}))),task_id,attempt_id,repository:repo,
+  });
+  const app=receipt('app-second','second','second-attempt');
+  const wrongRevision={...receipt('wrong','second','uncovered'),revision:'b'.repeat(40)};
+  const {tokenAccounting,attemptReceiptAccounting:usage}=buildEngineeringAnalytics({
+    records:rows,events:[...cli,receipt('overlap','task','attempt'),app,{...app},wrongRevision],now,
+  });
+  assert.equal(usage.totals.tokens.totalTokens,130);
+  assert.equal(usage.totals.appServerReceipts,1);
+  assert.equal(usage.totals.attemptsWithTotals,2);
+  assert.equal(usage.totals.attempts,3);
+  assert.equal(usage.byTask.find(row=>row.taskId==='second').totals.tokens.uncachedInputTokens,20);
+  assert.equal(usage.billing,'Unknown');
+  assert.equal(tokenAccounting.daily.at(-1).observed.totalTokens,40);
+});
+
 test('paired experiments retain failed attempts and require complete, verified matched outcomes', () => {
   const repository = 'example/repo';
   const makeTask = (id, state = 'accepted') => ({

@@ -5,17 +5,23 @@ const digestPattern = /^[a-f0-9]{64}$/;
 const bytes = new TextEncoder();
 const limit = 2 * MAX_SYNC_BYTES;
 const maxRows = 24;
-const maxNamespaceRows = 8;
+const maxVerificationNamespaceRows = 8;
 
 export async function sha256(value) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.encode(value))),
     b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function telemetryBaseline(db, owner, namespace, id) {
-  const row = await db.prepare('SELECT digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? AND task_id = ?')
+async function readTelemetry(db, owner, namespace, id) {
+  const row = await db.prepare('SELECT digest, received_at, payload, event_receipt_batches FROM task_telemetry WHERE owner_id = ? AND namespace = ? AND task_id = ?')
     .bind(owner, namespace, id).first();
-  return row ? { digest: row.digest, received_at: row.received_at, projection: JSON.parse(row.payload) } : null;
+  return row ? { digest: row.digest, received_at: row.received_at, projection: JSON.parse(row.payload),
+    eventReceiptBatches: JSON.parse(row.event_receipt_batches) } : null;
+}
+
+export async function telemetryBaseline(db, owner, namespace, id) {
+  const baseline = await readTelemetry(db, owner, namespace, id);
+  return baseline && { digest: baseline.digest, received_at: baseline.received_at, projection: baseline.projection };
 }
 
 const fail = (status, error) => ({ status, body: { error } });
@@ -26,7 +32,7 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
       !(body.records.length || body.events.length)) {
     return fail(400, 'Invalid telemetry update');
   }
-  const existing = await telemetryBaseline(db, owner, namespace, id);
+  const existing = await readTelemetry(db, owner, namespace, id);
   let payload, projection;
   try {
     const incoming = validateProjection({
@@ -55,24 +61,34 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
     return fail(409, 'Telemetry baseline changed or update is older');
   }
   const receivedAt = new Date().toISOString();
+  const previousEventCount = existing?.projection.events.length ?? 0;
+  const batches = existing?.eventReceiptBatches ?? [];
+  // Immutable events retain their positions. Store explicit ends so an older
+  // worker can append events without extending the previous receipt.
+  const eventCount = projection.events.length;
+  const eventReceiptBatches = JSON.stringify(eventCount > previousEventCount
+    ? [...batches, [previousEventCount, eventCount, receivedAt]] : batches);
   const stored = existing
-    ? await db.prepare(`UPDATE task_telemetry SET digest = ?, received_at = ?, payload = ?
+    ? await db.prepare(`UPDATE task_telemetry SET digest = ?, received_at = ?, payload = ?, event_receipt_batches = ?
         WHERE owner_id = ? AND namespace = ? AND task_id = ? AND digest = ?
-          AND LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)))
+          AND LENGTH(CAST(? AS BLOB)) + LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)) + LENGTH(CAST(event_receipt_batches AS BLOB)))
             FROM task_telemetry WHERE owner_id = ? AND namespace = ? AND task_id <> ?), 0) <= ?`)
-      .bind(digest, receivedAt, payload, owner, namespace, id, body.base, payload, owner, namespace, id, limit).run()
-    : await db.prepare(`INSERT OR IGNORE INTO task_telemetry (owner_id, namespace, task_id, digest, received_at, payload)
-        SELECT ?, ?, ?, ?, ?, ? WHERE
+      .bind(digest, receivedAt, payload, eventReceiptBatches, owner, namespace, id, body.base,
+        payload, eventReceiptBatches, owner, namespace, id, limit).run()
+    : await db.prepare(`INSERT OR IGNORE INTO task_telemetry (owner_id, namespace, task_id, digest, received_at, payload, event_receipt_batches)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE
           (SELECT COUNT(*) FROM task_telemetry WHERE owner_id = ?) < ? AND
           (SELECT COUNT(*) FROM task_telemetry WHERE owner_id = ? AND namespace = ?) < ? AND
-          LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)))
+          LENGTH(CAST(? AS BLOB)) + LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)) + LENGTH(CAST(event_receipt_batches AS BLOB)))
             FROM task_telemetry WHERE owner_id = ? AND namespace = ?), 0) <= ?`)
-      .bind(owner, namespace, id, digest, receivedAt, payload, owner, maxRows,
-        owner, namespace, maxNamespaceRows, payload, owner, namespace, limit).run();
+      .bind(owner, namespace, id, digest, receivedAt, payload, eventReceiptBatches, owner, maxRows,
+        owner, namespace, namespace === 'live' ? maxRows : maxVerificationNamespaceRows,
+        payload, eventReceiptBatches, owner, namespace, limit).run();
   if (stored.meta.changes !== 1) {
-    const after = await telemetryBaseline(db, owner, namespace, id);
+    const after = await readTelemetry(db, owner, namespace, id);
     if (after?.digest === digest) return { status: 200, body: receipt(after) };
-    return fail(409, 'Concurrent update or private telemetry storage limit reached');
+    if (!after || after.digest === existing?.digest) return fail(413, 'Private Task telemetry storage limit reached');
+    return fail(409, 'Concurrent telemetry update. Read the current baseline and retry.');
   }
   return { status: 200, body: receipt({ digest, received_at: receivedAt, projection }) };
 }
@@ -80,6 +96,18 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
 function receipt({ digest, received_at, projection }) {
   return { digest, received_at, generated_at: projection.generated_at, records: projection.records.length, events: projection.events.length };
 }
+
+function eventReceipts(projection, batches) {
+  const receipts = [];
+  for (const [start, end, receivedAt] of batches) {
+    for (let index = start; index < end; index++) {
+      receipts.push([eventKey(projection.events[index]), receivedAt]);
+    }
+  }
+  return Object.fromEntries(receipts);
+}
+
+const scopedEventKey = event => JSON.stringify([event.task_id, eventKey(event)]);
 
 export function combinedTelemetry(legacy, rows) {
   const records = new Map();
@@ -89,9 +117,10 @@ export function combinedTelemetry(legacy, rows) {
   for (const row of rows) {
     const projection = JSON.parse(row.payload);
     const source = receipt({ ...row, projection });
-    sources.push({ task_id: row.task_id, ...source });
+    sources.push({ task_id: row.task_id, ...source,
+      event_receipts: eventReceipts(projection, JSON.parse(row.event_receipt_batches ?? '[]')) });
     for (const record of projection.records) if (!records.has(recordKey(record))) records.set(recordKey(record), record);
-    for (const event of projection.events) if (!events.has(eventKey(event))) events.set(eventKey(event), event);
+    for (const event of projection.events) if (!events.has(scopedEventKey(event))) events.set(scopedEventKey(event), event);
     if (projection.generated_at > latest) latest = projection.generated_at;
   }
   if (legacy) {
@@ -100,7 +129,7 @@ export function combinedTelemetry(legacy, rows) {
       if (!syncedTasks.has(record.record_type === 'task' ? record.id : record.task_id) &&
           !records.has(recordKey(record))) records.set(recordKey(record), record);
     }
-    for (const event of legacy.events) if (!syncedTasks.has(event.task_id) && !events.has(eventKey(event))) events.set(eventKey(event), event);
+    for (const event of legacy.events) if (!syncedTasks.has(event.task_id) && !events.has(scopedEventKey(event))) events.set(scopedEventKey(event), event);
   }
   if (!latest) return null;
   return { authority: 'local-task-records', generated_at: latest, records: [...records.values()], events: [...events.values()], sources,

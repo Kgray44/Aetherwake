@@ -29,6 +29,31 @@
       "type": "string",
       "minLength": 1
     },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    },
+    "development_note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "text"],
+      "properties": {
+        "category": { "enum": ["finding", "warning", "follow_up", "decision"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "activity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source", "operation_id", "outcome"],
+      "properties": {
+        "kind": { "enum": ["commit", "review", "test", "benchmark", "verification", "deployment", "deployment_validation", "executor_session"] },
+        "source": { "enum": ["github_actions", "codex", "sites", "verification_runner", "local_runner", "external"] },
+        "operation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "outcome": { "enum": ["started", "completed", "succeeded", "failed", "cancelled", "inconclusive"] },
+        "artifact_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "trace_id": {
       "type": "string",
       "minLength": 1
@@ -62,6 +87,8 @@
     },
     "kind": {
       "enum": [
+        "engineering_activity",
+        "development_note",
         "lifecycle",
         "span_start",
         "span_end",
