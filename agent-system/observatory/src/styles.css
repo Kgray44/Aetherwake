@@ -114,7 +114,7 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 }
 .task-filters label, .task-filter, .task-editor-fields, .task-editor-admission { display: grid; gap: .45rem; min-width: 0; }
 .task-filters label { color: var(--muted); font-size: .8rem; }
-.task-filters select {
+.task-filters select, .task-filters input[type="date"] {
   width: 100%;
   min-height: 2.6rem;
   border: 1px solid var(--border);
@@ -269,6 +269,22 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 
 .task-timeline-grid { display:grid; grid-template-columns:minmax(0,1.34fr) minmax(0,1fr); gap:clamp(1rem,2.5vw,2.5rem); align-items:start; }
 .task-timeline-toolbar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.7rem; margin-bottom:1.05rem; }
+.task-timeline-search { display:flex; gap:.65rem; max-width:42rem; margin-bottom:.85rem; }
+.task-timeline-search .search { min-width:0; }
+.task-timeline-search .search svg { flex:none; }
+.task-timeline-search .search:focus-within { border-color:var(--accent); }
+.task-timeline-search .quiet-button { display:inline-flex; align-items:center; gap:.45rem; white-space:nowrap; }
+.task-timeline-search .quiet-button:is(:hover,[aria-expanded="true"]) { color:var(--accent); border-color:#4d8392; }
+.task-timeline .task-timeline-filter-fields {
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr));
+  margin-bottom:.75rem;
+  padding:.8rem;
+  border:1px solid var(--border);
+  border-radius:.5rem;
+  background:var(--panel);
+}
+.task-timeline-filter-fields[hidden] { display:none; }
+.task-timeline .task-timeline-filter-fields label:first-child { grid-column:auto; }
 .task-timeline-filters { display:flex; gap:.4rem; flex-wrap:wrap; }
 .executor-heartbeat { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; min-width:0; padding:.38rem .6rem; border:1px solid #355260; border-radius:6px; color:var(--muted); background:#10212c; font-size:.78rem; }
 .executor-heartbeat .live-dot { margin:0; }

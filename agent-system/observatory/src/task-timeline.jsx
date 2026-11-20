@@ -1,6 +1,6 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {motion,useReducedMotion} from 'motion/react';
-import {Activity, ArrowRight, CheckCircle2, ClipboardCheck, FileCheck2, Flag, GitCommitHorizontal} from 'lucide-react';
+import {Activity, ArrowRight, CheckCircle2, ClipboardCheck, FileCheck2, Flag, GitCommitHorizontal, Search, SlidersHorizontal} from 'lucide-react';
 import {buildTaskTimeline,executorHeartbeat} from './task-timeline.mjs';
 import {taskActivityHref} from './github-activity.mjs';
 import {taskEngineeringActivity,taskLinkedHref} from './task-activity.mjs';
@@ -41,11 +41,13 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
     [task,attempts,events,audits,evidence,records,known,telemetrySource]);
   const [filter,setFilter]=useState('All');
   const [criteria,setCriteria]=useState({});
+  const [filtersOpen,setFiltersOpen]=useState(false);
   const [selected,setSelected]=useState('');
   const [limit,setLimit]=useState(14);
   const focusDetails=useRef(false);
   const heading=useRef(null);
   const query=criteria.query?.trim().toLowerCase();
+  const activeFilters=Object.entries(criteria).filter(([field,value])=>field!=='query'&&value).length;
   const visible=items.filter(item=>{
     const timestamp=Date.parse(item.at);
     return (filter==='All'||item.type===filter) && filters.every(([field])=>!criteria[field]||item[field]===criteria[field]) &&
@@ -93,9 +95,19 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
       </nav>
       <ExecutorHeartbeat taskId={task.id} attempt={executorAttempt} state={executorState} audits={audits}/>
     </div>
-    <div className="form-grid task-timeline-filter-fields">
-      <label>Search timeline<input type="search" value={criteria.query??''} onChange={event=>updateCriterion('query',event.target.value)}/></label>
-      {filters.map(([field,label])=><label key={field}>{label}<select value={criteria[field]??''}
+    <div className="task-timeline-search">
+      <label className="search">
+        <Search size={16} aria-hidden="true"/>
+        <input type="search" aria-label="Search timeline" placeholder="Search timeline" value={criteria.query??''}
+          onChange={event=>updateCriterion('query',event.target.value)}/>
+      </label>
+      <button type="button" className="quiet-button" aria-expanded={filtersOpen} aria-controls="timeline-filter-fields"
+        onClick={()=>setFiltersOpen(open=>!open)}>
+        <SlidersHorizontal size={15} aria-hidden="true"/> Filters{activeFilters>0&&` (${activeFilters})`}
+      </button>
+    </div>
+    <div className="task-filters task-timeline-filter-fields" id="timeline-filter-fields" hidden={!filtersOpen}>
+      {filters.map(([field,label])=><label className="task-filter" key={field}>{label}<select value={criteria[field]??''}
         onChange={event=>updateCriterion(field,event.target.value)}><option value="">All</option>
         {[...new Set(items.map(item=>item[field]).filter(Boolean))].sort().map(value=>
           <option key={value} value={value}>{field==='attemptId'?'Attempt '+(attempts.find(attempt=>attempt.id===value)?.attempt_number??value):human(value)}</option>)}
@@ -103,6 +115,10 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
       <label>From<input type="date" value={criteria.from??''} onChange={event=>updateCriterion('from',event.target.value)}/></label>
       <label>Through<input type="date" value={criteria.through??''} onChange={event=>updateCriterion('through',event.target.value)}/></label>
     </div>
+    {(query||activeFilters>0)&&<div className="task-result-bar">
+      <span role="status">{visible.length} of {items.length} events</span>
+      <button type="button" className="text-button" onClick={()=>{setCriteria({});setLimit(14);}}>Clear filters</button>
+    </div>}
     <div className="task-timeline-grid">
       <div>
         {visible.length===0 ? <p>{items.length?'No events match these filters.':'No dated events are available for this Task.'}</p> :

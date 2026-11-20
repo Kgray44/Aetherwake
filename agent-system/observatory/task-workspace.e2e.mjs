@@ -446,6 +446,14 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await timeline.getByText('Formal Task Engine attempts',{exact:true}).waitFor();
   await timeline.getByText('Known executor sessions',{exact:true}).waitFor();
   const search=timeline.getByRole('searchbox',{name:'Search timeline'});
+  const filterToggle=timeline.getByRole('button',{name:'Filters',exact:true});
+  assert.equal(await timeline.getByLabel('Outcome',{exact:true}).isVisible(),false);
+  await filterToggle.click();
+  await timeline.getByLabel('Through',{exact:true}).fill('2025-12-31');
+  await timeline.getByText('No events match these filters.').waitFor();
+  await timeline.getByRole('button',{name:'Filters (1)',exact:true}).click();
+  await timeline.getByRole('button',{name:'Clear filters'}).click();
+  await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await search.fill('no such timeline event');
   await timeline.getByText('No events match these filters.').waitFor();
   await search.fill('fixture-receipt-trace');
