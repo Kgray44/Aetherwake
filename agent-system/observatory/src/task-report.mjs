@@ -3,7 +3,7 @@ import { buildTaskTimeline } from './task-timeline.mjs';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
-import { activityId, taskActivityHref } from './github-activity.mjs';
+import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 
 const words = value => value.replaceAll('_',' ');
@@ -50,7 +50,7 @@ function allocationBar(part, total) {
   ]}];
 }
 
-export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, coverage, generatedAt}) {
+export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt}) {
   const taskRecords=records.filter(record=>record.task_id===task.id);
   const taskEvents=events.filter(event=>event.task_id===task.id);
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
@@ -66,7 +66,9 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       reported_records:reports.length,
       ...(receipt?{accepted_revision:receipt.revision,...(receipt.at?{reviewed_at:receipt.at}:{}),reviewed_artifact:receipt.uri}:{})};
   });
-  const timeline=buildTaskTimeline({task,attempts:taskAttempts,events:taskEvents,audits:taskAudits,evidence,records:taskRecords});
+  const activity=taskEngineeringActivity({task,canonical,attempts:taskAttempts,audits:taskAudits,evidence,github});
+  const timeline=buildTaskTimeline({task,attempts:taskAttempts,events:taskEvents,audits:taskAudits,evidence,records:taskRecords,
+    engineeringEvents:activity.events,telemetrySource});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
   const tokenAccounting=buildEngineeringAnalytics({records:[task,...taskRecords],events:taskEvents}).tokenAccounting;
@@ -76,16 +78,6 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const latestTokens=tokens.at(-1)?.observed;
   const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
   const desktop=desktopSessionTokens(task.id,taskEvents);
-  const urls=new Set([
-    ...(canonical?.lifecycle.links??[]).map(link=>link.uri),
-    ...(canonical?.lifecycle.evidence??[]).map(link=>link.uri),
-    ...evidence.map(item=>item.artifact?.uri),
-    ...taskAudits.flatMap(item=>[item.reference?.uri,...(item.evidence??[]).map(link=>link.uri)]),
-  ].map(taskActivityHref).filter(Boolean));
-  const linkedActivity=[
-    ...(github?.pulls?.items??[]).filter(item=>urls.has('#pull-requests/'+activityId('pulls',item))),
-    ...(github?.ci?.items??[]).filter(item=>urls.has('#ci-runs/'+activityId('runs',item))),
-  ];
 
   return {
     pageSize:'A4',pageMargins:[44,47,44,46],
@@ -109,6 +101,9 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       {text:coverage??'Snapshot of the Task data available to the Observatory. Times use UTC. Unavailable readings retain their source status.',margin:[0,0,0,7]},
       grid(['Attempts','Trace intervals','Verification records','Owner-reviewed criteria'],
         [[taskAttempts.length,trace.spans.filter(span=>span.complete).length,evidence.length,diagnostics.accepted.size]],['*','*','*','*']),
+      subhead('Known engineering activity'),
+      {text:activity.coverage,style:'muted',margin:[0,0,0,5]},
+      grid(['Scope','Count'],activity.counts,['*','auto']),
       subhead('Attempt coverage in seconds'),
       grid(['Attempt','Elapsed','Measured','Untraced'],diagnostics.coverage.slice(-3).map(row=>[
         row.attemptNumber,...[row.elapsedMs,row.coveredMs,row.untracedMs].map(ms=>(ms/1000).toFixed(2)),
@@ -150,7 +145,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       ...blocks(measurements,item=>words(item.name??'Measurement')),
       section('Evidence ledger and linked engineering activity'),
       ...blocks(evidence,item=>words(item.kind??'Evidence')+'   '+item.id),
-      ...blocks(linkedActivity,item=>item.title??item.name??String(activityId('runs',item))),
+      ...blocks(activity.references,item=>item.label,item=>[['Reference',item.url],['Linked revisions',item.revisions.join(', ')||'Unavailable']]),
       section('Appendix · Task operations'),
       ...blocks(taskAudits.filter(item=>item.kind!=='heartbeat'),item=>(item.at??'Time unavailable')+'  ·  '+words(item.kind??item.type??'Operation')),
       section('Appendix · Heartbeat receipts'),

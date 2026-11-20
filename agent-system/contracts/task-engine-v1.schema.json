@@ -323,7 +323,9 @@
                     "ci_run",
                     "test",
                     "artifact",
-                    "investigation"
+                    "investigation",
+                    "deployment",
+                    "executor_session"
                   ]
                 },
                 "uri": {

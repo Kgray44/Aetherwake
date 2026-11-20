@@ -1,5 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { taskEngineeringActivity } from './src/task-activity.mjs';
+import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
+import { taskReportDefinition } from './src/task-report.mjs';
+
+test('linked work before and after execution is shared by the chronology and report', () => {
+  const task={id:'task_activity',created_at:'2026-01-02T00:00:00Z',title:'Review changes',objective:'Review linked activity'};
+  const session='10000000-0000-4000-8000-000000000001';
+  const revision='a'.repeat(40);
+  const attempt={id:'a1',task_id:task.id,attempt_number:1,executor:'codex',session_id:session,
+    revision,started_at:'2026-01-03T00:00:00Z',finished_at:'2026-01-04T00:00:00Z',state:'failed'};
+  const uri='https://github.com/Kgray44/Aetherwake/pull/42';
+  const run='https://github.com/Kgray44/Aetherwake/actions/runs/23';
+  const canonical={task,lifecycle:{state:'verifying',links:[
+    {kind:'pull_request',uri,revision}, {kind:'pull_request',uri:uri+'/files',revision},
+    {kind:'executor_session',uri:'https://chatgpt.com/c/'+session,revision},
+    {kind:'deployment',uri:'https://example.test/releases/4',revision},
+    {kind:'ci_run',uri:run,revision},
+  ]},attempts:[attempt]};
+  const github={pulls:{observed_at:'2026-01-07T00:00:00Z',items:[
+    {number:42,url:uri,created_at:'2026-01-01T00:00:00Z',merged_at:'2026-01-06T00:00:00Z'},
+    {number:43,revision,created_at:'2026-01-01T00:00:00Z'},
+  ]},ci:{items:[{id:23,url:run,revision:'b'.repeat(40),created_at:'2026-01-03T00:00:00Z'}]}};
+  const activity=taskEngineeringActivity({task,canonical,attempts:[attempt],github});
+  assert.equal(Object.fromEntries(activity.counts)['Formal Task Engine attempts'],1);
+  assert.equal(Object.fromEntries(activity.counts)['Known executor sessions'],1);
+  assert.equal(Object.fromEntries(activity.counts)['Linked pull requests'],1);
+  assert.equal(Object.fromEntries(activity.counts)['Linked engineering operations'],3);
+  assert.deepEqual(activity.events.map(event=>event.id),['github:pull:42:opened','github:pull:42:merged']);
+  const timeline=buildTaskTimeline({task,attempts:[attempt],engineeringEvents:activity.events});
+  assert.equal(timeline[0].id,'github:pull:42:merged');
+  assert.equal(timeline.at(-1).id,'github:pull:42:opened');
+  assert.equal(timeline.find(item=>item.id==='end:a1').outcome,'failed');
+  assert.equal(timeline[0].details.find(([label])=>label==='Snapshot observed')[1],github.pulls.observed_at);
+  const report=JSON.stringify(taskReportDefinition({task,canonical,attempts:[attempt],github}).content);
+  for(const expected of ['Known executor sessions','Pull request #42 merged','https://example.test/releases/4'])
+    assert.ok(report.includes(expected));
+  const empty=taskEngineeringActivity({task,attempts:[attempt],github});
+  assert.equal(Object.fromEntries(empty.counts)['Formal Task Engine attempts'],null);
+  assert.equal(empty.events.length,0);
+});
 import { attemptTraceCoverage } from './src/trace-timeline.mjs';
 import { attemptEvents, dependencyGraph, organizeTasks, overviewTaskResults, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
 
@@ -163,7 +203,6 @@ test('desktop session counters select the latest observed Task reading without s
 });
 
 import { taskActivityHref } from './src/github-activity.mjs';
-import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
 
 test('Task PR and CI references resolve to Observatory routes', () => {
   assert.equal(taskActivityHref('https://github.com/Kgray44/Aetherwake/pull/319/files'), '#pull-requests/319');

@@ -394,6 +394,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await jump.getByRole('button',{name:'Timeline',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
   const timeline=page.getByRole('region',{name:'Task timeline'});
+  await timeline.getByText('Formal Task Engine attempts',{exact:true}).waitFor();
+  await timeline.getByText('Known executor sessions',{exact:true}).waitFor();
+  const search=timeline.getByRole('searchbox',{name:'Search timeline'});
+  await search.fill('no such timeline event');
+  await timeline.getByText('No events match these filters.').waitFor();
+  await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();
   await timeline.getByRole('button',{name:/Task submitted/}).waitFor();

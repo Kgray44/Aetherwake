@@ -197,7 +197,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         </label>)}
       </>}
       {action === 'associate' && <>
-        <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation']
+        <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session']
           .map(kind => <option key={kind} value={kind}>{humanize(kind)}</option>)}</select></label>
         <label>Evidence URL <input name="uri" type="url" required maxLength={1000}/></label>
         <label>Revision <input name="revision" pattern="[a-f0-9]{40}" defaultValue={candidateRevision ?? task.revision} required/></label>

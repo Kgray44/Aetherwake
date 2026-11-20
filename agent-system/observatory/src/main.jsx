@@ -265,6 +265,7 @@ const reviewedCriteria=current?ownerReviewByCriterion(canonical?.task??current,c
 const detailState=canonical?.lifecycle.state??summaries.get(current?.id)?.lifecycle.state??current?.state;
 const taskEvents=demo||!current?[]:(execution?.events??[]).filter(event=>event.task_id===current.id);
 const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyHistory?.receipts:[])??[];
+const taskTelemetrySource=demo||!current?null:execution?.sources?.find(source=>source.task_id===current.id);
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
 const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
 const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
@@ -365,7 +366,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   ready={!demo&&hasLiveFeed} ui={githubUi}/></Suspense>}
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 <TaskReportExport key={current.id} disabled={!demo&&(!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
-  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,records,events:taskEvents,audits:taskAudits,github:demo?null:github,
+  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
@@ -381,7 +382,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   {engineTask.error&&<p role="alert">{engineTask.error}</p>}
   {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} workerAccess={workerAccess} publishedIntake={publishedIntake} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
 </Panel></Rise>}
-<Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
+<Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} canonical={canonical} github={demo?null:github} telemetrySource={taskTelemetrySource} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
   executorAttempt={canonical?.attempts.at(-1)} executorState={canonical?.lifecycle.state}
   evidence={related(current.id,'evidence')} records={records} onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/></Panel></Rise>
 {canonical&&hasLiveFeed&&!publishedIntake&&<Rise><Panel id="task-editor" title="Task editor">
