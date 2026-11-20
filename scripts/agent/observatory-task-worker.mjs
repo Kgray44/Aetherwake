@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
 
@@ -90,6 +91,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
   interval = 12_000 }) {
   const { task, attempt, lease } = claim;
+  if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
+    ({ onTelemetryStart, onUsage, onTelemetryEnd } = createClaimTelemetryHooks(workspace));
+  }
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
   const heartbeats = new AbortController();

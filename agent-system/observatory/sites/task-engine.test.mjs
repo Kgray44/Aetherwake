@@ -9,9 +9,11 @@ import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
-import { taskOperation } from './task-engine.mjs';
+import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
 import { runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { readJournal } from '../../../scripts/agent/journal.mjs';
+import { buildEngineeringAnalytics } from '../src/engineering-analytics.mjs';
 
 const rev = 'a'.repeat(40);
 const fields = name => ({
@@ -170,12 +172,20 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   const run = (claim, parallel) => runClaim({
     claim, send, workspace: workspaces.get(claim.task.id), signal: AbortSignal.timeout(15_000),
     admitStorage: async () => {},
-    onTelemetryStart: ({ attempt }) => observed.push({ type: 'start', id: attempt.id }),
-    onUsage: ({ attempt, measurements }) => observed.push({ type: 'usage', id: attempt.id, measurements }),
-    onTelemetryEnd: ({ attempt, measurements, state }) => observed.push({ type: 'end', id: attempt.id, measurements, state }),
+    ...(parallel ? {
+      onTelemetryStart: ({ attempt }) => observed.push({ type: 'start', id: attempt.id }),
+      onUsage: ({ attempt, measurements }) => observed.push({ type: 'usage', id: attempt.id, measurements }),
+      onTelemetryEnd: ({ attempt, measurements, state }) => observed.push({ type: 'end', id: attempt.id, measurements, state }),
+    } : {}),
     execute: async ({ cwd, task, onSession, onUsage }) => {
-      onSession(crypto.randomUUID());
-      await onUsage([{ name: 'test_observation' }]);
+      const frames = [
+        {type:'thread.started',thread_id:crypto.randomUUID()},
+        {type:'turn.started'},
+        {type:'turn.completed',usage:{input_tokens:40,output_tokens:6,cached_input_tokens:10,private:'discard me'}},
+      ];
+      const measurements = await observeCodexStream(
+        Readable.from(frames.map(frame => JSON.stringify(frame) + '\n')), {onSession,onUsage}
+      );
       if (parallel) {
         entered++;
         if (entered === 2) release();
@@ -184,14 +194,14 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
       await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id], { cwd });
       await git(cwd, 'add', 'artifact.txt');
       await git(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'artifact');
-      return { ok: true, measurements: [{ name: 'test_summary' }] };
+      return { ok: true, measurements };
     },
   });
   await Promise.all([run(first, true), run(second, true)]);
   assert.deepEqual(observed.filter(item => item.id === first.attempt.id).map(item => item.type), ['start', 'usage', 'end']);
   const end = observed.find(item => item.id === first.attempt.id && item.type === 'end');
   assert.equal(end.state, 'completed');
-  assert.equal(end.measurements[0].name, 'test_summary');
+  assert.equal(end.measurements.find(item => item.name === 'provider_core_usage_complete').value, 1);
   assert.equal((await get(c)).lifecycle.state, 'verifying');
   assert.equal((await get(b)).lifecycle.state, 'blocked');
   const candidate = await get(a);
@@ -208,6 +218,16 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   const readback = await get(b);
   assert.equal(readback.lifecycle.state, 'verifying');
   assert.equal(await git(workspaces.get(b.task.id), 'show', readback.attempts[0].candidate_revision + ':artifact.txt'), b.task.id);
+  const journal = join(workspaces.get(b.task.id),'.git','agent-harness','claimed-execution.journal');
+  const events = await readJournal(journal);
+  assert.equal(events.length, 3);
+  assert.equal(events.every(event => event.revision === downstream.attempt.revision), true);
+  assert.doesNotMatch(JSON.stringify(events), /discard me/);
+  const records = [readback.task, taskAttemptRecord(readback.task, readback.attempts[0])];
+  const analytics = buildEngineeringAnalytics({records,events}).tokenAccounting;
+  assert.equal(analytics.byAttempt[0].observed.totalTokens, 46);
+  assert.equal(analytics.byAttempt[0].revision, base);
+  assert.equal(analytics.byAttempt[0].coverage, 'partial');
 });
 
 test('one bounded Codex stream delivers session identity and sanitized usage', async () => {
