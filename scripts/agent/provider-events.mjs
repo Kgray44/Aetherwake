@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 
 // Codex exec JSONL only. The invocation owner explicitly selects this adapter.
 // https://github.com/openai/codex/blob/rust-v0.153.3/sdk/typescript/src/events.ts
@@ -54,6 +55,9 @@ export async function observeCodexStream(stream, { onUsage, onSession, forward, 
   let errors = 0;
   let commandEvents = 0;
   let failedCommands = 0;
+  let repeatedCommands = 0;
+  let observedCommandOutputBytes = 0;
+  const commandFingerprints = new Set();
   let fileEvents = 0;
   let mcpEvents = 0;
   let recorded = 0;
@@ -124,6 +128,14 @@ export async function observeCodexStream(stream, { onUsage, onSession, forward, 
           case 'command_execution':
             commandEvents++;
             if (event.item.status === 'failed') failedCommands++;
+            if (typeof event.item.aggregated_output === 'string') {
+              observedCommandOutputBytes += Buffer.byteLength(event.item.aggregated_output);
+            }
+            if (typeof event.item.command === 'string' && commandFingerprints.size < 1024) {
+              const fingerprint = createHash('sha256').update(event.item.command).digest('hex');
+              if (commandFingerprints.has(fingerprint)) repeatedCommands++;
+              commandFingerprints.add(fingerprint);
+            }
             break;
           case 'file_change':
             fileEvents++;
@@ -178,6 +190,8 @@ export async function observeCodexStream(stream, { onUsage, onSession, forward, 
     observation('error_event_count', errors),
     observation('command_completed_event_count', commandEvents),
     observation('command_failed_event_count', failedCommands),
+    observation('repeated_observed_command_count', repeatedCommands),
+    observation('observed_command_output_bytes', observedCommandOutputBytes, 'bytes'),
     observation('file_change_completed_event_count', fileEvents),
     observation('mcp_tool_completed_event_count', mcpEvents)
   ];

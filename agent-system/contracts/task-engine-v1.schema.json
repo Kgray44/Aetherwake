@@ -556,6 +556,16 @@
         }
       ]
     },
+    "executionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "source"],
+      "properties": {
+        "provider": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,100}$" },
+        "model": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,100}$" },
+        "source": { "const": "codex_app_server_thread_start" }
+      }
+    },
     "report": {
       "type": "object",
       "properties": {
@@ -569,6 +579,9 @@
         },
         "session_id": {
           "$ref": "#/$defs/uuid"
+        },
+        "execution_identity": {
+          "$ref": "#/$defs/executionIdentity"
         },
         "branch": {
           "type": "string",
@@ -711,6 +724,9 @@
         },
         "resume_session_id": {
           "$ref": "#/$defs/uuid"
+        },
+        "execution_identity": {
+          "$ref": "#/$defs/executionIdentity"
         },
         "state": {
           "enum": [

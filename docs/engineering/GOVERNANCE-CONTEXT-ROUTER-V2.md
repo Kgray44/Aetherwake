@@ -126,3 +126,16 @@ When preparing these implementation tasks, use explicit task/domain signals or r
 **Character comparison definition:** `fullRoutedCharacters` includes all full selected charter sources **plus any one-hop normative reference lines outside them**. The same lines are included in `selectedCharacters`; therefore `--full` has zero reported reduction. Neither figure is a tokenizer measurement or a quality metric. Historical benchmark numbers in this document refer to the November 1 source snapshot and must not be reused as current results after the FI amendments.
 
 Required verification for routing edits: run `node scripts/governance-router.mjs --validate`, `node --test tests/governance-router.test.mjs tests/governance-context.test.mjs`, `node scripts/benchmark-governance-context.mjs`, and `node scripts/evaluate-governance-engineering.mjs --strict`. Add new FI evaluation scenarios rather than assuming task-vocabulary additions prove full semantic coverage.
+
+## Compact Markdown output
+
+Add `--compact` when sending the generated Markdown to a model or human reader.
+The compact formatter lists each source document, authority and document hash once,
+then cites its one-based lines by source key. It preserves verbatim selected
+sections, supplemental requirements, dependencies, path provenance and warnings.
+Use the existing default Markdown or `--json` when a consumer needs the original
+format or individual supplemental requirement hashes.
+
+The existing benchmark reports UTF-8 bytes for both Markdown representations of
+the same routed packages. It measures serialized input size. Provider-reported
+token usage, costs and engineering outcomes require separate trials.

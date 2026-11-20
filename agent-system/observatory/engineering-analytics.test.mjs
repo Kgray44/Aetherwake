@@ -211,3 +211,53 @@ test('class throughput includes failed attempts and withholds ratios for incompl
   };
   assert.equal(query(records, [...events,interrupted]).tokensPerVerifiedTask, null);
 });
+
+test('paired experiments retain failed attempts and require complete, verified matched outcomes', () => {
+  const repository = 'example/repo';
+  const makeTask = (id, state = 'accepted') => ({
+    ...task, id, repository, state, owner_acceptance:state === 'accepted' ? 'accepted' : 'not_reviewed',
+    acceptance:{profile_id:'backend-v1',criteria:[{id:'test'}]},
+  });
+  const makeAttempt = (id, taskId, state, number) => ({
+    ...attempt,id,repository,task_id:taskId,state,attempt_number:number
+  });
+  const makeEvents = (attemptRow, input, output) => {
+    const receipt = (name,unit,value) => ({...obs(name,unit,value),source:'codex_exec_jsonl'});
+    const token = (name,value) => ({...obs(name,'tokens',value),source:'codex_exec_json_turn_completed'});
+    const id = attemptRow.id;
+    return [
+      event(id+'-start',id,'span_start','implementation',1),
+      event(id+'-usage',id,'measurement','implementation',2,[token('provider_input_tokens',input),token('provider_output_tokens',output)]),
+      event(id+'-end',id,'span_end','implementation',3,[
+        receipt('provider_core_usage_complete','boolean',1),receipt('provider_usage_recorded_turn_count','count',1)
+      ])
+    ].map(row => ({...row,repository,task_id:attemptRow.task_id,attempt_id:id}));
+  };
+  const b = makeTask('baseline'), c = makeTask('candidate');
+  const failed = makeAttempt('baseline-failed',b.id,'failed',1);
+  const baseline = makeAttempt('baseline-success',b.id,'succeeded',2);
+  const candidate = makeAttempt('candidate-success',c.id,'succeeded',1);
+  const attempts = [failed, baseline, candidate];
+  const events = [...makeEvents(failed,10,5),...makeEvents(baseline,60,25),...makeEvents(candidate,45,15)];
+  const pair = {id:'fix-fixture',baselineTaskId:b.id,candidateTaskId:c.id,workloadDigest:'a'.repeat(64),difficulty:'moderate'};
+  const query = (tasks, trace = events, pairs = [pair]) => buildEngineeringAnalytics({
+    records:[...tasks,...attempts],events:trace,now,experimentPairs:pairs
+  }).experiments;
+  const complete = query([b,c]);
+  assert.equal(complete.schemaVersion,1);
+  assert.equal(complete.pairs[0].status,'measured');
+  assert.equal(complete.pairs[0].baseline.failedAttempts,1);
+  assert.equal(complete.pairs[0].baseline.totalTokens,100);
+  assert.equal(complete.pairs[0].candidate.totalTokens,60);
+  assert.equal(complete.pairs[0].tokenReductionPercent,40);
+  assert.equal(complete.pairs[0].baseline.costUsd,null);
+  assert.equal(complete.pairs[0].attemptWindowDeltaMs,0);
+  const failedVerification = query([b,makeTask(c.id,'failed')]).pairs[0];
+  assert.equal(failedVerification.status,'quality_regression');
+  assert.equal(failedVerification.tokenReductionPercent,null);
+  assert.equal(query([b,c],events.slice(0,-1)).pairs[0].status,'incomplete');
+  assert.equal(query([b,{...c,revision:'b'.repeat(40)}]).pairs[0].status,'unmatched');
+  const changedScope = {...c,acceptance:{...c.acceptance,profile_id:'other'}};
+  assert.equal(query([b,changedScope]).pairs[0].status,'unmatched');
+  assert.throws(() => query([b,c],events,[pair,{...pair,id:'duplicate'}]), /reused/);
+});

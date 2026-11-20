@@ -50,16 +50,20 @@ async function trackedSources(root, inputs) {
   async function readBatch(entries) {
     const args = ["--", ...entries.map(path => path.rel)];
     const tracked = new Set(git(root, "--literal-pathspecs", "ls-files", "-z", ...args).split("\0"));
-    for (const path of entries) {
-      if (!tracked.has(path.rel)) continue;
-      try {
-        const actual = await realpath(path.full);
-        safePath(root, relative(root, actual));
-        if (!(await stat(path.full)).isFile()) continue;
-        sources.set(path.rel, { ...path, bytes: await readFile(path.full), dirty: false });
-      } catch {
-        // Missing, inaccessible, or out-of-repository sources remain unverified.
-      }
+    const trackedEntries = entries.filter(path => tracked.has(path.rel));
+    // Bound concurrent reads and retain only the digest. Several requirements
+    // and owner references can cite the same bytes within this readback.
+    for (let offset = 0; offset < trackedEntries.length; offset += 8) {
+      await Promise.all(trackedEntries.slice(offset, offset + 8).map(async path => {
+        try {
+          const actual = await realpath(path.full);
+          safePath(root, relative(root, actual));
+          if (!(await stat(actual)).isFile()) return;
+          sources.set(path.rel, { rel: path.rel, digest: sha(await readFile(actual)), dirty: false });
+        } catch {
+          // Missing, inaccessible, or out-of-repository sources remain unverified.
+        }
+      }));
     }
     const dirty = new Set(git(root, "--literal-pathspecs", "status", "--porcelain=v1", "-z",
       "--no-renames", "--untracked-files=no", ...args).split("\0").map(entry => entry.slice(3)));
@@ -108,7 +112,7 @@ export async function createSnapshot({ root = process.cwd(), task, repository, o
     if (isLocalSource(ref)) {
       const file = tracked(ref.uri);
       if (file) {
-        result.revision = sha(file.bytes);
+        result.revision = file.digest;
         if (file.dirty) warnings.push("Requirement has uncommitted changes: " + file.rel);
       }
       else {
@@ -129,7 +133,7 @@ export async function createSnapshot({ root = process.cwd(), task, repository, o
       continue;
     }
     if (file.dirty) warnings.push("Owner source has uncommitted changes: " + file.rel);
-    components.push({ name, owner_ref: { kind: "git", uri: file.rel, revision: sha(file.bytes) } });
+    components.push({ name, owner_ref: { kind: "git", uri: file.rel, revision: file.digest } });
   }
   if (!components.length) warnings.push("No verified component-owner sources supplied; ownership must not be inferred");
   const current = task.revision === revision && git(root, "rev-parse", "HEAD").trim() === revision;
@@ -158,7 +162,7 @@ export async function checkFreshness(snapshot, task, revision, root = process.cw
   const tracked = await trackedSources(root, refs.map(ref => ref.uri));
   for (const ref of refs) {
     const file = tracked(ref.uri);
-    if (!file || file.dirty || sha(file.bytes) !== ref.revision) return false;
+    if (!file || file.dirty || file.digest !== ref.revision) return false;
   }
   return git(root, "rev-parse", "HEAD").trim() === revision;
 }

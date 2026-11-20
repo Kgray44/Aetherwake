@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {canonical} from './evidence-trust.mjs';
 const schema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/v1.schema.json',import.meta.url),'utf8'));
 const traceSchema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/trace-v1.schema.json',import.meta.url),'utf8'));
-const supported=new Set(['$schema','$defs','$ref','title','description','type','const','enum','oneOf','properties','required','additionalProperties','items','minItems','uniqueItems','minLength','pattern','format','minimum','maximum']);
+const supported=new Set(['$schema','$defs','$ref','title','description','type','const','enum','oneOf','properties','required','additionalProperties','items','minItems','maxItems','uniqueItems','minLength','maxLength','pattern','format','minimum','maximum']);
 function validate(value,s,path='$',depth=0) {
   if(depth>40) return [path+': depth exceeded'];
   const errors=[];
@@ -21,6 +21,7 @@ function validate(value,s,path='$',depth=0) {
   if(s.enum&&!s.enum.some(x=>canonical(x)===canonical(value)))errors.push(path+': enum mismatch');
   if(typeof value==='string') {
     if(s.minLength&&[...value].length<s.minLength)errors.push(path+': too short');
+    if(s.maxLength!==undefined&&[...value].length>s.maxLength)errors.push(path+': too long');
     if(s.pattern&&!new RegExp(s.pattern).test(value))errors.push(path+': pattern mismatch');
     if(s.format==='date-time'&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)||!Number.isFinite(Date.parse(value))))errors.push(path+': invalid date-time');
     if(s.format&&s.format!=='date-time')errors.push(path+': unsupported format');
@@ -29,6 +30,7 @@ function validate(value,s,path='$',depth=0) {
   if(typeof value==='number'&&s.maximum!==undefined&&value>s.maximum)errors.push(path+': above maximum');
   if(Array.isArray(value)) {
     if(s.minItems&&value.length<s.minItems)errors.push(path+': too few items');
+    if(s.maxItems!==undefined&&value.length>s.maxItems)errors.push(path+': too many items');
     if(s.uniqueItems&&new Set(value.map(canonical)).size!==value.length)errors.push(path+': duplicate items');
     if(s.items)value.forEach((v,i)=>errors.push(...validate(v,s.items,path+'['+i+']',depth+1)));
   }

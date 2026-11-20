@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { projectJournal } from '../scripts/agent/export-journal.mjs';
 import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
-import { journalDelivery } from '../scripts/agent/observatory-sync.mjs';
+import { journalDelivery, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
 import { applyTelemetryDelta } from '../agent-system/observatory/telemetry-delta.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
 import { persistRecord } from '../scripts/agent/record-journal.mjs';
@@ -100,6 +100,35 @@ test('journal delivery replays the durable outbox, sends incremental data and de
   await assert.rejects(sync({ force: true }), /Committed journal entry changed/);
   await assert.rejects(restart()(), /rewrites a synchronized trace event/);
   assert.equal(exported.length, 3);
+});
+
+test('managed telemetry can deliver for a new checkout using the admitted worker connection', async t => {
+  const { task, attempt, directory, root } = await fixture(t);
+  const event = traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(directory,event);
+  const scope = '11111111-1111-4111-8111-111111111111';
+  let baseline, closed = false, unavailableOnce = true;
+  const managedConnection = {
+    async call({task_id,change,verification}) {
+      assert.equal(task_id,task.id);
+      assert.equal(verification,scope);
+      if (unavailableOnce) {
+        unavailableOnce = false;
+        throw Error('The managed connection was temporarily busy');
+      }
+      if (!change) return {baseline:baseline??null};
+      const projection = applyTelemetryDelta(baseline?.projection??null,change);
+      baseline = {projection,digest:createHash('sha256').update(JSON.stringify(projection)).digest('hex'),
+        received_at:new Date().toISOString()};
+      return baseline;
+    },
+    close() { closed = true; },
+  };
+  const delivery = await startObservatorySync({task,journal:directory,directory:join(root,'observatory-sync'),
+    verificationNamespace:scope,managedConnection});
+  await delivery.finish();
+  assert.equal(closed,false);
+  assert.deepEqual(baseline?.projection.events.map(item=>item.event_id),[event.event_id]);
 });
 
 test('CLI reconstructs latest Attempts and retains incomplete spans across Task revisions', async t => {

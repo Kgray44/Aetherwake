@@ -98,7 +98,8 @@ async function wrapperFixture(t) {
     created_at:new Date().toISOString(), title:'Provider fixture', objective:'Observe a supplied JSONL stream',
     classification:{primary:'integration',secondary:[]}, prerequisites:{task_ids:[],capabilities:[]},
     acceptance:{profile_id:'integration-test',criteria:[{id:'verify',description:'Observe the fixture'}]},
-    state:'ready', owner_acceptance:'not_reviewed', requirements:[{kind:'document',uri:'authority.md'}]
+    state:'ready', owner_acceptance:'not_reviewed', requirements:[{kind:'document',uri:'authority.md'}],
+    deliverables:['A reproducible checked artifact']
   };
   const context = await createSnapshot({root:cwd,task,repository:task.repository,owners:['governance=authority.md']});
   const cli = fileURLToPath(new URL('../scripts/agent/telemetry.mjs', import.meta.url));

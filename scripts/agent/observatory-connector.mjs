@@ -1,17 +1,25 @@
 /** Use the owner's installed Sites plugin through Codex. No model turn or browser session is needed. */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { relative } from 'node:path';
 
 const server = 'codex_apps';
 const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
 const timeoutMs = 8000;
+const startupTimeoutMs = 180_000;
 
 export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex' } = {}) {
-  const child = spawn(executable, ['app-server', '--listen', 'stdio://'], {
-    cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
+  const env = { ...process.env };
+  delete env.AADS_TASK_WORKER_KEY;
+  const child = spawn(executable, ['app-server','--listen','stdio://',
+    '-c','sandbox_workspace_write.network_access=false','-c','sandbox_workspace_write.writable_roots=[]',
+    '-c','sandbox_workspace_write.exclude_tmpdir_env_var=true','-c','sandbox_workspace_write.exclude_slash_tmp=true',
+  ], {
+    cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
   });
   const lines = createInterface({ input: child.stdout });
   const pending = new Map();
+  const threadListeners = new Map();
   let sequence = 0;
   let closed = false;
   function close() {
@@ -20,6 +28,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     signal?.removeEventListener('abort', close);
     for (const finish of pending.values()) finish({ error: true });
     pending.clear();
+    for (const listener of threadListeners.values()) listener('disconnected',{});
+    threadListeners.clear();
     lines.close();
     child.stdin.destroy();
     child.kill();
@@ -31,15 +41,19 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   lines.on('line', line => {
     try {
       const message = JSON.parse(line);
-      pending.get(message.id)?.(message);
+      const complete = pending.get(message.id);
+      if (complete) complete(message);
+      else if (message.id !== undefined && message.method) {
+        send({id:message.id,error:{code:-32601,message:'External actions and approvals are unavailable'}});
+      } else threadListeners.get(message.params?.threadId)?.(message.method,message.params);
     } catch { close(); }
   });
   const send = message => child.stdin.write(JSON.stringify(message) + '\n');
-  function rpc(method, params) {
+  function rpc(method, params, timeout = timeoutMs) {
     return new Promise((resolve, reject) => {
       if (closed || signal?.aborted) { reject(Error('Codex connector is unavailable')); return; }
       const id = ++sequence;
-      const deadline = setTimeout(close, timeoutMs);
+      const deadline = setTimeout(close, timeout);
       pending.set(id, response => {
         pending.delete(id);
         clearTimeout(deadline);
@@ -50,19 +64,58 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     });
   }
   const opening = (async () => {
-    await rpc('initialize', { clientInfo: { name: 'aads_telemetry', title: 'AADS Telemetry', version: '1.0.0' } });
+    await rpc('initialize', { clientInfo: { name: 'aads_telemetry', title: 'AADS Telemetry', version: '1.0.0' } }, startupTimeoutMs);
     send({ method: 'initialized' });
-    const started = await rpc('thread/start', { cwd, ephemeral: true });
+    const started = await rpc('thread/start', { cwd, ephemeral: true }, startupTimeoutMs);
     if (typeof started?.thread?.id !== 'string') throw Error('Codex connector session unavailable');
     return started.thread.id;
   })();
   // A short-lived process may exit before the first delivery call starts.
   opening.catch(() => {});
+  const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
+  async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession}) {
+    runSignal.throwIfAborted();
+    await opening;
+    const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
+    const started=await rpc(resumeSessionId?'thread/resume':'thread/start',
+      resumeSessionId?{...settings,threadId:resumeSessionId}:settings,startupTimeoutMs);
+    const id=started?.thread?.id;
+    if (!identifier(id)||started.sandbox?.type!=='workspaceWrite'||started.sandbox.networkAccess!==false||
+        !started.sandbox.writableRoots?.every(root=>relative(workspace,root)==='')) {
+      throw Error('App Server workspace policy was not confirmed');
+    }
+    const identity=identifier(started.model)&&identifier(started.modelProvider)
+      ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
+    onSession(id,identity);
+    let turnId, usage, finish;
+    const completion=new Promise(resolve=>{finish=resolve;});
+    const abort=()=>{
+      if (turnId) void rpc('turn/interrupt',{threadId:id,turnId}).catch(()=>{});
+      finish('interrupted');
+    };
+    threadListeners.set(id,(method,params)=>{
+      if (method==='thread/tokenUsage/updated'&&!resumeSessionId) usage=params.tokenUsage?.total;
+      if (method==='turn/completed') finish(params.turn?.status);
+      if (method==='disconnected') finish('disconnected');
+    });
+    runSignal.addEventListener('abort',abort,{once:true});
+    try {
+      runSignal.throwIfAborted();
+      const turn=await rpc('turn/start',{threadId:id,input:[{type:'text',text:prompt}]},startupTimeoutMs);
+      turnId=turn.turn.id;
+      if (runSignal.aborted) abort();
+      return {status:await completion,usage};
+    } finally {
+      runSignal.removeEventListener('abort',abort);
+      threadListeners.delete(id);
+    }
+  }
   return {
     close,
-    async call(args) {
+    runWorkspaceTurn,
+    async call(args, toolName = tool) {
       const threadId = await opening;
-      const result = await rpc('mcpServer/tool/call', { threadId, server, tool, arguments: args });
+      const result = await rpc('mcpServer/tool/call', { threadId, server, tool:toolName, arguments:args });
       let value;
       try { value = result.structuredContent ?? JSON.parse(result.content.find(item => item.type === 'text').text); }
       catch { throw Error('Observatory returned an unreadable response'); }

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { attemptTraceCoverage } from './src/trace-timeline.mjs';
 import { attemptEvents, dependencyGraph, organizeTasks, overviewTaskResults, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
 
 const accepted = { id: 'accepted', title: 'Ready input', state: 'accepted', classification: { primary: 'integration' } };
@@ -7,6 +8,19 @@ const blocked = { id: 'blocked', title: 'Build runtime', state: 'blocked', class
 const current = { id: 'task_a', title: 'Build editor', objective: 'Landing workspace', state: 'proposed',
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
+
+test('attempt coverage clips correlated overlapping spans and excludes other revisions', () => {
+  const [row] = attemptTraceCoverage([{
+    id:'a',task_id:'t',revision:'r',attempt_number:1,started_at:new Date(0).toISOString(),finished_at:new Date(1000).toISOString(),
+  }],[
+    {complete:true,attempt:'a',task:'t',revision:'r',start:450,end:1100},
+    {complete:true,attempt:'a',task:'t',revision:'r',start:300,end:500},
+    {complete:true,attempt:'a',task:'t',revision:'other',start:0,end:1000},
+    {complete:false,attempt:'a',task:'t',revision:'r',start:0,end:1000},
+  ]);
+  assert.deepEqual(row,{attemptId:'a',attemptNumber:1,elapsedMs:1000,coveredMs:700,
+    untracedMs:300,beforeTraceMs:300,afterTraceMs:0});
+});
 
 test('task links preserve the registry and direct detail routes', () => {
   assert.deepEqual(parseTaskHref('#tasks'), { id: null });

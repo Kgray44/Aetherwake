@@ -418,7 +418,14 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   assert.equal(await git(workspaces.get(b.task.id), 'show', readback.attempts[0].candidate_revision + ':artifact.txt'), b.task.id);
   const journal = join(workspaces.get(b.task.id),'.git','agent-harness','claimed-execution.journal');
   const events = await readJournal(journal);
-  assert.equal(events.length, 3);
+  const stages = events.filter(event=>event.kind==='span_end').map(event=>event.measurements
+    .find(metric=>metric.name==='elapsed_wall_ms'));
+  assert.deepEqual(stages.map(metric=>metric.method).sort(), [
+    'candidate_git_verification','candidate_submission','checkout_lock_release',
+    'checkout_validation','worker_capture_interval','worker_initialization',
+  ]);
+  assert.ok(stages.every(metric=>Number.isFinite(metric.value)&&metric.value>=0));
+  assert.ok(events.some(event=>event.phase==='implementation'&&event.kind==='measurement'));
   assert.equal(events.every(event => event.revision === downstream.attempt.revision), true);
   assert.doesNotMatch(JSON.stringify(events), /discard me/);
   const records = [readback.task, taskAttemptRecord(readback.task, readback.attempts[0])];
@@ -465,6 +472,22 @@ test('an observer reconciles lost workers and persists one fenced lease-expiry r
     lease: claim.lease, operation_id: crypto.randomUUID(), report: { type: 'heartbeat' } }, 'worker');
   assert.equal(report.status, 409);
   assert.equal((await get(starting)).version, first.version);
+});
+
+test('a leased worker can bind an observed App Server model to an immutable attempt session', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('Observed executor model');
+  await command(task,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  const session_id=crypto.randomUUID();
+  const identity={provider:'openai',model:'observed-model',source:'codex_app_server_thread_start'};
+  const report=execution_identity=>call({op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
+    lease:claim.lease,operation_id:crypto.randomUUID(),report:{type:'heartbeat',session_id,execution_identity}},'worker');
+  assert.equal((await report(identity)).status,200);
+  assert.equal((await report({...identity,model:'changed-model'})).status,400);
+  const attempt=(await get(task)).attempts[0];
+  assert.deepEqual(attempt.execution_identity,identity);
+  assert.equal(taskAttemptRecord(task.task,attempt).model,identity.model);
 });
 
 test('revision-pinned PR and CI references survive replay and stay owner scoped', async t => {
