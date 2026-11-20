@@ -49,6 +49,33 @@ const current = { id: 'task_a', title: 'Build editor', objective: 'Landing works
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
 
+test('Task chronology keeps late arrivals ordered by occurrence and reports missing or discrepant receipt clocks', () => {
+  const task={id:'task_clock',title:'Inspect clock',objective:'Inspect independent clocks'};
+  const makeEvent=(event_id,occurred_at)=>({task_id:task.id,event_id,occurred_at,kind:'measurement',phase:'testing'});
+  const late=makeEvent('late','2026-01-01T00:00:00.000Z');
+  const earlierBatch=makeEvent('earlier-batch','2026-01-02T00:00:00.000Z');
+  const legacy=makeEvent('legacy','2026-01-03T00:00:00.000Z');
+  const future=makeEvent('future','2026-01-06T00:00:00.000Z');
+  const telemetrySource={task_id:task.id,received_at:'2026-01-05T00:00:00.000Z',event_receipts:{
+    'earlier-batch':'2026-01-04T00:00:00.000Z',
+    late:'2026-01-05T00:00:00.000Z',
+    future:'2026-01-05T00:00:00.000Z',
+  }};
+  const input={task,events:[earlierBatch,late,legacy,future],telemetrySource};
+  const timeline=buildTaskTimeline(input);
+  assert.deepEqual(timeline.map(event=>event.id),['trace:future','trace:legacy','trace:earlier-batch','trace:late']);
+  assert.equal(Object.fromEntries(timeline[0].details)['Clock discrepancy'],
+    'The journal occurrence is later than the Observatory receipt. Cross-source order is uncertain.');
+  assert.equal(Object.fromEntries(timeline[1].details)['Observatory first received'],'Unavailable');
+  assert.equal(Object.fromEntries(timeline[3].details)['Observatory first received'],telemetrySource.event_receipts.late);
+  const wrongSource=buildTaskTimeline({...input,telemetrySource:{...telemetrySource,task_id:'unrelated'}});
+  assert.equal(Object.fromEntries(wrongSource[3].details)['Observatory first received'],'Unavailable');
+  const report=JSON.stringify(taskReportDefinition(input).content);
+  assert.match(report,/Observatory first received/);
+  assert.match(report,/Cross-source order is uncertain/);
+  assert.match(report,/2026-01-04T00:00:00.000Z/);
+});
+
 test('attempt coverage clips correlated overlapping spans and excludes other revisions', () => {
   const [row] = attemptTraceCoverage([{
     id:'a',task_id:'t',revision:'r',attempt_number:1,started_at:new Date(0).toISOString(),finished_at:new Date(1000).toISOString(),

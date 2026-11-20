@@ -85,6 +85,13 @@
       "when": 1795134900000,
       "tag": "0011_task_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1795182867000,
+      "tag": "0012_task_trace_receipts",
+      "breakpoints": true
     }
   ]
 }

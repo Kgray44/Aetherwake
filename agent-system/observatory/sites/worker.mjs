@@ -146,7 +146,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         repository,
         readTaskRows({ db: env.DB, owner, namespace }),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
-        env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
+        env.DB.prepare('SELECT task_id, digest, received_at, payload, event_receipt_batches FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
           .bind(owner, namespace).all(),
         syncScope(),
       ]);

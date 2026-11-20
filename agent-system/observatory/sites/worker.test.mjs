@@ -43,6 +43,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
   sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0012_task_trace_receipts.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -103,7 +104,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
     sql.exec('UPDATE github_snapshot SET retry_at = 0');
     rateLimited = true;
   };
-  return { call, post, requests, hitLimit, writes };
+  return { call, post, requests, hitLimit, writes, sql };
 }
 
 test('hosted API checks identity and same-origin JSON before touching upstream', async t => {
@@ -219,7 +220,7 @@ test('private proposal control applies one versioned edit, fences concurrent wri
 });
 
 test('the automatic telemetry client resumes after a lost response, uploads only deltas and shows owner-scoped data', async t => {
-  const { call, post } = fixture(t);
+  const { call, post, sql } = fixture(t);
   const isolation = { 'x-observatory-verification': namespace };
   const headers = { ...ownerHeader, ...isolation };
   const { task } = await (await post(headers)).json();
@@ -256,7 +257,9 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.equal((await client().synchronize(task.id, first)).changed, false);
   assert.equal(posted.length, 1);
   assert.equal(posted[0].records[0].objective, 'Private task details withheld');
-  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated + 1).toISOString() };
+  const firstReceipt = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.equal(firstReceipt.event_receipts[event.event_id], firstReceipt.received_at);
+  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated - 5000).toISOString() };
   const { snapshot: next } = await readStagedSnapshot(file(1, [event, event2]));
   assert.equal((await client().synchronize(task.id, next)).changed, true);
   assert.deepEqual(posted[1].records, []);
@@ -266,6 +269,11 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   const overview = await (await call('/api/overview', { headers })).json();
   assert.equal(overview.execution.events.length, 2);
   assert.equal(overview.execution.sources[0].task_id, task.id);
+  assert.deepEqual(overview.execution.sources[0].event_receipts, {
+    [event.event_id]: firstReceipt.received_at,
+    [event2.event_id]: overview.execution.sources[0].received_at,
+  });
+  assert.equal((await replay.json()).received_at, overview.execution.sources[0].received_at);
   assert.equal(overview.proposals.controls[task.id], undefined);
   assert.equal((await (await call('/api/overview', { headers: ownerHeader })).json()).execution, null);
   assert.equal((await call(path, { headers: { ...headers, 'oai-authenticated-user-id': 'owner-2', 'x-observatory-sync-scope': scope } })).status, 403);
@@ -277,6 +285,13 @@ test('the automatic telemetry client resumes after a lost response, uploads only
     events: [{ ...event, event_id: 'outside-task', task_id: 'outside-task' }] };
   assert.equal((await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope },
     body: JSON.stringify(badChange) })).status, 400);
+  // An existing snapshot may predate the receipt migration. Its original arrivals stay unknown.
+  sql.prepare("UPDATE task_telemetry SET event_receipt_batches = '[]' WHERE task_id = ?").run(task.id);
+  const event3 = { ...event, event_id: 'received-after-migration' };
+  const { snapshot: upgraded } = await readStagedSnapshot(file(3, [event, event2, event3]));
+  assert.equal((await client().synchronize(task.id, upgraded)).changed, true);
+  const upgradedSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.deepEqual(upgradedSource.event_receipts, { [event3.event_id]: upgradedSource.received_at });
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {

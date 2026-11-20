@@ -69,17 +69,23 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
         ...detail('Attempt',receipt.attempt_id),...detail('Operation ID',receipt.operation_id),
       ]});
   }
+  const source = telemetrySource?.task_id === task.id ? telemetrySource : null;
   for (const event of events) {
     if (event.task_id !== task.id) continue;
     const attempt=attemptById.get(event.attempt_id);
     const actualAttempt=attempt?.revision===event.revision?attempt:null;
+    const receipts = source?.event_receipts;
+    const receivedAt = receipts && Object.hasOwn(receipts,event.event_id) ? receipts[event.event_id] : null;
+    const clockConflict = receivedAt && Date.parse(receivedAt) < Date.parse(event.occurred_at);
     add({id:'trace:'+event.event_id,at:event.occurred_at,type:'Trace',
       title:[humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),attemptId:actualAttempt?.id,
       activityType:event.kind,outcome:event.state,executor:actualAttempt?.executor??actualAttempt?.provider,
       description:[actualAttempt?'Attempt '+actualAttempt.attempt_number:'',humanize(event.state)].filter(Boolean).join(' · '),
       details:[...detail('Attempt ID',event.attempt_id),...detail('Revision',event.revision),...detail('Trace ID',event.trace_id),
         ...detail('Span ID',event.span_id),...detail('Parent span',event.parent_span_id),...detail('Source',event.source),
-        ...detail('Latest Task telemetry snapshot received',telemetrySource?.task_id===task.id?telemetrySource.received_at:null)],
+        ['Observatory first received',receivedAt??'Unavailable'],
+        ...detail('Latest Task telemetry snapshot received',receivedAt?null:source?.received_at),
+        ...detail('Clock discrepancy',clockConflict?'The journal occurrence is later than the Observatory receipt. Cross-source order is uncertain.':null)],
       measurements:event.measurements??[]});
   }
   const criteria = new Map((task.acceptance?.criteria??[]).map(item=>[item.id,item.description]));

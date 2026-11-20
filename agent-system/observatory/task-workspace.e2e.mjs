@@ -390,6 +390,24 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
   assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
     document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
+  const telemetryHeaders = { 'x-observatory-verification': namespace };
+  const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
+  const { telemetry_scope: scope } = await overview.json();
+  const received = await page.request.post(origin + '/api/task-telemetry/' + execution.task.id, {
+    headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
+    data: {
+      base: null, generated_at: new Date().toISOString(), records: [execution.task],
+      events: [{
+        trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
+        trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
+        revision: execution.task.revision, occurred_at: '2026-01-01T08:00:00.000Z',
+        kind: 'measurement', phase: 'verification', measurements: [],
+      }],
+    },
+  });
+  assert.equal(received.status(), 200, await received.text());
+  const { received_at: traceReceivedAt } = await received.json();
+  await page.reload();
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
   await jump.getByRole('button',{name:'Timeline',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
@@ -399,6 +417,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const search=timeline.getByRole('searchbox',{name:'Search timeline'});
   await search.fill('no such timeline event');
   await timeline.getByText('No events match these filters.').waitFor();
+  await search.fill('fixture-receipt-trace');
+  await timeline.getByRole('button',{name:/verification · measurement/}).click();
+  const receiptDetail = timeline.getByRole('complementary',{name:'Selected timeline event'});
+  await receiptDetail.getByText('Observatory first received',{exact:true}).waitFor();
+  assert.equal(await receiptDetail.getByText(traceReceivedAt,{exact:true}).count(), 1);
+  assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
   await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();

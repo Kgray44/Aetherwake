@@ -85,7 +85,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
     <dl className="github-facts task-telemetry-coverage">
       {known.counts.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value??'Unavailable'}</dd></div>)}
     </dl>
-    <p className="low">{known.coverage}</p>
+    <p className="low">{known.coverage} Trace events are ordered by journal occurrence. The Observatory records receipt on a separate clock.</p>
     <div className="task-timeline-toolbar">
       <nav aria-label="Timeline filters" className="task-timeline-filters">
         {categories.filter(kind=>kind==='All'||items.some(item=>item.type===kind)).map(kind=>
@@ -126,7 +126,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
         <motion.div key={event.id} initial={reduce?false:{opacity:0}} animate={{opacity:1}} transition={{duration:reduce?0:.18}}>
           <span className="task-timeline-kind">{event.milestone?'Owner acceptance':event.type}</span>
           <h3 ref={heading} tabIndex={-1}>{event.title}</h3>
-          <p><time dateTime={event.at}>{new Date(event.at).toLocaleString()}</time></p>
+          <p>Recorded occurrence <time dateTime={event.at} title={event.at}>{new Date(event.at).toLocaleString()}</time></p>
           {event.description&&<p>{event.description}</p>}
           {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
           {event.measurements?.length>0&&<ul className="task-timeline-measurements">{event.measurements.map((metric,index)=><li key={index}>
