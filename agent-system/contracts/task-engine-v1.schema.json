@@ -9,6 +9,9 @@
         "op": {
           "const": "list"
         },
+        "include_archived": {
+          "type": "boolean"
+        },
         "state": {
           "$ref": "#/$defs/state"
         }
@@ -237,6 +240,11 @@
             "maxLength": 128
           }
         },
+        "deliverables": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
         "requirements": {
           "type": "array",
           "maxItems": 50,
@@ -343,6 +351,11 @@
             "type": {
               "const": "admit"
             },
+            "max_attempt_minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
             "executor": {
               "const": "codex"
             },
@@ -365,6 +378,23 @@
           "required": [
             "type",
             "executor"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "configure_execution" },
+            "start_at": {
+              "anyOf": [{"type":"string","format":"date-time"},{"type":"null"}]
+            },
+            "max_attempt_minutes": {"type":"integer","minimum":1,"maximum":30},
+            "cancel_with_dependency": {"type":"boolean"}
+          },
+          "required": ["type"],
+          "anyOf": [
+            {"required":["start_at"]},
+            {"required":["max_attempt_minutes"]},
+            {"required":["cancel_with_dependency"]}
           ]
         },
         {
@@ -486,6 +516,14 @@
         {
           "type": "object",
           "properties": {
+            "type": { "const": "reopen" },
+            "feedback": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          },
+          "required": ["type", "feedback"]
+        },
+        {
+          "type": "object",
+          "properties": {
             "type": {
               "const": "cancel"
             }
@@ -573,6 +611,25 @@
             },
             "stored_state": {
               "$ref": "#/$defs/state"
+            },
+            "max_attempt_minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "can_configure_execution": {"type":"boolean"},
+            "prerequisite_status": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {"enum":["task","capability"]},
+                  "id": {"type":"string"},
+                  "state": {"type":"string"},
+                  "status": {"enum":["satisfied","unsatisfied","unverified"]}
+                },
+                "required": ["type","id","state","status"]
+              }
             },
             "blockers": {
               "type": "array",

@@ -154,6 +154,12 @@
             }
           }
         },
+        "deliverables": {
+          "description": "Planned outcomes to produce for this Task. Review and artifact custody are recorded separately.",
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
         "requirements": {
           "type": "array",
           "items": {

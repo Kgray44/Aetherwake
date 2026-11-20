@@ -11,7 +11,7 @@ import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkspaceTelemetryScope, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkspaceTelemetryScope, codexTaskPrompt, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 
 const rev = 'a'.repeat(40);
 const fields = name => ({
@@ -107,6 +107,141 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await claim()).body.claim, null);
   assert.equal((await get(b)).lifecycle.state, 'failed');
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
+});
+
+test('archive keeps accepted prerequisites and feedback reopens at the accepted revision', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('follow-up');
+  const downstream=await register('dependent',[task.task.id]);
+  assert.equal((await command(task,'reopen',{feedback:'Missing prerequisite'})).status,409);
+  const admit=item=>command(item,'admit',{executor:'codex',cancel_with_dependency:true});
+  await admit(task);
+  await admit(downstream);
+  const claim=()=>call({op:'claim',operation_id:crypto.randomUUID(),task_ids:[task.task.id]},'worker');
+  const first=(await claim()).body.claim;
+  const candidate='b'.repeat(40);
+  const reported=await call({op:'report',task_id:task.task.id,operation_id:crypto.randomUUID(),
+    attempt_id:first.attempt.id,lease:first.lease,report:{type:'finished',result:'candidate',revision:candidate}},'worker');
+  assert.equal(reported.status,200);
+  const evidence=[{criterion_id:'criterion-1',uri:'https://github.com/Kgray44/Aetherwake/actions/runs/1',revision:candidate}];
+  const accepted=(await command(reported.body,'accept',{evidence})).body;
+  assert.equal(accepted.lifecycle.stored_state,'completed');
+  const archived=(await command(accepted,'archive')).body;
+  assert.equal(archived.lifecycle.stored_state,'archived');
+  assert.equal((await get(downstream)).lifecycle.state,'ready');
+  assert.equal((await call({op:'list'})).body.tasks.some(entry=>entry.task.id===task.task.id),false);
+  assert.equal((await call({op:'list',include_archived:true})).body.tasks.find(entry=>entry.task.id===task.task.id).lifecycle.state,'archived');
+  assert.equal((await command(archived,'reopen',{feedback:'  '})).status,400);
+  assert.equal((await command(archived,'reopen',{feedback:'Unapproved'},'agent')).status,403);
+  const feedback='Add a verification receipt for the new behavior.';
+  const reopened=(await command(archived,'reopen',{feedback})).body;
+  assert.equal(reopened.task.id,task.task.id);
+  assert.equal(reopened.task.objective,task.task.objective);
+  assert.equal(reopened.task.owner_acceptance,'not_reviewed');
+  assert.equal(reopened.lifecycle.stored_state,'queued');
+  assert.equal(reopened.lifecycle.cycle_attempts,0);
+  assert.deepEqual(reopened.lifecycle.evidence,[]);
+  assert.equal(reopened.attempts[0].state,'succeeded');
+  assert.deepEqual(reopened.events.find(event=>event.kind==='accept').evidence,evidence);
+  assert.deepEqual(reopened.events.find(event=>event.kind==='reopen').evidence,evidence);
+  assert.equal(reopened.events.find(event=>event.kind==='reopen').feedback,feedback);
+  const next=(await claim()).body.claim;
+  assert.equal(next.attempt.attempt_number,2);
+  assert.equal(next.attempt.revision,candidate);
+  assert.ok(next.task.objective.endsWith(feedback));
+});
+
+test('versioned Task scope reaches the Codex worker with its input references and outcomes', async t => {
+  const {call,register,command}=setup(t);
+  const task=await register('task scope');
+  const requirements=[{kind:'artifact',uri:'private-artifact:received-sample',revision:rev}];
+  const deliverables=['Sample verification report','Candidate implementation'];
+  const changed=await command(task,'edit',{fields:{...fields('task scope'),priority:'normal',requirements,deliverables}});
+  assert.equal(changed.status,200);
+  assert.deepEqual(changed.body.task.requirements,requirements);
+  assert.deepEqual(changed.body.task.deliverables,deliverables);
+  assert.deepEqual(changed.body.events.at(-1).fields,['requirements','deliverables']);
+  await command(changed.body,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  assert.deepEqual(claim.task.deliverables,deliverables);
+  assert.deepEqual(claim.task.requirements,requirements);
+  const prompt=codexTaskPrompt(claim.task,claim.attempt);
+  assert.ok(prompt.includes(requirements[0].uri));
+  assert.ok(deliverables.every(item=>prompt.includes(item)));
+});
+
+test('owner time limits constrain the claim deadline and leave a specific receipt at expiry', async t => {
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('time limit');
+  const admit=minutes=>command(task,'admit',{executor:'codex',max_attempt_minutes:minutes});
+  for (const invalid of [0,31,1.5,'5',null]) assert.equal((await admit(invalid)).status,400);
+  const admitted=await admit(1);
+  assert.equal(admitted.status,200);
+  assert.equal(admitted.body.lifecycle.max_attempt_minutes,1);
+  assert.equal(admitted.body.events.at(-1).max_attempt_minutes,1);
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  assert.equal(claim.attempt.deadline-Date.parse(claim.attempt.started_at),60_000);
+  assert.equal(claim.attempt.lease_until,claim.attempt.deadline);
+  advance(59_999);
+  assert.equal((await get(task)).lifecycle.state,'running');
+  advance(1);
+  const expired=await get(task);
+  assert.equal(expired.lifecycle.state,'failed');
+  assert.match(expired.attempts[0].failure,/time limit reached/i);
+  assert.equal(expired.events.at(-1).kind,'attempt_time_limit_reached');
+  const unattended=await register('lost contact');
+  const longer=await command(unattended,'admit',{executor:'codex',max_attempt_minutes:2});
+  assert.equal(longer.status,200);
+  await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  advance(120_000);
+  const lost=await get(unattended);
+  assert.equal(lost.events.at(-1).kind,'lease_expired');
+});
+
+test('prerequisite readback distinguishes a missing reference from an unattested capability',async t=>{
+  const {call,register,command,get}=setup(t);
+  const upstream=await register('unaccepted dependency');
+  const missing='task_'+crypto.randomUUID();
+  const downstream=(await call({op:'register',operation_id:crypto.randomUUID(),fields:{
+    ...fields('prerequisites'),dependencies:[upstream.task.id,missing],capabilities:['artifact access'],
+  }})).body;
+  const status=(detail,id)=>detail.lifecycle.prerequisite_status.find(row=>row.id===id).status;
+  assert.equal(status(downstream,upstream.task.id),'unsatisfied');
+  assert.equal(status(downstream,missing),'unverified');
+  assert.equal(status(downstream,'artifact access'),'unverified');
+  const ready=(await command(downstream,'admit',{executor:'codex',prerequisites:['artifact access']})).body;
+  assert.equal(status(await get(ready),'artifact access'),'satisfied');
+  assert.equal(ready.lifecycle.state,'blocked');
+  assert.deepEqual(ready.lifecycle.blockers.map(row=>row.id),[upstream.task.id,missing]);
+});
+
+test('owners can reschedule waiting work without changing an active attempt',async t=>{
+  const {call,register,command,get,advance}=setup(t);
+  const proposed=await register('editable runtime settings');
+  const admission=(await command(proposed,'admit',{executor:'codex',max_attempt_minutes:5,
+    start_at:new Date(Date.now()+300_000).toISOString()})).body;
+  assert.equal(admission.lifecycle.can_configure_execution,true);
+  assert.equal((await command(admission,'configure_execution',{max_attempt_minutes:4},'agent')).status,403);
+  const waiting=(await command(admission,'pause')).body;
+  const change={start_at:new Date(Date.now()+900_000).toISOString(),max_attempt_minutes:4,cancel_with_dependency:true};
+  assert.equal((await command(admission,'configure_execution',change)).status,409);
+  const saved=(await command(waiting,'configure_execution',change)).body;
+  assert.equal(saved.lifecycle.state,'paused');
+  assert.equal(saved.lifecycle.start_at,Date.parse(change.start_at));
+  assert.equal(saved.events.at(-1).cancel_with_dependency,true);
+  const resumed=(await command(saved,'resume')).body;
+  assert.equal(resumed.lifecycle.state,'scheduled');
+  const claim=()=>call({op:'claim',operation_id:crypto.randomUUID()},'worker').then(result=>result.body.claim);
+  advance(600_000);
+  assert.equal(await claim(),null);
+  const ready=(await command(resumed,'configure_execution',{start_at:null})).body;
+  assert.equal(ready.lifecycle.state,'ready');
+  const active=await claim();
+  assert.equal(active.attempt.deadline-Date.parse(active.attempt.started_at),240_000);
+  const actual=await get(proposed);
+  assert.equal(actual.lifecycle.can_configure_execution,false);
+  assert.equal((await command(actual,'configure_execution',{max_attempt_minutes:30})).status,409);
+  assert.equal((await get(proposed)).attempts[0].deadline,active.attempt.deadline);
 });
 
 test('scheduled execution, cancellation propagation and checkpoint recovery', async t => {

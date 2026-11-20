@@ -1,9 +1,9 @@
-import { readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
+import { isTaskWorkerKey, readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
-import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail, peekGitHub } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
@@ -63,11 +63,15 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       let body;
       try { body = JSON.parse(await readBounded(request.body, 64 * 1024)); }
       catch (cause) { return error('Invalid Task request', cause instanceof RangeError ? 413 : 400); }
-      const result = await taskOperation({
-        db: env.DB, owner, namespace, body, validate, revision: () => taskRevision(env),
-        access: owner === env.OBSERVATORY_TASK_ENGINE_OWNER_ID ? 'owner' : 'agent',
+      const access=owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID?'owner':'agent';
+      const result=await taskOperation({
+        db:env.DB,owner,namespace,body,validate,revision:()=>taskRevision(env),access,
       });
-      return json(result.body, result.status);
+      if (body.op==='list'&&result.status===200&&access==='owner') {
+        const codex=isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY)?'configured':'not_configured';
+        return json({...result.body,executor_access:{codex}});
+      }
+      return json(result.body,result.status);
     }
 
     if (ciActions) {
@@ -133,8 +137,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older/conflicting projection or verification namespace limit reached', 409);
     }
     if (overview) {
-      const [snapshot, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
-        cachedGitHub(env.DB, fetcher, validate, readToken),
+      const repository = url.searchParams.get('prefer') === 'cached'
+        ? peekGitHub(env.DB, readToken)
+        : cachedGitHub(env.DB, fetcher, validate, readToken).then(snapshot => ({snapshot,refresh:false}));
+      const [{snapshot, refresh}, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
+        repository,
         readTaskRows({ db: env.DB, owner, namespace }),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
         env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
@@ -154,6 +161,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         schema_version: 1,
         revision: snapshot.main.revision ?? null,
         deployed_revision: sourceRevision,
+        github_refresh_pending: refresh,
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
         records: [...items.map(item => item.record), ...rows.filter(row => !row.engine).map(row => JSON.parse(row.record))]
@@ -245,7 +253,8 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         headers: {
           'content-type': asset.type,
           'content-security-policy': CSP,
-          'cache-control': 'private, no-store',
+          'cache-control': /^\/assets\/[\w-]+-[\w-]{8}\.(?:js|css)$/.test(url.pathname)
+            ? 'private, max-age=31536000, immutable' : 'private, no-store',
           'x-content-type-options': 'nosniff',
           'referrer-policy': 'no-referrer',
         },

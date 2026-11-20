@@ -1,6 +1,6 @@
 import { readBounded } from './github.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
-import { taskOperation } from './task-engine.mjs';
+import { isTaskWorkerKey, taskOperation } from './task-engine.mjs';
 import { ingestTaskTelemetry, telemetryBaseline, sha256 } from './task-telemetry.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -54,9 +54,8 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
   if(name==='task_engine_v1'){
    let access = 'agent';
    if(args.worker_key !== undefined) {
-    if(owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID || typeof args.worker_key !== 'string' ||
-      args.worker_key.length < 32 || args.worker_key.length > 256 ||
-      typeof env.OBSERVATORY_TASK_WORKER_KEY !== 'string' || env.OBSERVATORY_TASK_WORKER_KEY.length < 32 ||
+    if(owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID || !isTaskWorkerKey(args.worker_key) ||
+      !isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY) ||
       await sha256(args.worker_key) !== await sha256(env.OBSERVATORY_TASK_WORKER_KEY)) {
      return result({status:403,error:'Executor authorization required'},true);
     }

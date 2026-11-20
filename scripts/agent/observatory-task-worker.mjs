@@ -55,16 +55,26 @@ function termination(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
-  const prompt = [
+export function codexTaskPrompt(task, attempt) {
+  return [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
-    task.title, task.objective, 'Acceptance criteria:',
+    task.title, task.objective,
+    ...(task.requirements?.length ? ['Task requirements and input references:',
+      ...task.requirements.map(({kind,uri,revision})=>'- '+kind+' '+uri+(revision?' @ '+revision:'')),
+      'Consult these references through permitted tools and existing access. A reference does not grant access.'] : []),
+    ...(task.deliverables?.length ? ['Planned deliverables:',
+      ...task.deliverables.map(item=>'- '+item)] : []),
+    'Acceptance criteria:',
     ...task.acceptance.criteria.map(item => item.id + ' ' + item.description),
   ].join('\n');
+}
+
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
+  const prompt = codexTaskPrompt(task,attempt);
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
   const args = [
