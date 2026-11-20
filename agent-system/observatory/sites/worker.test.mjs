@@ -304,6 +304,14 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.equal((await client().synchronize(task.id, upgraded)).changed, true);
   const upgradedSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
   assert.deepEqual(upgradedSource.event_receipts, { [event3.event_id]: upgradedSource.received_at });
+  const event4 = {...event,event_id:'worker-snapshot-after-independent-activity'};
+  const { snapshot: workerSnapshot } = await readStagedSnapshot(file(4, [event, event2, event4]));
+  assert.equal((await client().synchronize(task.id, workerSnapshot)).changed,true);
+  assert.deepEqual(posted.at(-1).events.map(item=>item.event_id),[event4.event_id]);
+  const combined = (await (await call('/api/overview', {headers})).json()).execution;
+  assert.equal(combined.events.length,4);
+  assert.equal(combined.sources[0].event_receipts[event3.event_id],upgradedSource.received_at);
+  assert.ok(combined.events.some(item=>item.event_id===event3.event_id));
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {

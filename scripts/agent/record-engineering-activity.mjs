@@ -18,6 +18,7 @@ export async function recordEngineeringActivity({task,directory,receipt,syncOpti
   if (!receipt||Object.keys(receipt).some(key=>!fields.has(key))||
       typeof receipt.source_id!=='string'||!/^[-A-Za-z0-9_.:]{1,160}$/.test(receipt.source_id)||
       !Object.hasOwn(phaseByKind,receipt.kind)) throw Error('Invalid engineering activity receipt');
+  if (syncOptions?.activityOnly && receipt.attempt_id) throw Error('Independent activity cannot bind an attempt');
   const operation = hash([task.repository,task.id,receipt.kind,receipt.source,receipt.source_id]);
   const stage = receipt.outcome==='started'?'started':'result';
   const event = {
@@ -49,12 +50,13 @@ export async function recordEngineeringActivity({task,directory,receipt,syncOpti
 if (process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url) {
   try {
     const [taskFlag,taskPath,journalFlag,directory,receiptFlag,receiptPath,...rest]=process.argv.slice(2);
-    const sync = rest.length===1&&rest[0]==='--sync';
-    if ((rest.length&&!sync)||taskFlag!=='--task'||journalFlag!=='--journal'||receiptFlag!=='--receipt'||!taskPath||!directory||!receiptPath) {
-      throw Error('Usage: node scripts/agent/record-engineering-activity.mjs --task PATH --journal DIRECTORY --receipt PATH [--sync]');
+    const sync = rest[0]==='--sync';
+    const activityOnly = sync&&rest[1]==='--activity-only';
+    if (rest.length!==(activityOnly?2:sync?1:0)||taskFlag!=='--task'||journalFlag!=='--journal'||receiptFlag!=='--receipt'||!taskPath||!directory||!receiptPath) {
+      throw Error('Usage: node scripts/agent/record-engineering-activity.mjs --task PATH --journal DIRECTORY --receipt PATH [--sync [--activity-only]]');
     }
     const [task,receipt]=await Promise.all([readTask(taskPath),readTask(receiptPath)]);
-    const result=await recordEngineeringActivity({task,directory,receipt,...(sync?{syncOptions:{}}:{})});
+    const result=await recordEngineeringActivity({task,directory,receipt,...(sync?{syncOptions:{activityOnly}}:{})});
     console.log(JSON.stringify(result));
     if (sync&&result.delivery!=='synchronized') process.exitCode=1;
   } catch (error) {

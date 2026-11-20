@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/p
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { telemetryDelta, telemetryTaskId } from '../../agent-system/observatory/telemetry-delta.mjs';
+import { telemetryDelta, telemetryTaskId, withIndependentActivity } from '../../agent-system/observatory/telemetry-delta.mjs';
 import { projectJournal, readTask } from './export-journal.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
 
@@ -85,7 +85,7 @@ async function journalStamp(directory) {
   }))).join('|');
 }
 
-export function journalDelivery({ task, journal, statePath, connector, verification }) {
+export function journalDelivery({ task, journal, statePath, connector, verification, activityOnly = false }) {
   const args = { task_id: task.id, ...(verification ? { verification } : {}) };
   const cache = { events: new Map(), records: new Map() };
   let stamp, previousScan = 0;
@@ -105,38 +105,43 @@ export function journalDelivery({ task, journal, statePath, connector, verificat
     async function send(batch) {
       try {
         const receipt = await connector.call({ ...args, change: batch.change });
-        return checkReceipt(receipt, batch.snapshot);
+        return { baseline: checkReceipt(receipt, batch.snapshot), retry:false };
       } catch (error) {
         if (error.status !== 409) throw error;
         const remote = (await connector.call(args)).baseline;
-        if (!remote) return null;
-        if (telemetryDelta(batch.snapshot, remote)) return null;
-        return remote;
+        const retry = !remote || !!telemetryDelta(withIndependentActivity(batch.snapshot, remote, {activityOnly}), remote);
+        return { baseline:remote, retry };
       }
     }
     if (pending) {
-      baseline = await send(pending);
+      const delivery = await send(pending);
+      baseline = delivery.baseline;
       await persist({ baseline });
       pending = null;
     }
     // New local journals can submit with a null baseline directly. A conflict
     // is resolved via authenticated readback, never an unconditional overwrite.
-    if (disk && (baseline === undefined || baseline === null)) baseline = (await connector.call(args)).baseline;
+    if (baseline == null && (activityOnly || disk)) baseline = (await connector.call(args)).baseline;
     const preparing = performance.now();
-    const snapshot = JSON.parse(await projectJournal({ task, directory: journal, cache, generatedAt: nextGeneration(baseline) }));
+    const local = JSON.parse(await projectJournal({ task, directory: journal, cache, generatedAt: nextGeneration(baseline) }));
+    if (activityOnly && (local.records.length!==1 ||
+        local.events.some(event=>event.kind!=='engineering_activity'||event.attempt_id))) {
+      throw Error('Independent activity requires a Task-only journal of unbound engineering receipts');
+    }
+    const snapshot = withIndependentActivity(local, baseline, {activityOnly});
     const change = telemetryDelta(snapshot, baseline);
     const scanMs = performance.now() - preparing;
     if (change) {
       pending = { change, snapshot };
       await persist({ baseline, pending });
       const delivered = await send(pending);
-      if (!delivered) {
+      if (delivered.retry) {
         // Preserve the canonical journal. A later attempt will rebase against
         // the new remote generation without replaying an older mutation.
-        await persist({ baseline: undefined });
+        await persist({ baseline: delivered.baseline });
         throw Error('Observatory telemetry baseline changed');
       }
-      baseline = delivered;
+      baseline = delivered.baseline;
     }
     const newestEvent = baseline?.projection.events.map(event => event.occurred_at).sort().at(-1);
     const status = { last_success: baseline?.received_at ?? null, events: baseline?.projection.events.length ?? 0,
@@ -161,7 +166,7 @@ export async function readObservatoryConnection(directory) {
 }
 
 export async function startObservatorySync({ task, journal, directory = observatoryDirectory(), verificationNamespace,
-  managedConnection }) {
+  managedConnection, activityOnly = false }) {
   const config = await readObservatoryConnection(directory) ??
     (managedConnection ? { version:1,verification:verificationNamespace ?? undefined } : null);
   if (!config || task.repository !== 'Kgray44/Aetherwake') return null;
@@ -172,8 +177,9 @@ export async function startObservatorySync({ task, journal, directory = observat
   const scope = config.verification ?? 'live';
   const queue = join(directory, scope);
   await privateDirectory(queue);
-  const name = key(JSON.stringify([task.id, resolve(journal)]));
-  await save(join(queue, name + '.source'), { task, journal: resolve(journal) });
+  const source = { task, journal: resolve(journal), ...(activityOnly ? {activityOnly:true} : {}) };
+  const name = key(JSON.stringify([task.id, source.journal, ...(activityOnly ? ['activity-only'] : [])]));
+  await save(join(queue, name + '.source'), source);
   const control = new AbortController();
   let connector;
   let current;

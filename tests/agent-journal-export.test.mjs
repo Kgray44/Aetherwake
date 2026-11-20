@@ -111,6 +111,66 @@ test('a post-attempt receipt can retry private delivery without changing the com
   assert.deepEqual(baseline.projection.events.map(event=>event.event_id),[queued.event_id]);
 });
 
+test('independent release receipts synchronize across interleaved worker updates without replacing worker records',async t=>{
+  const {task,attempt,directory,root}=await fixture(t);
+  const releases=join(root,'release-journal');
+  const completed={...attempt,state:'succeeded',finished_at:'2026-11-17T00:01:00.000Z'};
+  await persistRecord(directory,completed);
+  let baseline=null;
+  let writes=0;
+  const connector={async call({task_id,change}) {
+    assert.equal(task_id,task.id);
+    if (!change) return {baseline};
+    if (change.base!==(baseline?.digest??null)) throw Object.assign(Error('Stale baseline'),{status:409});
+    const projection=applyTelemetryDelta(baseline?.projection,change);
+    const digest=createHash('sha256').update(JSON.stringify(projection)).digest('hex');
+    baseline={projection,digest,received_at:new Date().toISOString()};
+    writes++;
+    return {digest,received_at:baseline.received_at,generated_at:projection.generated_at,
+      records:projection.records.length,events:projection.events.length};
+  }};
+  const worker=journalDelivery({task,journal:directory,statePath:join(root,'worker.state'),connector});
+  await worker();
+  const oldTask={...task,state:'proposed',title:'Older task title'};
+  const release=()=>journalDelivery({task:oldTask,journal:releases,
+    statePath:join(root,'release.state'),connector,activityOnly:true});
+  const deployed=await recordEngineeringActivity({task:oldTask,directory:releases,receipt:{
+    kind:'deployment',source:'sites',source_id:'release_42',revision,
+    occurred_at:'2026-11-17T00:02:00.000Z',outcome:'succeeded',
+  }});
+  await release()();
+  assert.equal(baseline.projection.records.find(item=>item.record_type==='task').state,'running');
+  const workerReceipt=await recordEngineeringActivity({task,directory,receipt:{
+    kind:'test',source:'local_runner',source_id:'worker_test',revision,attempt_id:attempt.id,
+    occurred_at:'2026-11-17T00:00:30.000Z',outcome:'succeeded',
+  }});
+  await assert.rejects(worker({force:true}),/baseline changed/);
+  await worker({force:true});
+  const validation=await recordEngineeringActivity({task:oldTask,directory:releases,receipt:{
+    kind:'deployment_validation',source:'sites',source_id:'release_42',revision,
+    occurred_at:'2026-11-17T00:03:00.000Z',outcome:'succeeded',
+  }});
+  await assert.rejects(release()({force:true}),/baseline changed/);
+  await release()({force:true});
+  assert.deepEqual(baseline.projection.events.map(event=>event.event_id),[
+    deployed.event_id,workerReceipt.event_id,validation.event_id,
+  ]);
+  assert.equal(baseline.projection.records.find(item=>item.id===attempt.id).state,'succeeded');
+  assert.equal(baseline.projection.records.find(item=>item.id===task.id).state,'running');
+  await release()({force:true});
+  assert.equal(writes,4);
+  const invalid={
+    kind:'verification',source:'sites',source_id:'invalid_attempt_binding',attempt_id:attempt.id,revision,
+    occurred_at:'2026-11-17T00:04:00.000Z',outcome:'succeeded',
+  };
+  await assert.rejects(recordEngineeringActivity({task:oldTask,directory:releases,receipt:invalid,
+    syncOptions:{activityOnly:true}}),/cannot bind an attempt/);
+  assert.equal((await readdir(releases)).filter(name=>name.endsWith('.json')).length,2);
+  await recordEngineeringActivity({task:oldTask,directory:releases,receipt:invalid});
+  await assert.rejects(release()({force:true}),/unbound engineering receipts/);
+  assert.equal(writes,4);
+});
+
 test('staging preserves a retryable snapshot on unchanged input and on corrupt new journal data', async t => {
   const { task, attempt, directory, taskFile, root } = await fixture(t);
   const stagingDirectory = join(root, 'staging');

@@ -1,5 +1,5 @@
 import { sanitizeExport } from '../../../scripts/agent/telemetry-export.mjs';
-import { telemetryDelta, telemetryTaskId } from '../telemetry-delta.mjs';
+import { telemetryDelta, telemetryTaskId, withIndependentActivity } from '../telemetry-delta.mjs';
 
 export const stagedFilename = 'observatory-projection.json';
 export const maxSnapshotBytes = 1024 * 1024;
@@ -57,7 +57,7 @@ export function createTelemetryClient({ fetcher = fetch, headers, scope }) {
     async synchronize(taskId, snapshot, signal) {
       let { baseline } = await request(taskId, signal);
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const change = telemetryDelta(snapshot, baseline);
+        const change = telemetryDelta(withIndependentActivity(snapshot, baseline), baseline);
         if (!change) return { changed: false, received_at: baseline?.received_at };
         let saved;
         try { saved = await request(taskId, signal, change); }
@@ -67,7 +67,7 @@ export function createTelemetryClient({ fetcher = fetch, headers, scope }) {
           continue;
         }
         const { baseline: readback } = await request(taskId, signal);
-        if (!readback || readback.digest !== saved.digest || telemetryDelta(snapshot, readback)) {
+        if (!readback || readback.digest !== saved.digest || telemetryDelta(withIndependentActivity(snapshot, readback), readback)) {
           throw new SyncError('Site readback changed. Resume to reconcile the current journal.', { status: 503 });
         }
         return { changed: true, received_at: readback.received_at };
