@@ -39,16 +39,29 @@ export function organizeTasks(tasks, filters, controls = {}) {
   return [...groups];
 }
 
-export function dependencyGraph(current, tasks) {
-  const index = new Map(tasks.map(task => [task.id, task]));
-  const node = id => {
-    const task = index.get(id);
-    return { id, task, status: !task ? 'unverified' : task.state === 'accepted' ? 'satisfied' : 'unsatisfied' };
+export function dependencyGraph(current,tasks,{lifecycle,summaries}={}) {
+  const index=new Map(tasks.map(task=>[task.id,task]));
+  const checks=new Map((lifecycle?.prerequisite_status??[]).map(item=>[item.type+':'+item.id,item]));
+  const node=id=>{
+    const task=index.get(id);
+    const check=checks.get('task:'+id);
+    const summary=summaries?.get(id);
+    const stored=summary?.lifecycle.stored_state;
+    const acceptedArchive=stored==='archived'&&summary.task?.owner_acceptance==='accepted';
+    const status=check?.status??(summaries
+      ? !summary?'unverified':stored==='completed'||acceptedArchive?'satisfied':'unsatisfied'
+      : !task?'unverified':task.state==='accepted'?'satisfied':'unsatisfied');
+    return {id,task,status,...(check?{reason:check.state}:{})};
   };
   return {
-    upstream: [...new Set(current.prerequisites?.task_ids ?? [])].map(node),
-    downstream: tasks.filter(task => task.id !== current.id && task.prerequisites?.task_ids?.includes(current.id))
-      .map(task => node(task.id)),
+    upstream:[...new Set(current.prerequisites?.task_ids??[])].map(node),
+    downstream:tasks.filter(task=>task.id!==current.id&&task.prerequisites?.task_ids?.includes(current.id)).map(task=>node(task.id)),
+    capabilities:[...new Set(current.prerequisites?.capabilities??[])].map(id=>{
+      const check=checks.get('capability:'+id);
+      const attested=lifecycle?.prerequisites?.includes(id);
+      return {id,status:check?.status??(attested?'satisfied':'unverified'),
+        reason:check?.state??(attested?'attested':'unsatisfied')};
+    }),
   };
 }
 

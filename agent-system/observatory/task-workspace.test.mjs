@@ -36,6 +36,15 @@ test('direct dependency edges preserve direction and unknown evidence', () => {
 
 import { commandForTask, desktopSessionTokens, executionActions, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
 
+test('canonical checks and draft dependencies use authority without treating a missing Task as verified',()=>{
+  const known={id:'current',state:'cancelled',owner_acceptance:'accepted'};
+  const summaries=new Map([['current',{task:known,lifecycle:{stored_state:'archived'}}]]);
+  const draft={prerequisites:{task_ids:['current','missing'],capabilities:['artifact access']}};
+  assert.deepEqual(dependencyGraph(draft,[known],{summaries}).upstream.map(item=>item.status),['satisfied','unverified']);
+  const lifecycle={prerequisite_status:[{type:'capability',id:'artifact access',status:'satisfied',state:'attested'}]};
+  assert.equal(dependencyGraph(draft,[known],{lifecycle,summaries}).capabilities[0].status,'satisfied');
+});
+
 test('canonical operation choices use stored state and the current attempt count', () => {
   assert.deepEqual(executionActions({ lifecycle: { state: 'blocked', stored_state: 'admitted', executor: 'codex' } }), ['pause', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'paused', stored_state: 'paused' }, attempts: [{}] }), ['resume', 'cancel']);

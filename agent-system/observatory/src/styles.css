@@ -276,6 +276,10 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-event.milestone { border-color:#4b876c; background:#172f2a; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; }
 .task-detail-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.65rem; margin-bottom:1rem; }
+.status-satisfied { color:#98debe; border-color:#365f50; background:#18352b; }
+.status-unsatisfied { color:#ecc38d; border-color:#71593b; background:#3a2e1e; }
+.status-unverified { color:#a6b8c5; border-color:#485b67; background:#18232c; }
+.dependency-nodes li small { color:var(--muted); }
 .task-attempt-card { scroll-margin-top:1rem; }
 .task-attempt-card h3 { margin:0; font-size:.88rem; }
 .task-attempt-card h3:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
