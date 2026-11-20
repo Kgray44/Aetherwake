@@ -43,7 +43,7 @@ const grid = (headers,rows,widths) => rows.length ? {
 
 function timingChart(timing) {
   if (!timing.rows.length) return [none];
-  const width=130, colors={attempt:'#456b9d',trace:'#18788b',engineering:'#906327'};
+  const width=130, colors={attempt:'#456b9d',wait:'#6a5a93',trace:'#18788b',engineering:'#906327'};
   const utc=value=>new Date(value).toISOString();
   return [
     {text:timingLegend,style:'muted'},
@@ -101,7 +101,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
     engineeringEvents:activity.events,telemetrySource});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
-  const timing=executionTiming({taskId:task.id,attempts:taskAttempts,spans:trace.spans,linkedEvents:activity.events});
+  const timing=executionTiming({taskId:task.id,canonical,attempts:taskAttempts,spans:trace.spans,linkedEvents:activity.events});
   const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents});
   const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});

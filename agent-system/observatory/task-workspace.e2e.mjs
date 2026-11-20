@@ -566,6 +566,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
   const timing = page.getByRole('region',{name:'Execution timing'});
   await timing.getByText('Time with overlapping spans').waitFor();
+  await timing.getByRole('button',{name:/Admission to claim.*Lifecycle interval/}).click();
+  await timing.getByRole('region',{name:'Selected timing details'}).getByText('Task Engine audit receipts',{exact:true}).waitFor();
   await timing.getByText('100 ms',{exact:true}).waitFor();
   await timing.getByRole('button',{name:/implementation.*Trace span/}).click();
   const timingDetails = timing.getByRole('region',{name:'Selected timing details'});

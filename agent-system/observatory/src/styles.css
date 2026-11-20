@@ -410,6 +410,7 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .execution-timing .trace-rows { max-height:24rem; }
 .execution-timing .trace-track { overflow:hidden; }
 .execution-timing .timing-attempt { background:#8baedc; }
+.execution-timing .timing-wait { background:#baa8e3; }
 .execution-timing .timing-trace { background:var(--accent); }
 .execution-timing .timing-engineering { background:#edbe7d; }
 .execution-timing .trace-row small { display:block; color:#a6bbca; }

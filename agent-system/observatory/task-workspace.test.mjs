@@ -169,6 +169,30 @@ test('execution timing preserves overlapping spans, unknown ends, and source-dat
   assert.match(report,/End unavailable/);
 });
 
+test('execution timing links only continuous engine history to the matching claim', () => {
+  const task={id:'task_wait',title:'Wait fixture',objective:'Compare lifecycle timing'};
+  const iso=ms=>new Date(ms).toISOString();
+  const attempt={id:'a',task_id:task.id,attempt_number:1,started_at:iso(1000),finished_at:iso(2000)};
+  const second={...attempt,id:'b',attempt_number:2,started_at:iso(4000),finished_at:iso(5000)};
+  const receipt=(version,kind,at,attempt_id)=>({version,kind,at:iso(at),attempt_id,
+    actor:kind==='claim'?'worker':'owner'});
+  const events=[receipt(2,'admit',100),receipt(3,'configure_execution',200),receipt(4,'claim',1000,'a'),
+    receipt(5,'pause',2100),receipt(6,'resume',2500),receipt(7,'claim',4000,'b')];
+  const canonical={task,lifecycle:{state:'verifying'},events:[...events].reverse()};
+  const attempts=[attempt,second];
+  const timing=executionTiming({taskId:task.id,canonical,attempts});
+  assert.deepEqual(timing.rows.filter(row=>row.kind==='wait').map(row=>[row.label,row.attemptId,row.elapsedMs]),
+    [['Admission to claim','a',900],['Resume to claim','b',1500]]);
+  assert.equal(timing.coveredMs,null);
+  const broken=executionTiming({taskId:task.id,attempts,canonical:{task,events:[events[0],events[2],
+    receipt(5,'resume',2200),receipt(6,'pause',2500),events[5]]}});
+  assert.equal(broken.rows.some(row=>row.kind==='wait'),false);
+  const report=JSON.stringify(taskReportDefinition({task,canonical,attempts,audits:events}).content);
+  assert.match(report,/Admission to claim/);
+  assert.match(report,/Task Engine audit receipts/);
+  assert.match(report,/1500 ms elapsed/);
+});
+
 test('attempt coverage clips correlated overlapping spans and excludes other revisions', () => {
   const [row] = attemptTraceCoverage([{
     id:'a',task_id:'t',revision:'r',attempt_number:1,started_at:new Date(0).toISOString(),finished_at:new Date(1000).toISOString(),
