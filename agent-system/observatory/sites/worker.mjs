@@ -16,6 +16,8 @@ const JSON_HEADERS = {
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
 };
+const reportWorkerPath = '/assets/task-report.worker.js';
+const legacyReportWorker = /^\/assets\/task-report\.worker-[\w-]{8}\.js$/;
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 const error = (message, status) => json({ error: message }, status);
@@ -247,13 +249,15 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         catch { return error('Observatory data temporarily unavailable', 503); }
       }
       if (!['GET', 'HEAD'].includes(request.method)) return error('Method not allowed', 405);
-      const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
+      const direct = Object.hasOwn(assets, url.pathname);
+      const rescue = !direct && legacyReportWorker.test(url.pathname) && Object.hasOwn(assets, reportWorkerPath);
+      const asset = direct ? assets[url.pathname] : rescue ? assets[reportWorkerPath] : null;
       if (!asset) return error('Not found', 404);
       return new Response(request.method === 'HEAD' ? null : asset.content, {
         headers: {
           'content-type': asset.type,
           'content-security-policy': CSP,
-          'cache-control': /^\/assets\/[\w-]+-[\w-]{8}\.(?:js|css)$/.test(url.pathname)
+          'cache-control': !rescue && /^\/assets\/[\w-]+-[\w-]{8}\.(?:js|css)$/.test(url.pathname)
             ? 'private, max-age=31536000, immutable' : 'private, no-store',
           'x-content-type-options': 'nosniff',
           'referrer-policy': 'no-referrer',

@@ -118,6 +118,23 @@ test('hosted API checks identity and same-origin JSON before touching upstream',
   assert.equal(requests.length, 0);
 });
 
+test('PDF renderer survives a deployment while an older Task tab remains open', async t => {
+  const {call}=fixture(t,{assets:{
+    '/assets/task-report.worker.js':{type:'text/javascript',content:'current renderer'},
+    '/assets/task-report.worker-2v1c1DxX.js':{type:'text/javascript',content:'previous renderer'},
+  }});
+  for (const path of ['/assets/task-report.worker.js','/assets/task-report.worker-B2nFH3hs.js']) {
+    const response=await call(path);
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('content-type'),'text/javascript');
+    assert.equal(response.headers.get('cache-control'),'private, no-store');
+    assert.equal(await response.text(),'current renderer');
+  }
+  const present=await call('/assets/task-report.worker-2v1c1DxX.js');
+  assert.equal(await present.text(),'previous renderer');
+  assert.equal((await call('/assets/unrelated-B2nFH3hs.js')).status,404);
+});
+
 test('only fingerprinted static assets receive a long browser cache lifetime', async t => {
   const {call}=fixture(t,{assets:{
     '/':{type:'text/html',content:'index'},
