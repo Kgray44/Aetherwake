@@ -63,9 +63,11 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
   const receivedAt = new Date().toISOString();
   const previousEventCount = existing?.projection.events.length ?? 0;
   const batches = existing?.eventReceiptBatches ?? [];
-  // Validated deltas append immutable events in stable order. One offset dates the entire new batch.
-  const eventReceiptBatches = JSON.stringify(projection.events.length > previousEventCount
-    ? [...batches, [previousEventCount, receivedAt]] : batches);
+  // Immutable events retain their positions. Store explicit ends so an older
+  // worker can append events without extending the previous receipt.
+  const eventCount = projection.events.length;
+  const eventReceiptBatches = JSON.stringify(eventCount > previousEventCount
+    ? [...batches, [previousEventCount, eventCount, receivedAt]] : batches);
   const stored = existing
     ? await db.prepare(`UPDATE task_telemetry SET digest = ?, received_at = ?, payload = ?, event_receipt_batches = ?
         WHERE owner_id = ? AND namespace = ? AND task_id = ? AND digest = ?
@@ -94,12 +96,11 @@ function receipt({ digest, received_at, projection }) {
 }
 
 function eventReceipts(projection, batches) {
-  let batch = 0;
-  let receivedAt;
   const receipts = [];
-  for (const [index, event] of projection.events.entries()) {
-    if (batches[batch]?.[0] === index) receivedAt = batches[batch++][1];
-    if (receivedAt) receipts.push([eventKey(event), receivedAt]);
+  for (const [start, end, receivedAt] of batches) {
+    for (let index = start; index < end; index++) {
+      receipts.push([eventKey(projection.events[index]), receivedAt]);
+    }
   }
   return Object.fromEntries(receipts);
 }

@@ -285,6 +285,11 @@ test('the automatic telemetry client resumes after a lost response, uploads only
     events: [{ ...event, event_id: 'outside-task', task_id: 'outside-task' }] };
   assert.equal((await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope },
     body: JSON.stringify(badChange) })).status, 400);
+  // An older worker can append events while leaving the previously recorded range untouched.
+  sql.prepare('UPDATE task_telemetry SET event_receipt_batches = ? WHERE task_id = ?')
+    .run(JSON.stringify([[0, 1, firstReceipt.received_at]]), task.id);
+  const rollbackSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];
+  assert.deepEqual(rollbackSource.event_receipts, { [event.event_id]: firstReceipt.received_at });
   // An existing snapshot may predate the receipt migration. Its original arrivals stay unknown.
   sql.prepare("UPDATE task_telemetry SET event_receipt_batches = '[]' WHERE task_id = ?").run(task.id);
   const event3 = { ...event, event_id: 'received-after-migration' };
