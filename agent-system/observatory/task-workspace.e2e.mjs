@@ -190,7 +190,21 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     title: 'Canonical prerequisite', objective: 'Supply an explicit unresolved prerequisite during the initial schedule.',
     primary: 'integration', profile_id: 'integration', criteria: ['Supply an approved result'],
   } });
-  await page.goto(origin + '/?verification=' + namespace + '#tasks');
+  let releaseOverview;
+  const overviewGate = new Promise(resolve => { releaseOverview = resolve; });
+  await page.route('**/api/overview', async route => {
+    await overviewGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(origin + '/?verification=' + namespace + '#tasks');
+    const registryEntry = page.getByRole('link', { name: /Canonical prerequisite.*Inspect/ });
+    await registryEntry.waitFor({timeout:8_000});
+    assert.equal(await page.getByRole('link', { name: /Canonical prerequisite.*Manage/ }).count(), 0);
+  } finally {
+    releaseOverview();
+  }
+  await page.getByRole('link', { name: /Canonical prerequisite.*Manage/ }).waitFor();
   await page.getByRole('button', { name: 'Create proposal' }).click();
   await page.getByLabel('Task title').fill('Canonical schedule verification');
   await page.getByLabel('Tangible objective').fill('Use the existing engine API to register, schedule and control a genuine isolated Task.');
