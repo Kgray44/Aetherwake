@@ -241,4 +241,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   detail = await send({ op: 'get', task_id: execution.task.id });
   assert.equal(detail.task.owner_acceptance, 'accepted');
   assert.equal(detail.lifecycle.evidence[0].revision, candidate);
+  const evidence = page.getByRole('region', { name: 'Execution and delivery evidence' });
+  await evidence.getByText('Candidate revision', { exact: false }).waitFor();
+  const reviewed = evidence.getByRole('link', { name: 'Review the candidate result' });
+  assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
+  assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
 });

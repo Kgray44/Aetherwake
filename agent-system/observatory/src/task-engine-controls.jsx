@@ -156,11 +156,44 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
         {stamp(event.at)} · {humanize(event.kind ?? event.type)} · {humanize(event.state)}
       </li>)}</ol> : <p>No Task operations recorded.</p>}
     </details>
-    {lifecycle.links?.length > 0 && <ul className="task-links" aria-label="Associated delivery evidence">{lifecycle.links.map((link, index) =>
-      <li key={index}><a href={safeLink(link.uri)} target="_blank" rel="noreferrer">{humanize(link.kind)}</a>
-        <small>{link.revision}</small></li>
-    )}</ul>}
+    <TaskDeliveryEvidence task={task} lifecycle={lifecycle} attempts={attempts} Status={Status}/>
   </>;
+}
+
+function EvidenceReference({ uri, label, revision }) {
+  const href = safeLink(uri);
+  return <>
+    {href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : <strong>{label}</strong>}
+    {revision && <small>Revision <code>{revision}</code></small>}
+  </>;
+}
+
+function TaskDeliveryEvidence({ task, lifecycle, attempts, Status }) {
+  const criteria = new Map(task.acceptance.criteria.map(criterion => [criterion.id, criterion.description]));
+  const links = lifecycle.links ?? [];
+  const reviewed = lifecycle.evidence ?? [];
+  return <section className="proposal-disclosure" aria-label="Execution and delivery evidence">
+    <h3>Execution attempts</h3>
+    {attempts.length ? <ol className="task-links">{[...attempts].reverse().map(attempt =>
+      <li key={attempt.id}>
+        <strong>Attempt {attempt.attempt_number}</strong>{' '}<Status value={attempt.state}/>
+        {attempt.started_at && <small>Started {stamp(attempt.started_at)}</small>}
+        {attempt.finished_at && <small>Finished {stamp(attempt.finished_at)}</small>}
+        {attempt.branch && <small>Branch <code>{attempt.branch}</code></small>}
+        <small>Base revision <code>{attempt.revision}</code></small>
+        {attempt.candidate_revision && <small>Candidate revision <code>{attempt.candidate_revision}</code></small>}
+        {attempt.failure && <p>{attempt.failure}</p>}
+      </li>)}</ol> : <p>No engine attempts recorded.</p>}
+    <h3>Associated delivery evidence</h3>
+    {links.length ? <ul className="task-links">{links.map((link, index) =>
+      <li key={index}><EvidenceReference uri={link.uri} label={humanize(link.kind)} revision={link.revision}/></li>
+    )}</ul> : <p>No delivery references attached.</p>}
+    <h3>Owner-reviewed criteria</h3>
+    {reviewed.length ? <ul className="task-links">{reviewed.map(item =>
+      <li key={item.criterion_id}><EvidenceReference uri={item.uri}
+        label={criteria.get(item.criterion_id) ?? item.criterion_id} revision={item.revision}/></li>
+    )}</ul> : <p>No owner review evidence recorded.</p>}
+  </section>;
 }
 
 function safeLink(uri) {
