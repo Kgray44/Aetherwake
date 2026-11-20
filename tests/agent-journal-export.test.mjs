@@ -53,6 +53,13 @@ test('external activity survives export with stable identities and no source pat
   const replay=spawnSync(process.execPath,[recorder,'--task',taskFile,'--journal',directory,'--receipt',receiptFile],{encoding:'utf8'});
   assert.equal(replay.status,0,replay.stderr);
   assert.deepEqual(JSON.parse(replay.stdout),{...first,recorded:false});
+  const git = spawnSync('git',['init','--quiet'],{cwd:root,encoding:'utf8'});
+  assert.equal(git.status,0,git.stderr);
+  const unconfigured=spawnSync(process.execPath,
+    [recorder,'--task',taskFile,'--journal',directory,'--receipt',receiptFile,'--sync'],
+    {cwd:root,encoding:'utf8'});
+  assert.equal(unconfigured.status,1,unconfigured.stderr);
+  assert.deepEqual(JSON.parse(unconfigured.stdout),{...first,recorded:false,delivery:'not_configured'});
   await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'failed'}}),/Conflicting event identity/);
   await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,source_id:'D:\\private\\working-copy'}}),/Invalid engineering activity receipt/);
   await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'accepted'}}),/Invalid engineering trace/);
@@ -65,6 +72,43 @@ test('external activity survives export with stable identities and no source pat
   assert.equal(projected.events[0].activity.operation_id,projected.events[1].activity.operation_id);
   assert.equal(projected.events[1].activity.artifact_digest,receipt.artifact_digest);
   assert.doesNotMatch(json,/provider_run_42|working-copy/);
+});
+
+test('a post-attempt receipt can retry private delivery without changing the completed attempt', async t=>{
+  const {task,attempt,directory,root}=await fixture(t);
+  const scope='11111111-1111-4111-8111-111111111111';
+  const syncDirectory=join(root,'observatory-sync');
+  const completed={...attempt,state:'succeeded',finished_at:'2026-11-17T00:01:00.000Z'};
+  await persistRecord(directory,completed);
+  let baseline, offline=false;
+  const managedConnection={async call({task_id,verification,change}) {
+    assert.equal(task_id,task.id);
+    assert.equal(verification,scope);
+    if (offline) throw Error('Temporarily unavailable');
+    if (!change) return {baseline:baseline??null};
+    assert.equal(change.base,baseline?.digest??null);
+    const projection=applyTelemetryDelta(baseline?.projection,change);
+    const digest=createHash('sha256').update(JSON.stringify(projection)).digest('hex');
+    const received_at=new Date().toISOString();
+    baseline={digest,received_at,projection};
+    return {digest,received_at,generated_at:projection.generated_at,events:projection.events.length,records:projection.records.length};
+  }};
+  const syncOptions={directory:syncDirectory,verificationNamespace:scope,managedConnection};
+  const initial=await startObservatorySync({task,journal:directory,...syncOptions});
+  assert.equal((await initial.finish()).events,0);
+  const receipt={kind:'verification',source:'verification_runner',source_id:'verify_42',revision,
+    occurred_at:'2026-11-17T00:02:00.000Z',outcome:'succeeded'};
+  offline=true;
+  const queued=await recordEngineeringActivity({task,directory,receipt,syncOptions});
+  assert.equal(queued.delivery,'pending');
+  assert.equal(queued.recorded,true);
+  offline=false;
+  const replay=await recordEngineeringActivity({task,directory,receipt,syncOptions});
+  assert.equal(replay.event_id,queued.event_id);
+  assert.equal(replay.recorded,false);
+  assert.equal(replay.delivery,'synchronized');
+  assert.equal(baseline.projection.records.find(record=>record.id===attempt.id).state,'succeeded');
+  assert.deepEqual(baseline.projection.events.map(event=>event.event_id),[queued.event_id]);
 });
 
 test('staging preserves a retryable snapshot on unchanged input and on corrupt new journal data', async t => {

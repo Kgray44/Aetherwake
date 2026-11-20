@@ -233,11 +233,14 @@ export async function startObservatorySync({ task, journal, directory = observat
           if (attempt < 2) await delay(400 * (attempt + 1), undefined, { signal: control.signal }).catch(() => {});
         }
       })();
-      await Promise.race([finishing, delay(finalDeliveryWindowMs, undefined, { signal: timeout.signal }).catch(() => {})]);
+      const finished = await Promise.race([
+        finishing.then(() => true),
+        delay(finalDeliveryWindowMs, false, { signal: timeout.signal }).catch(() => false),
+      ]);
       timeout.abort();
       control.abort();
       if (!managedConnection) connector?.close();
-      return jsonFile(statusPath).catch(() => null);
+      return finished ? jsonFile(statusPath).catch(() => null) : null;
     },
   };
 }
