@@ -276,6 +276,16 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-event.milestone { border-color:#4b876c; background:#172f2a; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; }
 .task-detail-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.65rem; margin-bottom:1rem; }
+.task-attempt-card { scroll-margin-top:1rem; }
+.task-attempt-card h3 { margin:0; font-size:.88rem; }
+.task-attempt-card h3:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+.task-attempt-log { border:1px solid var(--border); border-radius:.55rem; margin:.55rem 0; padding:.6rem .7rem; }
+.task-attempt-log summary { cursor:pointer; color:var(--accent); }
+.task-attempt-log ol { list-style:none; padding-left:0; margin:0; }
+.task-attempt-log ol > li { border-bottom:1px solid var(--border); padding:.58rem 0; overflow-wrap:anywhere; }
+.task-attempt-log ol > li:last-child { border:0; }
+.task-attempt-log small,.task-attempt-log time { color:var(--muted); font-size:.72rem; }
+.task-attempt-log time { display:block; margin-top:.2rem; }
 .task-scope-fields { display:grid; gap:.75rem; min-width:0; padding:.8rem 1rem 1rem; border:1px solid var(--border); border-radius:.6rem; }
 .task-scope-fields legend { padding:0 .4rem; color:var(--accent); font-size:.82rem; }
 .task-scope-fields small,.task-scope-summary small { color:var(--muted); }

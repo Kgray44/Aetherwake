@@ -199,23 +199,11 @@ function EvidenceReference({ uri, label, revision }) {
   </>;
 }
 
-export function TaskDeliveryEvidence({ task, lifecycle, attempts, Status }) {
+export function TaskDeliveryEvidence({ task, lifecycle }) {
   const criteria = new Map(task.acceptance.criteria.map(criterion => [criterion.id, criterion.description]));
   const links = lifecycle.links ?? [];
   const reviewed = lifecycle.evidence ?? [];
   return <section className="proposal-disclosure" aria-label="Execution and delivery evidence">
-    <h3>Execution attempts</h3>
-    {attempts.length ? <ol className="task-links">{[...attempts].reverse().map(attempt =>
-      <li key={attempt.id}>
-        <strong>Attempt {attempt.attempt_number}</strong>{' '}<Status value={attempt.state}/>
-        {attempt.started_at && <small>Started {stamp(attempt.started_at)}</small>}
-        {attempt.finished_at && <small>Finished {stamp(attempt.finished_at)}</small>}
-        {attempt.branch && <small>Branch <code>{attempt.branch}</code></small>}
-        {Number.isFinite(attempt.deadline)&&<small>Attempt deadline {stamp(attempt.deadline)}</small>}
-        <small>Base revision <code>{attempt.revision}</code></small>
-        {attempt.candidate_revision && <small>Candidate revision <code>{attempt.candidate_revision}</code></small>}
-        {attempt.failure && <p>{attempt.failure}</p>}
-      </li>)}</ol> : <p>No engine attempts recorded.</p>}
     <h3>Associated delivery evidence</h3>
     {links.length ? <ul className="task-links">{links.map((link, index) =>
       <li key={index}><EvidenceReference uri={link.uri} label={humanize(link.kind)} revision={link.revision}/></li>

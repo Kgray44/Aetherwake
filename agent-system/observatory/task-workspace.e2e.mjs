@@ -310,10 +310,14 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(detail.task.owner_acceptance, 'accepted');
   assert.equal(detail.lifecycle.evidence[0].revision, candidate);
   const evidence = page.getByRole('region', { name: 'Execution and delivery evidence' });
-  await evidence.getByText('Candidate revision', { exact: false }).waitFor();
+  const attemptPanel=page.locator('#task-attempts');
+  await attemptPanel.getByText('Candidate revision',{exact:true}).waitFor();
   const reviewed = evidence.getByRole('link', { name: 'Review the candidate result' });
   assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
-  assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
+  assert.equal(await evidence.getByText(candidate,{exact:true}).count(),1);
+  assert.equal(await attemptPanel.getByText(candidate,{exact:true}).count(),1);
+  await attemptPanel.getByText('Candidate submitted for review',{exact:true}).waitFor();
+  await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.getByText('Task complete',{exact:true}).waitFor();
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
@@ -328,6 +332,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const selected=timeline.getByRole('complementary',{name:'Selected timeline event'});
   await page.waitForFunction(()=>document.activeElement?.textContent==='Attempt 1 started');
   assert.ok((await selected.innerText()).includes('Attempt ID'));
+  await selected.getByRole('button',{name:'Open attempt details'}).click();
+  await page.waitForFunction(()=>document.activeElement?.textContent==='Attempt 1');
   await page.getByRole('button',{name:'Attach evidence link'}).click();
   const association=page.getByRole('form',{name:'Attach evidence link'});
   await association.getByLabel('Reference type').selectOption('pull_request');

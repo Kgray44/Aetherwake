@@ -88,6 +88,28 @@ test('work counters separate live execution, historical attempts and explicit ac
   const attempts = [{task_id:'old',state:'succeeded'},{task_id:'bad',state:'failed'},{task_id:'reported',state:'running'}];
   const summaries = new Map([['active',{lifecycle:{state:'running'}}], ['review',{lifecycle:{state:'verifying'}}]]);
   assert.deepEqual(workspaceCounts(tasks,attempts,summaries),{active:1,accepted:1,succeeded:1,review:1,waiting:0,issues:1,unlinked:1,reportedRunning:1});
+  summaries.set('old',{lifecycle:{state:'queued'}});
+  summaries.set('bad',{lifecycle:{state:'archived'}});
+  attempts.push({task_id:'review',state:'failed'});
+  assert.deepEqual(workspaceCounts(tasks,attempts,summaries),{active:1,accepted:1,succeeded:0,review:1,waiting:1,issues:0,unlinked:1,reportedRunning:1});
+});
+
+import { attemptJournal, mergeTaskAttempts } from './src/task-attempts.mjs';
+
+test('attempt journal merges matching receipts and candidate records without pulling in other attempts',()=>{
+  const task_id='task-a', id='attempt-a', revision='a'.repeat(40), candidate_revision='b'.repeat(40);
+  const [attempt]=mergeTaskAttempts(task_id,[{id,task_id,revision,model:'Observed model',attempt_number:1}],
+    [{id,revision,candidate_revision,state:'failed',failure:'Missing artifact',attempt_number:1}]);
+  assert.equal(attempt.model,'Observed model');
+  assert.equal(attempt.failure_diagnosis,'Missing artifact');
+  const trace={event_id:'trace-a',task_id,attempt_id:id,revision,kind:'span_end',occurred_at:'2026-11-20T02:00:00Z'};
+  const source={operation_id:'receipt-a',attempt_id:id,kind:'reject',reason:'Missing output',at:'2026-11-20T02:01:00Z'};
+  const related={id:'evidence-a',task_id,attempt_id:id,revision:candidate_revision};
+  const journal=attemptJournal(attempt,[trace,{...trace,event_id:'other',revision:candidate_revision}],
+    [source,{...source,operation_id:'other',target_id:'task-b'}],
+    [related,{...related,id:'unrelated',attempt_id:'other-attempt'}]);
+  assert.deepEqual(journal.events.map(row=>row.title),['Owner rejected candidate','span_end']);
+  assert.deepEqual(journal.evidence,[related]);
 });
 
 test('attempt details only include events bound to the Task, attempt and revision', () => {

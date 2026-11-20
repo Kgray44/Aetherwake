@@ -10,7 +10,7 @@ const time = value => new Date(value).toLocaleString(undefined,{hour:'numeric',m
 const day = value => new Date(value).toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'});
 const categories=['All','Task','Attempt','Audit','Trace','Evidence'];
 
-export function TaskTimeline({task,attempts,events,audits,evidence,records}) {
+export function TaskTimeline({task,attempts,events,audits,evidence,records,onOpenAttempt}) {
   const reduce=useReducedMotion();
   const interaction=useCardMotion(true);
   const items=useMemo(()=>buildTaskTimeline({task,attempts,events,audits,evidence,records}),[task,attempts,events,audits,evidence,records]);
@@ -73,6 +73,7 @@ export function TaskTimeline({task,attempts,events,audits,evidence,records}) {
           {event.measurements?.length>0&&<ul className="task-timeline-measurements">{event.measurements.map((metric,index)=><li key={index}>
             {human(metric.name)} · {metric.availability==='unavailable'?'Unavailable':metric.value??'Unavailable'} {metric.unit} · {metric.availability}
           </li>)}</ul>}
+          {event.attemptId&&onOpenAttempt&&<button type="button" className="text-button" onClick={()=>onOpenAttempt(event.attemptId)}>Open attempt details <ArrowRight size={14} aria-hidden="true"/></button>}
           {activity&&<a className="text-button" href={activity}>Open linked activity <ArrowRight size={14} aria-hidden="true"/></a>}
           {event.reviewedEvidence?.length>0&&<ul>{event.reviewedEvidence.map(item=>{
             const href=taskActivityHref(item.uri);

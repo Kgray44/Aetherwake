@@ -52,9 +52,13 @@ export function dependencyGraph(current, tasks) {
   };
 }
 
+const inactiveStates = new Set(['archived','cancelled','superseded']);
+const waitingStates = new Set(['ready','queued','admitted','scheduled','paused']);
+
 export function taskActivity(task, attempts, events, lifecycle) {
   const humanize = state => String(state).replaceAll('_', ' ');
-  if (lifecycle && ['running', 'pausing', 'cancelling', 'queued', 'scheduled', 'ready', 'paused'].includes(lifecycle.state)) {
+  if (lifecycle && (['running','pausing','cancelling','blocked','failed','verifying','completed'].includes(lifecycle.state) ||
+      waitingStates.has(lifecycle.state) || inactiveStates.has(lifecycle.state))) {
     return { label: 'Engine ' + humanize(lifecycle.state), at: lifecycle.state === 'scheduled'
       && Number.isFinite(lifecycle.start_at) ? new Date(lifecycle.start_at).toISOString() : null };
   }
@@ -83,12 +87,13 @@ export function workspaceCounts(tasks, attempts, summaries) {
     const engine = summaries.get(task.id)?.lifecycle;
     const state = engine?.state ?? task.state;
     const report = latest.get(task.id);
+    if (inactiveStates.has(state)) continue;
     if (task.owner_acceptance === 'accepted' && ['completed', 'accepted'].includes(state)) counts.accepted++;
     else if (engine && ['running','pausing','cancelling'].includes(state)) counts.active++;
-    else if (['failed','blocked'].includes(state) || report?.state === 'failed') counts.issues++;
     else if (state === 'verifying') counts.review++;
+    else if (engine && waitingStates.has(state)) counts.waiting++;
+    else if (['failed','blocked'].includes(state) || report?.state === 'failed') counts.issues++;
     else if (report?.state === 'succeeded') counts.succeeded++;
-    else if (engine && ['ready','queued','admitted','scheduled','paused'].includes(state)) counts.waiting++;
     else if (report?.state === 'running') counts.reportedRunning++;
     else if (!report && !engine?.executor) counts.unlinked++;
   }
