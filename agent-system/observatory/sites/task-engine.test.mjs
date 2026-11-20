@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, mkdir, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,7 +11,7 @@ import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkspaceTelemetryScope, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
 import { buildEngineeringAnalytics } from '../src/engineering-analytics.mjs';
 
@@ -153,6 +153,8 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
     await git(parent, 'clone', '--quiet', '--no-local', source, path);
     await git(path, 'remote', 'set-url', 'origin', 'https://github.com/Kgray44/Aetherwake.git');
     await git(path, 'switch', '-c', 'codex/aads-task-' + name);
+    await git(path, 'config', 'user.name', 'Test worker');
+    await git(path, 'config', 'user.email', 'test@example.test');
     workspaces.set(task.task.id, await realpath(path));
     assert.equal((await command(task, 'admit', { executor: 'codex' })).status, 200);
   }
@@ -169,11 +171,13 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   let release;
   const overlap = new Promise(resolve => { release = resolve; });
   const observed = [];
+  const verificationNamespace = crypto.randomUUID();
   const run = (claim, parallel) => runClaim({
+    verificationNamespace,
     claim, send, workspace: workspaces.get(claim.task.id), signal: AbortSignal.timeout(15_000),
     admitStorage: async () => {},
     ...(parallel ? {
-      onTelemetryStart: ({ attempt }) => observed.push({ type: 'start', id: attempt.id }),
+      onTelemetryStart: ({ attempt, verificationNamespace }) => observed.push({ type: 'start', id: attempt.id, verificationNamespace }),
       onUsage: ({ attempt, measurements }) => observed.push({ type: 'usage', id: attempt.id, measurements }),
       onTelemetryEnd: ({ attempt, measurements, state }) => observed.push({ type: 'end', id: attempt.id, measurements, state }),
     } : {}),
@@ -192,13 +196,12 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
         await overlap;
       }
       await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id], { cwd });
-      await git(cwd, 'add', 'artifact.txt');
-      await git(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'artifact');
       return { ok: true, measurements };
     },
   });
   await Promise.all([run(first, true), run(second, true)]);
   assert.deepEqual(observed.filter(item => item.id === first.attempt.id).map(item => item.type), ['start', 'usage', 'end']);
+  assert.equal(observed.find(item => item.id === first.attempt.id && item.type === 'start').verificationNamespace, verificationNamespace);
   const end = observed.find(item => item.id === first.attempt.id && item.type === 'end');
   assert.equal(end.state, 'completed');
   assert.equal(end.measurements.find(item => item.name === 'provider_core_usage_complete').value, 1);
@@ -208,6 +211,9 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   assert.equal(candidate.lifecycle.state, 'verifying');
   assert.equal(candidate.attempts[0].revision, base);
   const revision = candidate.attempts[0].candidate_revision;
+  assert.notEqual(revision, base);
+  assert.equal(await git(workspaces.get(a.task.id), 'rev-parse', revision + '^'), base);
+  assert.equal(await git(workspaces.get(a.task.id), 'status', '--porcelain'), '');
   assert.equal(await git(workspaces.get(a.task.id), 'show', revision + ':artifact.txt'), a.task.id);
   assert.equal((await command(candidate, 'accept', { evidence: [
     { criterion_id: 'criterion-1', uri: 'https://example.test/reviewed-artifact', revision },
@@ -288,4 +294,22 @@ test('revision-pinned PR and CI references survive replay and stay owner scoped'
   const detail = await get(created);
   assert.deepEqual(detail.lifecycle.links, [pull, ci]);
   assert.equal(detail.events.filter(event => event.kind === 'associate').length, 2);
+});
+
+test('verification workers reject checkouts connected to a different delivery namespace', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'aads-verification-scope-'));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const verification = crypto.randomUUID();
+  const connection = join(root, '.git', 'agent-harness', 'observatory-sync');
+  await checkWorkspaceTelemetryScope(root, verification);
+  await mkdir(connection, { recursive: true });
+  const config = namespace => writeFile(join(connection, 'connection.json'), JSON.stringify({
+    version: 1, ...(namespace ? { verification: namespace } : {}),
+  }));
+  await config();
+  await checkWorkspaceTelemetryScope(root, undefined);
+  await assert.rejects(checkWorkspaceTelemetryScope(root, verification), /telemetry namespace/);
+  await config(verification);
+  await assert.rejects(checkWorkspaceTelemetryScope(root, undefined), /telemetry namespace/);
+  await checkWorkspaceTelemetryScope(root, verification);
 });

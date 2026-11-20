@@ -8,9 +8,11 @@ import { promisify } from 'node:util';
 import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
+import { readObservatoryConnection } from './observatory-sync.mjs';
 
 const runFile = promisify(execFile);
-const taskIdPattern = /^task_[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const verificationId = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const taskIdPattern = new RegExp('^task_' + verificationId.source.slice(1));
 const repoUrl = /^(?:https:\/\/github\.com\/|git@github\.com:)Kgray44\/Aetherwake(?:\.git)?$/i;
 const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
@@ -34,6 +36,17 @@ export async function checkoutIdentity(path, base) {
   return { branch, revision, dirty: Boolean(dirty) };
 }
 
+async function checkpointCandidate(workspace, { branch, revision }, task, attempt) {
+  const noHooks = 'core.hooksPath=' + join(workspace, '.git', 'aads-disabled-hooks-' + randomUUID());
+  const writeGit = (...args) => git(workspace, '-c', noHooks, '-c', 'core.fsmonitor=false',
+    '-c', 'commit.gpgsign=false', ...args);
+  await writeGit('add', '-A', '--', '.');
+  const tree = await writeGit('write-tree');
+  const candidate = await writeGit('commit-tree', tree, '-p', revision, '-m',
+    'Checkpoint AADS Task ' + task.id + ' attempt ' + attempt.id);
+  await writeGit('update-ref', 'refs/heads/' + branch, candidate, revision);
+}
+
 function termination(child) {
   if (child.exitCode !== null || !child.pid) return;
   if (process.platform === 'win32') {
@@ -46,7 +59,8 @@ function termination(child) {
 export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
   const prompt = [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
-    'Follow repository governance and the current sandbox. Record changes and tests with an exact candidate revision.',
+    'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
+    'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
     task.title, task.objective, 'Acceptance criteria:',
@@ -89,7 +103,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
-  interval = 12_000 }) {
+  verificationNamespace, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
     ({ onTelemetryStart, onUsage, onTelemetryEnd } = createClaimTelemetryHooks(workspace));
@@ -150,7 +164,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       }
     })();
     telemetryStarted = true;
-    await telemetry(onTelemetryStart);
+    await telemetry(onTelemetryStart, { verificationNamespace });
     outcome = await execute({ executable, cwd: workspace, task, attempt,
       onSession: value => { sessionId = value; },
       onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
@@ -173,8 +187,16 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
-      try { result = await identify(workspace, attempt.revision); }
-      catch { /* Record a structured failure when candidate readback is unavailable. */ }
+      try {
+        result = await identify(workspace, attempt.revision);
+        if (result.dirty && result.branch === identity.branch && result.revision === attempt.revision) {
+          await admitStorage();
+          await checkpointCandidate(workspace, result, task, attempt);
+          result = await identify(workspace, attempt.revision);
+        }
+      } catch {
+        result = undefined;
+      }
       if (result && !result.dirty && result.branch === identity.branch) {
         await report('finished', { result: 'candidate', revision: result.revision });
         executionState = 'completed';
@@ -196,6 +218,13 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   }
 }
 
+export async function checkWorkspaceTelemetryScope(workspace, verification) {
+  const connection = await readObservatoryConnection(join(workspace, '.git', 'agent-harness', 'observatory-sync'));
+  if (connection && connection.verification !== verification) {
+    throw Error('Worker and checkout telemetry namespace must match');
+  }
+}
+
 async function main(configPath) {
   if (!configPath) throw Error('Usage: node scripts/agent/observatory-task-worker.mjs <private-config.json>');
   const credential = process.env.AADS_TASK_WORKER_KEY;
@@ -204,6 +233,10 @@ async function main(configPath) {
   if (!isAbsolute(config.codex_bin) || !isAbsolute(config.workspace_root) || !config.workspaces ||
       !Array.isArray(config.storage_check) || !config.storage_check.length || !config.storage_check.every(value => typeof value === 'string') ||
       !isAbsolute(config.storage_check[0])) throw Error('Worker configuration is incomplete');
+  const verification = config.verification;
+  if (verification !== undefined && (typeof verification !== 'string' || !verificationId.test(verification))) {
+    throw Error('Worker verification must be a namespace UUID');
+  }
   const root = await realpath(config.workspace_root);
   const workspaces = new Map();
   for (const [id, path] of Object.entries(config.workspaces)) {
@@ -212,6 +245,7 @@ async function main(configPath) {
     if (relative(root, dirname(workspace)) || [...workspaces.values()].includes(workspace)) {
       throw Error('Each Task workspace must be a distinct direct child of workspace_root');
     }
+    await checkWorkspaceTelemetryScope(workspace, verification);
     workspaces.set(id, workspace);
   }
   if (!workspaces.size || workspaces.size > 500) throw Error('Worker requires 1 to 500 Task workspace mappings');
@@ -226,7 +260,7 @@ async function main(configPath) {
   let connector;
   function send(request) {
     connector ??= openObservatoryConnector({ cwd: root, tool, executable: config.codex_bin });
-    return connector.call({ request, worker_key: credential }).catch(error => {
+    return connector.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }).catch(error => {
       if (!error.status) { connector?.close(); connector = undefined; }
       throw error;
     });
@@ -242,8 +276,13 @@ async function main(configPath) {
             return send(request);
           });
           if (result.claim && !signal.aborted) {
-            const job = runClaim({ claim: result.claim, send, workspace: workspaces.get(result.claim.task.id),
-              executable: config.codex_bin, signal, admitStorage }).catch(() => {
+            const workspace = workspaces.get(result.claim.task.id);
+            const job = runClaim({ claim: result.claim, send, workspace, executable: config.codex_bin, signal,
+              verificationNamespace: verification ?? null,
+              admitStorage: async () => {
+                await admitStorage();
+                await checkWorkspaceTelemetryScope(workspace, verification);
+              } }).catch(() => {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');
               }).finally(() => active.delete(job));
             active.add(job);
