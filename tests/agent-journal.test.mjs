@@ -94,3 +94,21 @@ test('concurrent observations wait for the current writer and preserve all disti
   assert.deepEqual(await Promise.all(events.map(event => appendEvent(dir, event))), events.map(() => true));
   assert.deepEqual((await readJournal(dir)).map(event => event.event_id).sort(), events.map(event => event.event_id));
 });
+
+test('retention accounts for multiple metadata batches and interrupted pending files', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'journal-retention-'));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const dir = join(root, 'private');
+  const event = traceEvent({task,kind:'lifecycle',state:'started',eventId:'first'});
+  await appendEvent(dir, event);
+  for (let index = 0; index < 35; index++) {
+    await writeFile(join(dir, '.pending-' + index), Buffer.alloc(128));
+  }
+  const next = {...event,event_id:'second'};
+  const exactBytes = Buffer.byteLength(JSON.stringify(event) + '\n') +
+    Buffer.byteLength(JSON.stringify(next) + '\n') + 35 * 128;
+  await assert.rejects(appendEvent(dir, next, {maxBytes:exactBytes - 1}), /retention/);
+  assert.equal(await appendEvent(dir, next, {maxBytes:exactBytes}), true);
+  assert.equal(await appendEvent(dir, next, {maxBytes:0}), false);
+  assert.deepEqual((await readJournal(dir)).map(row => row.event_id), ['first','second']);
+});

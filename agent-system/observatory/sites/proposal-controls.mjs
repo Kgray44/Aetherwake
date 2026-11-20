@@ -6,7 +6,6 @@ const transitions = {
   proposed: ['blocked', 'cancelled', 'superseded'],
   blocked: ['proposed', 'cancelled', 'superseded'],
 };
-const referenceKinds = ['git', 'requirement', 'document', 'artifact', 'issue', 'pull_request', 'url'];
 const failure = (status, error) => ({ status, body: { error } });
 
 export function proposalControl(row) {
@@ -20,7 +19,7 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
   }
   const select = () => db.prepare(`
     SELECT record, version, priority, receipts FROM proposals
-    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL
+    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL AND engine IS NULL
   `).bind(owner, namespace, id).first();
   const row = await select();
   if (!row) return failure(404, 'Private proposal not found');
@@ -47,14 +46,9 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
     let fields;
     try { fields = validateNewTask(action.fields); }
     catch (cause) { return failure(400, cause.message); }
-    const { requirements } = action.fields;
     priority = action.fields.priority;
-    if (!priorities.includes(priority) || !Array.isArray(requirements) || requirements.length > 50 ||
-        !requirements.every(ref => ref && referenceKinds.includes(ref.kind) && typeof ref.uri === 'string' &&
-          ref.uri.trim() && ref.uri.length <= 1000 &&
-          (ref.revision === undefined || (typeof ref.revision === 'string' && ref.revision.length <= 128))) ||
-        fields.ids.includes(id)) {
-      return failure(400, 'Invalid priority, requirement reference, or prerequisite');
+    if (!priorities.includes(priority) || fields.ids.includes(id)) {
+      return failure(400, 'Invalid priority or prerequisite');
     }
     const previousCriteria = [...task.acceptance.criteria];
     updated = {
@@ -63,7 +57,8 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
       objective: fields.objective,
       classification: { ...task.classification, primary: fields.primary },
       prerequisites: { task_ids: fields.ids, capabilities: fields.capabilities },
-      requirements: requirements.map(({ kind, uri, revision }) => ({ kind, uri: uri.trim(), ...(revision ? { revision } : {}) })),
+      ...(fields.requirements===undefined?{}:{requirements:fields.requirements}),
+      ...(fields.deliverables===undefined?{}:{deliverables:fields.deliverables}),
       acceptance: { profile_id: fields.profile, criteria: fields.accept.map(({ description }) => {
         const index = previousCriteria.findIndex(criterion => criterion.description === description);
         return index < 0 ? { description, id: 'criterion-' + crypto.randomUUID() } : previousCriteria.splice(index, 1)[0];
@@ -89,13 +84,18 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
   const receipt = {
     operation_id: action.operation_id, digest, actor: 'authenticated-owner', target_kind: 'proposal', target_id: id,
     expected_version: row.version, version, type: action.type, status: 'applied', at: new Date().toISOString(),
+    ...(action.type === 'edit' ? { fields:[
+      ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
+        JSON.stringify(task[key]) !== JSON.stringify(updated[key])),
+      ...(priority!==row.priority?['priority']:[]),
+    ] } : {}),
     ...(action.type === 'transition' ? { state: updated.state, reason: action.reason.trim() } : {}),
   };
   const history = JSON.stringify([...receipts.slice(-19), receipt]);
   // Bind the authorization and expected version to the same write as its receipt.
   const result = await db.prepare(`
     UPDATE proposals SET record = ?, version = ?, priority = ?, receipts = ?
-    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? AND github_state IS NULL
+    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? AND github_state IS NULL AND engine IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM task_telemetry t
         WHERE t.owner_id = proposals.owner_id AND t.namespace = proposals.namespace AND t.task_id = proposals.task_id

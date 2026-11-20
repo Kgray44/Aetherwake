@@ -1,8 +1,9 @@
+import { isTaskWorkerKey, readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
-import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail, peekGitHub } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
@@ -15,11 +16,17 @@ const JSON_HEADERS = {
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
 };
+const reportWorkerPath = '/assets/task-report.worker.js';
+const legacyReportWorker = /^\/assets\/task-report\.worker-[\w-]{8}\.js$/;
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 const error = (message, status) => json({ error: message }, status);
 
 export function createWorker({ assets, validate, sourceRevision, validateEvent, fetcher = fetch }) {
+  async function taskRevision(env) {
+    const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN);
+    return isRevision(main.revision) && (main.status === 'available' || (main.status === 'stale' && main.observed_at)) ? main : null;
+  }
   async function api(request, env, url) {
     // Sites dispatch sets this header after authenticating the visitor and applying
     // the owner-only access policy. Service credentials lack visitor identity.
@@ -31,6 +38,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
+    const taskEngine = url.pathname === taskEnginePath;
     const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
     const control = url.pathname.match(/^\/api\/tasks\/(task_[a-f0-9-]+)\/control$/);
     const sync = url.pathname === '/api/sync';
@@ -39,7 +47,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
     const ciActions = url.pathname === '/api/github/actions';
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
-    if (!overview && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
+    if (!overview && !taskEngine && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
     const readOnly = overview || detailsRoute || ((control || automaticSync || ciActions) && request.method === 'GET');
     if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
@@ -52,6 +60,21 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (taskEngine) {
+      let body;
+      try { body = JSON.parse(await readBounded(request.body, 64 * 1024)); }
+      catch (cause) { return error('Invalid Task request', cause instanceof RangeError ? 413 : 400); }
+      const access=owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID?'owner':'agent';
+      const result=await taskOperation({
+        db:env.DB,owner,namespace,body,validate,revision:()=>taskRevision(env),access,
+      });
+      if (body.op==='list'&&result.status===200&&access==='owner') {
+        const codex=isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY)?'configured':'not_configured';
+        return json({...result.body,executor_access:{codex}});
+      }
+      return json(result.body,result.status);
+    }
 
     if (ciActions) {
       const access = ciAccess(env, owner, verification);
@@ -89,7 +112,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       if (!UUID.test(id.slice(5))) return error('Invalid proposal ID', 400);
       if (readOnly) {
         const row = await env.DB.prepare(`SELECT version, priority, receipts FROM proposals
-          WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL`)
+          WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL AND engine IS NULL`)
           .bind(owner, namespace, id).first();
         return row ? json(proposalControl(row)) : error('Private proposal not found', 404);
       }
@@ -116,10 +139,12 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older/conflicting projection or verification namespace limit reached', 409);
     }
     if (overview) {
-      const [snapshot, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
-        cachedGitHub(env.DB, fetcher, validate, readToken),
-        env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
-          .bind(owner, namespace, MAX_PROPOSALS).all(),
+      const repository = url.searchParams.get('prefer') === 'cached'
+        ? peekGitHub(env.DB, readToken)
+        : cachedGitHub(env.DB, fetcher, validate, readToken).then(snapshot => ({snapshot,refresh:false}));
+      const [{snapshot, refresh}, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
+        repository,
+        readTaskRows({ db: env.DB, owner, namespace }),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
         env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
           .bind(owner, namespace).all(),
@@ -127,14 +152,23 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       ]);
       const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
+      const authoritative = rows.filter(row => row.engine).flatMap(row => {
+        const task = JSON.parse(row.record);
+        return [task, ...JSON.parse(row.engine).attempts.map(attempt => taskAttemptRecord(task, attempt))];
+      });
+      const authoritativeIds = new Set(authoritative.map(item => item.record_type + ':' + item.id));
+      const canProject = item => !authoritativeIds.has(item.record_type + ':' + item.id);
       const { items, ...recordCoverage } = snapshot.records;
       return json({
         schema_version: 1,
         revision: snapshot.main.revision ?? null,
         deployed_revision: sourceRevision,
+        github_refresh_pending: refresh,
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
-        records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))].filter(r => !projectedIds.has(r.record_type + ':' + r.id)).concat(projection?.records ?? []),
+        records: [...items.map(item => item.record), ...rows.filter(row => !row.engine).map(row => JSON.parse(row.record))]
+          .filter(r => canProject(r) && !projectedIds.has(r.record_type + ':' + r.id))
+          .concat((projection?.records ?? []).filter(canProject), authoritative),
         telemetry_scope: telemetryScope,
         execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events,
           sources: projection.sources, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
@@ -147,11 +181,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           },
         },
         proposals: {
-          total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null,
+          total: rows.length, limit: MAX_PROPOSALS, verification: verification !== null,
           publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
-          stale_revision_tasks: rows.results.filter(row => row.stale_revision === 1).map(row => row.task_id),
-          publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
-          controls: Object.fromEntries(rows.results.filter(row => !row.github_state && !projectedIds.has('task:' + row.task_id))
+          stale_revision_tasks: rows.filter(row => row.stale_revision === 1).map(row => row.task_id),
+          publication: Object.fromEntries(rows.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
+          controls: Object.fromEntries(rows.filter(row => !row.github_state && !row.engine && !projectedIds.has('task:' + row.task_id))
             .map(row => [row.task_id, { version: row.version, priority: row.priority }])),
         },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
@@ -209,19 +243,22 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
-      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent});
+      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent, taskRevision: () => taskRevision(env)});
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         try { return await api(request, env, url); }
         catch { return error('Observatory data temporarily unavailable', 503); }
       }
       if (!['GET', 'HEAD'].includes(request.method)) return error('Method not allowed', 405);
-      const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
+      const direct = Object.hasOwn(assets, url.pathname);
+      const rescue = !direct && legacyReportWorker.test(url.pathname) && Object.hasOwn(assets, reportWorkerPath);
+      const asset = direct ? assets[url.pathname] : rescue ? assets[reportWorkerPath] : null;
       if (!asset) return error('Not found', 404);
       return new Response(request.method === 'HEAD' ? null : asset.content, {
         headers: {
           'content-type': asset.type,
           'content-security-policy': CSP,
-          'cache-control': 'private, no-store',
+          'cache-control': !rescue && /^\/assets\/[\w-]+-[\w-]{8}\.(?:js|css)$/.test(url.pathname)
+            ? 'private, max-age=31536000, immutable' : 'private, no-store',
           'x-content-type-options': 'nosniff',
           'referrer-policy': 'no-referrer',
         },

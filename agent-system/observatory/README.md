@@ -2,6 +2,38 @@
 
 A deliberately custom, dark engineering-control interface for **engineering Tasks**, not the one-time set of eleven implementation missions. This is an isolated observability and task intake surface; it never overrides Vela MissionService, governance, agent scheduling, review approval, or PR merge authority.
 
+## Task Control Center
+
+Open #tasks to search, filter, sort, and group the Task feed. Task links
+preserve their IDs through reload. An actionable private proposal opens its
+editor and change history. Imported and local execution records display the
+authority available from their source.
+
+The inspector shows direct prerequisites and dependents, recorded attempts,
+evidence, and the Task execution timeline. Missing prerequisites are unverified.
+An accepted upstream Task satisfies the displayed dependency check. Execution
+admission remains with the source owner. Versioned editing preserves a draft
+through an incoming update and requires loading the latest version before saving.
+
+Visible Task routes refresh through the existing overview feed every 30 seconds.
+The Worker’s GitHub cache and rate-limit backoff govern upstream reads.
+
+From this directory, run npm run test:workspace:e2e after installing a
+Playwright Chromium browser. Set OBSERVATORY_BROWSER_EXECUTABLE to use an
+existing Chromium executable. The test uses built assets, real Worker handlers,
+an isolated SQLite database, and fixture GitHub responses.
+
+When the Task Engine API is available, private intake registers Tasks through
+it. Execution controls read the stored lifecycle separately from computed
+readiness and record owner actions using the current Task version. A scheduled
+start is submitted in UTC from the operator’s local time. Opening a control
+confers no authority. The Worker authorizes each action. Evidence links are
+revision-pinned, and per-attempt token accounting preserves observed coverage
+and unavailable values from the analytics projection.
+
+Set OBSERVATORY_ENGINE_E2E=1 on a combined checkout with Milestone B’s Worker
+to run the canonical schedule and queue-control browser scenario.
+
 ## Run
 
 From a checked-out repository with Node.js 20.19+ or 22.12+:
@@ -46,9 +78,9 @@ The Worker build uses the same Vite UI and shared intake code. It produces `dist
 
 - Sites enforces who may visit. The Worker requires Sites-injected visitor identity for API requests and scopes every D1 read/write to that identity. POST requires an exact same-origin request and JSON. Task intake inserts proposed, unreviewed v1 tasks. The form defaults to private. Selecting Public GitHub proposal requests publication of its v1 JSON to [Proposed Tasks](https://github.com/Kgray44/Aetherwake/tree/observatory-proposed-tasks/Proposed%20Tasks) on the dedicated intake branch. Configure a repository-scoped Sites secret `GITHUB_PROPOSAL_TOKEN` with Contents write and Issues, Pull requests, and Actions read permissions. GitHub reads can reuse that credential unless a separate `GITHUB_READ_TOKEN` is set. The app writes only new proposal files on that branch. Failed writes are visible as pending and can be retried from the task detail. Loopback, isolated verification and sanitized telemetry never use the public publication path.
 - A private proposal can use a previously observed GitHub main revision during a rate limit or refresh failure. The proposal records that provenance through reload. A new public proposal requires a current snapshot. An initial outage with no known revision blocks both forms of intake.
-- GitHub reads are server-side and limited to `Kgray44/Aetherwake`. A Site that has used a configured credential keeps its cached data and reports degraded authentication if that credential is rejected or disappears. Both documented record paths are read at the resolved `refs/heads/main` SHA. At most six directory listings, twelve JSON files and 750 valid records are projected. Results expose pinned file paths and blob SHAs, omitted or unavailable paths, and truncation. Issues, pull requests and main CI show a bounded activity window independently of the v1 records. GitHub failures can affect sources independently. Intake requires a resolved main SHA. Workers share a 15-minute D1 cache, preserve the last successful result per source during outages, and honor GitHub’s retry headers. Optionally set the server-side Sites secret `GITHUB_READ_TOKEN` to a fine-grained credential for this repository with read-only Contents, Issues, Pull requests and Actions access. The token stays in the Worker and requests never follow redirects.
+- GitHub reads are server-side and limited to `Kgray44/Aetherwake`. A Site that has used a configured credential keeps its cached data and reports degraded authentication if that credential is rejected or disappears. Both documented record paths are read at the resolved `refs/heads/main` SHA. At most six directory listings, twelve JSON files and 750 valid records are projected. Results expose pinned file paths and blob SHAs, omitted or unavailable paths, and truncation. Issues, pull requests and main CI show a bounded activity window independently of the v1 records. GitHub failures can affect sources independently. Intake requires a resolved main SHA. Workers share a 15-minute D1 cache, preserve the last successful result per source during outages, and honor GitHubÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¾ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢s retry headers. Optionally set the server-side Sites secret `GITHUB_READ_TOKEN` to a fine-grained credential for this repository with read-only Contents, Issues, Pull requests and Actions access. The token stays in the Worker and requests never follow redirects.
 - D1 holds up to 500 proposals per owner and namespace. Use `?verification=<random-uuid-v4>` to run a hosted create-and-reload check in an isolated namespace. The private API takes this value via `x-observatory-verification`. Remove the query parameter to return to the normal registry. No local records or credentials should be copied into the Site build or its source history.
-- The hosted Worker does not run agents, invoke approval, or integrate with Vela MissionService. The GitHub write surfaces are create-only proposal publication and the CI controls below. Actual usage is unavailable unless supplied by a contract-backed measurement. GitHub check conclusions and merge state carry no task acceptance.
+- The hosted Worker holds engineering Task state and supplies leases to configured executors. Execution runs on a separate Codex worker host. Vela product missions retain their own MissionService. The GitHub write surfaces are create-only proposal publication and the CI controls below. Actual usage is unavailable unless supplied by a contract-backed measurement. GitHub check conclusions and merge state carry no task acceptance.
 
 Pull requests and CI runs have dedicated routeable lists, newest-created ordering, and detail views. The home feed previews the five latest entries from each loaded window. Details are fetched on demand and link to GitHub for full source and logs.
 
@@ -61,6 +93,40 @@ Task investigations bind trace, evidence, and measurements to the Task, Attempt,
 revision. Prior passing measurements are shown only when unit, source, method, and
 phase agree. Shared revisions are displayed separately from explicit evidence links.
 The investigation suggests a diagnostic check and shows missing or cached evidence.
+
+### Canonical Task execution API
+
+The hosted Site and Codex MCP tool operate on the same owner-scoped records in the Observatory database. Existing Site proposals retain their IDs. An engine operation advances the existing row and writes its audit event in the same database transaction. Published proposals remain reviewable through the existing GitHub intake workflow. Explicit owner admission activates the same Task ID in the private engine and preserves the published intake snapshot.
+
+| Interface | Request |
+| --- | --- |
+| Site | POST /api/task-engine/v1 with same-origin JSON |
+| Codex or supported agent | MCP tool task_engine_v1 with a request object and optional verification UUID |
+| Configured executor | The same MCP tool with a worker credential and lease-specific operations |
+
+The [v1 request and response schema](../contracts/task-engine-v1.schema.json) defines list, get, register, command, claim and report. List returns lightweight Task summaries, with optional lifecycle-state filtering. Detail includes the v1 Task, optimistic version, priority, authoritative lifecycle, attempts and ordered audit events. The lifecycle includes the stored phase and current readiness with reasons. The v1 overview projects compatible Task and Attempt records for existing clients. Imported telemetry cannot replace an engine-owned Task or Attempt.
+
+Registration takes an operation UUID and the existing intake fields and resolves the current or last known GitHub revision from the shared cache. Commands take a Task ID, operation UUID, expected version and typed action. Replaying the same operation uses its receipt. Use a fresh UUID after changing an operation or resolving a version conflict. Owner decisions are recorded separately from ordinary agent edits and artifact associations. Provide revision-pinned links for branches, commits, reviews, PRs, CI runs, test results, artifacts and investigations. Each attempt carries the stable Task ID, a distinct attempt ID and an immutable execution revision for telemetry. Candidate readback records the resulting commit separately as candidate_revision. A reported Codex session ID identifies the provider checkpoint for that attempt.
+
+The owner explicitly admits a Task for Codex execution and can set a future start, attest declared capability prerequisites and choose cancellation propagation. The scheduler orders eligible tasks by priority and creation time and allows up to two active leases per owner and namespace. A prerequisite is satisfied after its engine-recorded reviewed completion. Eligibility is recomputed from the persisted dependency graph on read and claim. The worker claims periodically without polling GitHub. Lost leases produce orphaned attempts that require a documented owner retry decision. Pause or cancel requests wait for the executor to confirm it stopped. A confirmed paused attempt can resume its recorded Codex session in the same checkout.
+
+A worker exit requests verification. Acceptance requires the configured owner's review decision and a reference for each criterion at the candidate revision. The references record what the owner reviewed. The engine does not automatically certify linked artifacts or treat a PR or CI result as approval.
+
+For a hosted rollout, apply migration 0011, set the private Site's OBSERVATORY_TASK_ENGINE_OWNER_ID and OBSERVATORY_TASK_WORKER_KEY, and verify the new tool appears in discovery from the installed Observatory connector. Use a generated secret of at least 32 characters and configure the same value as AADS_TASK_WORKER_KEY on the executor host. Keep the secret out of repository files, command arguments and Task records. The ordinary agent tool cannot admit, cancel, retry or accept work, and the worker credential cannot authorize those operations.
+
+Start the host with node scripts/agent/observatory-task-worker.mjs and the path to a private JSON config. The config provides the executable, workspace root, storage check, workspace policy, and an optional verification namespace.
+
+- codex_bin is an absolute path to the executable of a signed-in Codex installation supporting exec and App Server.
+- workspace_root is an absolute path containing dedicated Aetherwake checkouts. Each checkout has its own Git directory and a codex/aads-task- branch.
+- `workspaces` maps Task IDs to existing dedicated checkouts. In this mode, the worker only claims mapped Tasks.
+- `auto_provision` with `name` and `email` opts the worker into creating its own checkouts. The worker claims owner-admitted Tasks and fetches the exact claimed commit from Aetherwake into a dedicated branch under `workspace_root`. Optional `auto_provision.task_ids` narrows claims by Task ID. Explicit `workspaces` can still override checkout locations for eligible Tasks.
+- Size `storage_check` for the maximum concurrent checkout and Git object allocation on the worker host. Provisioning is covered by the same reservation and lease as the attempt. An existing clean checkout at the pinned revision is reusable. Interrupted sessions require their original checkout, and dirty or conflicting workspaces are retained for reconciliation.
+- storage_check is an argument array starting with an absolute executable path. Its exit code controls resource admission before launch and during heartbeats. On the AERO X16 use the host reserve check with bounded estimates.
+- verification is the UUID of an isolated Task namespace. Use the same UUID in the Site controls and when connecting telemetry for the sandbox checkouts. The worker rejects a checkout connected to a different telemetry namespace, and omitting verification selects the live namespace.
+
+Use the same workspaces and Codex session storage when restarting a paused executor. If the host dies while an execution is active, the next Task read or scheduler pass after the lease deadline records the orphaned attempt. Inspect the workspace and process state before removing a stale local lock or approving a retry. Effects from an orphaned attempt can remain in the checkout. The host verifies checkout identity and records a local candidate commit from the dedicated checkout after a successful Codex turn. The configured Git identity authors that commit. The worker never pushes the commit or grants acceptance. Codex runs with workspace-write sandboxing and approval escalation disabled. The worker uses the existing bounded AADS Codex event observer. Its runClaim telemetry callbacks receive the original Task and canonical Attempt. onTelemetryStart begins an execution observation, onUsage delivers normalized completed-turn measurements, and onTelemetryEnd delivers the observer summary and execution disposition. The execution disposition does not grant Task acceptance.
+
+The subprocess integration test executes real artifact-producing steps with an explicit test executor. It proves queueing and evidence transitions across separate checkouts. Verify the hosted MCP deployment, owner controls and signed-in Codex provider execution independently before production acceptance.
 
 ### CI controls
 

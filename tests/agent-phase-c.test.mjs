@@ -115,12 +115,24 @@ test('durable Attempt start reconstructs after actual observer process terminati
  const {reconstructAttempts}=await import('../scripts/agent/record-journal.mjs');
  const {readdir}=await import('node:fs/promises');
  const f=await fixture(t);const out=join(f.dir,'interrupted.jsonl');
- const script=`import {runObserved} from ${JSON.stringify(new URL('../scripts/agent/telemetry.mjs',import.meta.url).href)};process.chdir(${JSON.stringify(f.dir)});await runObserved({task:${JSON.stringify(f.task)},context:${JSON.stringify(f.snapshot)},repository:'example/repo',out:${JSON.stringify(out)},command:[process.execPath,'-e','setTimeout(()=>{},300)']});`;
- const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:'ignore'});
+ const script=`import {runObserved} from ${JSON.stringify(new URL('../scripts/agent/telemetry.mjs',import.meta.url).href)};process.chdir(${JSON.stringify(f.dir)});await runObserved({task:${JSON.stringify(f.task)},context:${JSON.stringify(f.snapshot)},repository:'example/repo',out:${JSON.stringify(out)},command:[process.execPath,'-e','process.stdin.resume()']});`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:['pipe','ignore','ignore']});
+ const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
  let found=false;
- for(let i=0;i<100;i++){try{found=(await readdir(out+'.journal/records')).some(n=>n.endsWith('.json'));}catch{}if(found)break;await new Promise(r=>setTimeout(r,10));}
- assert.ok(found,'running canonical Attempt persisted before execution');
- const closed=new Promise(r=>child.once('close',r));child.kill('SIGKILL');await closed;
+ try {
+  const deadline=performance.now()+30_000;
+  while(performance.now()<deadline&&child.exitCode===null&&child.signalCode===null){
+   try{found=(await readdir(out+'.journal/records')).some(n=>n.endsWith('.json'));}
+   catch(error){if(error.code!=='ENOENT')throw error;}
+   if(found)break;
+   await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  assert.ok(found,'running canonical Attempt persisted before execution');
+ } finally {
+  child.kill('SIGKILL');
+  child.stdin.destroy();
+  await closed;
+ }
  const result=await reconstructAttempts(out+'.journal');
  assert.equal(result.attempts.length,1);assert.equal(result.attempts[0].state,'running');
  assert.equal(result.coverage[0].execution_liveness,'unknown');assert.equal(result.coverage[0].coverage,'partial');

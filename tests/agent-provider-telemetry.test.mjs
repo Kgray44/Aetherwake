@@ -142,23 +142,25 @@ test('command wrapper journals selected usage and preserves the child stdout and
 
 test('completed usage survives observer interruption without claiming the Attempt completed', async t => {
   const {cwd, journalPath, argv} = await wrapperFixture(t);
-  const command = 'process.stdout.write(' + JSON.stringify(usageFrames) + ');setTimeout(()=>{},3000)';
-  const wrapper = spawn(process.execPath, argv(command), {cwd,stdio:'ignore',windowsHide:true});
+  const command = 'process.stdout.write(' + JSON.stringify(usageFrames) + ');process.stdin.resume()';
+  const wrapper = spawn(process.execPath, argv(command), {cwd,stdio:['pipe','ignore','ignore'],windowsHide:true});
   const closed = once(wrapper, 'close');
   let saved = false;
   try {
-    for (let i=0; i<150; i++) {
+    const deadline = performance.now() + 30_000;
+    while (performance.now() < deadline && wrapper.exitCode === null && wrapper.signalCode === null) {
       const events = await readJournal(journalPath).catch(error => {
         if (error.code === 'ENOENT') return [];
         throw error;
       });
       saved = events.some(event => event.kind === 'measurement');
       if (saved) break;
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 25));
     }
     assert.equal(saved, true, 'provider measurement persisted before child exit');
   } finally {
     wrapper.kill('SIGKILL');
+    wrapper.stdin.destroy();
     await closed;
   }
   const rebuilt = await reconstructAttempts(journalPath);
@@ -168,4 +170,75 @@ test('completed usage survives observer interruption without claiming the Attemp
   const events = await readJournal(journalPath);
   assert.equal(findings(events.find(event => event.kind === 'measurement').measurements).provider_input_tokens.value, 15);
   assert.equal(events.some(event => event.kind === 'span_end'), false);
+});
+
+test('core coverage tolerates absent optional fields and rejects invalid token subsets', async () => {
+  const persisted = [];
+  const frames = usage => [line({type:'turn.started'}),line({type:'turn.completed',usage})];
+  const observe = usage => observeCodexStream(stream(frames(usage)), {onUsage: async rows => { persisted.push(findings(rows)); }});
+  const valid = findings(await observe({input_tokens:12,output_tokens:3,cached_input_tokens:0}));
+  assert.equal(valid.provider_core_usage_complete?.value, 1);
+  assert.equal(valid.provider_usage_complete.value, 0);
+  const invalid = findings(await observe({
+    input_tokens:12,output_tokens:3,cached_input_tokens:13,reasoning_output_tokens:4
+  }));
+  assert.equal(invalid.provider_core_usage_complete?.value, 1);
+  assert.equal(persisted[1].provider_cached_input_tokens.availability, 'unavailable');
+  assert.equal(persisted[1].provider_reasoning_output_tokens.availability, 'unavailable');
+  const missing = findings(await observe({output_tokens:3}));
+  assert.equal(missing.provider_core_usage_complete?.value, 0);
+});
+
+test('claimed execution journals usage against its immutable revision without publishing an Attempt copy', async t => {
+  const {createClaimTelemetry} = await import('../scripts/agent/claim-telemetry.mjs');
+  const {projectJournal} = await import('../scripts/agent/export-journal.mjs');
+  const {journalPath, task:fixtureTask} = await wrapperFixture(t);
+  const task = {...fixtureTask,repository:'Kgray44/Aetherwake'};
+  const attempt = {id:'attempt_engine',revision:'d'.repeat(40)};
+  const collector = createClaimTelemetry({journal:journalPath,task,attempt});
+  await collector.start();
+  const summary = await observeCodexStream(stream([usageFrames]), {onUsage:collector.onUsage});
+  let events = await readJournal(journalPath);
+  assert.deepEqual(events.map(event => event.kind).sort(), ['measurement','span_start']);
+  assert.equal(events.every(event => event.attempt_id === attempt.id && event.revision === attempt.revision), true);
+  assert.doesNotMatch(JSON.stringify(events), /private-thread|private-item|secret-path/);
+  await collector.finish({measurements:summary,state:'completed'});
+  events = await readJournal(journalPath);
+  const close = events.find(event => event.kind === 'span_end');
+  assert.equal(findings(close.measurements).provider_core_usage_complete.value, 1);
+  assert.equal(findings(close.measurements).elapsed_wall_ms.availability, 'observed');
+  const exported = JSON.parse(await projectJournal({task,directory:journalPath}));
+  assert.deepEqual(exported.records.map(record => record.record_type), ['task']);
+  assert.equal(exported.events.length, 3);
+  const retry = createClaimTelemetry({journal:journalPath,task,attempt});
+  await assert.rejects(retry.start(), /already exists|Conflicting/);
+  assert.equal((await readJournal(journalPath)).length, 3);
+});
+
+test('default engine hooks use the dedicated checkout journal with no connection required', async t => {
+  const {createClaimTelemetryHooks} = await import('../scripts/agent/claim-telemetry.mjs');
+  const {cwd, task} = await wrapperFixture(t);
+  const attempt = {id:'attempt_worker',revision:task.revision};
+  const hooks = createClaimTelemetryHooks(cwd);
+  await hooks.onTelemetryStart({task,attempt});
+  const measurements = await observeCodexStream(stream([usageFrames]), {
+    onUsage: usage => hooks.onUsage({task,attempt,measurements:usage})
+  });
+  await hooks.onTelemetryEnd({task,attempt,measurements,state:'interrupted'});
+  const rows = await readJournal(join(cwd,'.git','agent-harness','claimed-execution.journal'));
+  assert.equal(rows.length, 3);
+  assert.equal(rows.find(event => event.kind === 'span_end').state, 'interrupted');
+});
+
+test('claim delivery forwards isolated and explicit live namespace to the existing synchronizer', async t => {
+  const {createClaimTelemetryHooks} = await import('../scripts/agent/claim-telemetry.mjs');
+  const {cwd,task} = await wrapperFixture(t);
+  const calls = [];
+  const verification = '10971a67-3899-4980-8d25-5500a0499fd6';
+  for (const [index,scope] of [verification,null].entries()) {
+    const attempt = {id:'attempt_namespace_'+index,revision:task.revision};
+    const hooks = createClaimTelemetryHooks(cwd, {startDelivery:async request => calls.push(request)});
+    await hooks.onTelemetryStart({task,attempt,verificationNamespace:scope});
+  }
+  assert.deepEqual(calls.map(request => request.verificationNamespace), [verification,null]);
 });

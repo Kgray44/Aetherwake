@@ -3,11 +3,11 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 const server = 'codex_apps';
-const tool = 'aetherwake_engineering_observatory.sync_task_telemetry';
+const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
 const timeoutMs = 8000;
 
-export function openObservatoryConnector({ signal, cwd = process.cwd() } = {}) {
-  const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex' } = {}) {
+  const child = spawn(executable, ['app-server', '--listen', 'stdio://'], {
     cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
   });
   const lines = createInterface({ input: child.stdout });
@@ -66,8 +66,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd() } = {}) {
       let value;
       try { value = result.structuredContent ?? JSON.parse(result.content.find(item => item.type === 'text').text); }
       catch { throw Error('Observatory returned an unreadable response'); }
-      if (result.isError || value.error || (value.status !== undefined && value.status !== 200)) {
-        const error = Error('Observatory declined the telemetry request');
+      if (result.isError || value.error || (value.status !== undefined && (value.status < 200 || value.status >= 300))) {
+        const error = Error('Observatory declined the request');
         error.status = value.status;
         throw error;
       }

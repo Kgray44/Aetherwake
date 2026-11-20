@@ -73,3 +73,14 @@ export function runRepositoryTotal(group) {
   const total = group?.repository_total;
   return Number.isSafeInteger(total) && total >= 0 ? total : null;
 }
+
+export function taskActivityHref(uri) {
+  if (typeof uri !== 'string') return null;
+  let url;
+  try { url = new URL(uri); } catch { return null; }
+  if (url.origin !== 'https://github.com' || url.username || url.password) return null;
+  const pull = /^\/Kgray44\/Aetherwake\/pull\/([1-9]\d*)(?:\/(?:files|commits|checks))?\/?$/i.exec(url.pathname);
+  const run = /^\/Kgray44\/Aetherwake\/actions\/runs\/([1-9]\d*)(?:\/(?:job|attempts)\/[1-9]\d*)?\/?$/i.exec(url.pathname);
+  const id = Number(pull?.[1] ?? run?.[1]);
+  return Number.isSafeInteger(id) ? activityHref(pull ? 'pulls' : 'runs', id) : null;
+}

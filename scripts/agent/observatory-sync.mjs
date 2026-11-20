@@ -150,11 +150,20 @@ export function journalDelivery({ task, journal, statePath, connector, verificat
   };
 }
 
-export async function startObservatorySync({ task, journal, directory = observatoryDirectory() }) {
+export async function readObservatoryConnection(directory) {
   const config = await jsonFile(join(directory, 'connection.json'));
+  if (config && (config.version !== 1 ||
+      (config.verification !== undefined && (typeof config.verification !== 'string' || !uuid.test(config.verification))))) {
+    throw Error('Invalid Observatory connection');
+  }
+  return config;
+}
+
+export async function startObservatorySync({ task, journal, directory = observatoryDirectory(), verificationNamespace }) {
+  const config = await readObservatoryConnection(directory);
   if (!config || task.repository !== 'Kgray44/Aetherwake') return null;
-  if (config.version !== 1 || config.verification && !uuid.test(config.verification) || !identity(task.id)) {
-    throw Error('Invalid Observatory connection or Task identity');
+  if (!identity(task.id) || (verificationNamespace !== undefined && (config.verification ?? null) !== verificationNamespace)) {
+    throw Error('Invalid Observatory telemetry namespace or Task identity');
   }
   await privateDirectory(directory);
   const scope = config.verification ?? 'live';

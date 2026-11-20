@@ -20,13 +20,13 @@ function Measurements({ events }) {
   </div>);
 }
 
-function TraceWaterfall({ events }) {
+export function TraceWaterfall({ events, fixedTask }) {
   const [task, setTask] = useState('');
   const [attempt, setAttempt] = useState('');
   const [focused, setFocused] = useState('');
   const [showEvents, setShowEvents] = useState(false);
   const tasks = useMemo(() => [...new Set(events.map(event => event.task_id))].sort(), [events]);
-  const selectedTask = tasks.includes(task) ? task : tasks[0];
+  const selectedTask = fixedTask ?? (tasks.includes(task) ? task : tasks[0]);
   const taskEvents = useMemo(() => events.filter(event => event.task_id === selectedTask), [events, selectedTask]);
   const attempts = useMemo(() => [...new Set(taskEvents.map(event => event.attempt_id).filter(Boolean))].sort(), [taskEvents]);
   const selectedAttempt = attempts.includes(attempt) ? attempt : '';
@@ -43,11 +43,11 @@ function TraceWaterfall({ events }) {
 
   return <div className="trace-view">
     <div className="form form-grid">
-      <label>Task <select value={selectedTask} onChange={event => {
+      {!fixedTask && <label>Task <select value={selectedTask} onChange={event => {
         setTask(event.target.value); setAttempt(''); setFocused('');
       }}>
         {tasks.map(id => <option key={id}>{id}</option>)}
-      </select></label>
+      </select></label>}
       <label>Attempt <select value={selectedAttempt} onChange={event => {
         setAttempt(event.target.value); setFocused('');
       }}>

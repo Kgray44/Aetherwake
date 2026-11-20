@@ -8,7 +8,7 @@ test('criterion evidence cannot select an accepted badge', () => {
   assert.doesNotMatch(source, /pass\s*\?\s*['"]accepted['"]/);
 });
 
-import { criterionEvidenceStatus, evidenceClaimStatus } from './src/evidence-status.mjs';
+import { criterionEvidenceStatus, evidenceClaimStatus, ownerReviewByCriterion } from './src/evidence-status.mjs';
 const revision = 'a'.repeat(40);
 const passed = {result:'passed', synthetic:false, revision,task_id:'task',attempt_id:'attempt'};
 const attempts=[{id:'attempt',task_id:'task',revision}];
@@ -22,6 +22,21 @@ test('missing, synthetic, stale and nonpassing evidence cannot establish accepta
     assert.equal(criterionEvidenceStatus(evidence,revision),'unverified');
   }
 });
+test('only a current canonical owner review tied to the accepted candidate satisfies a criterion',()=>{
+  const task={id:'task',owner_acceptance:'accepted',acceptance:{criteria:[{id:'c1'},{id:'c2'}]}};
+  const accepted={criterion_id:'c1',revision,uri:'https://example.test/checked-artifact'};
+  const canonical={task,lifecycle:{stored_state:'completed',evidence:[accepted,{...accepted,criterion_id:'c2',revision:'b'.repeat(40)}]},
+    attempts:[{id:'a',state:'succeeded',candidate_revision:revision}],
+    events:[{kind:'accept',attempt_id:'a',revision,at:'2026-11-20T03:00:00Z'}]};
+  const shown=ownerReviewByCriterion(task,canonical);
+  assert.deepEqual([...shown.keys()],['c1']);
+  assert.equal(shown.get('c1').at,canonical.events[0].at);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,lifecycle:{...canonical.lifecycle,stored_state:'archived'}}).size,1);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,lifecycle:{...canonical.lifecycle,stored_state:'queued'}}).size,0);
+  assert.equal(ownerReviewByCriterion(task,{...canonical,task:{...task,id:'other'}}).size,0);
+  assert.equal(ownerReviewByCriterion(task,null).size,0);
+});
+
 test('display classification does not mutate canonical task or evidence records', () => {
   const task={state:'accepted',owner_acceptance:'accepted',revision};
   const original=JSON.stringify({task,passed});
@@ -36,7 +51,7 @@ test('absent or mismatched attempt linkage is explicit and never accepted', () =
  }
 });
 
-import { recurringTraceBottlenecks, traceTimeline } from './src/trace-timeline.mjs';
+import { observedTaskTraceCoverage, recurringTraceBottlenecks, traceTimeline } from './src/trace-timeline.mjs';
 
 test('trace coverage counts overlapping spans once and retains partial spans and monotonic durations', () => {
   const time = n => new Date(n).toISOString();
@@ -59,6 +74,23 @@ test('trace coverage counts overlapping spans once and retains partial spans and
   assert.equal(timeline.spans.find(span => span.id === 'overlap').monotonicMs, null);
   assert.equal(timeline.spans.find(span => span.id === 'late').complete, false);
   assert.equal(timeline.spans.find(span => span.id === 'pending').complete, false);
+});
+
+test('overview coverage includes linked measured spans and excludes unmatched or open attempts',()=>{
+  const alpha={id:'a'};
+  const beta={id:'b'};
+  const revision='a'.repeat(40);
+  const attempt=task_id=>({id:'attempt-'+task_id,task_id,revision});
+  const span=(task_id,span_id,start,end,override={})=>[
+    {kind:'span_start',occurred_at:new Date(start).toISOString()},
+    ...(end===null?[]:[{kind:'span_end',occurred_at:new Date(end).toISOString()}]),
+  ].map(event=>({...event,task_id,attempt_id:'attempt-'+task_id,trace_id:'trace-'+task_id,revision,span_id,phase:'verification',...override}));
+  const events=[...span('a','root',0,5000),...span('a','nested',1000,3000),...span('b','parallel',2000,8000),
+    ...span('b','unfinished',8000,null),...span('b','wrong-revision',10000,40000,{revision:'b'.repeat(40)}),
+    ...span('other','unrelated',8000,10000)];
+  assert.deepEqual(observedTaskTraceCoverage([alpha,beta],[attempt('a'),attempt('b'),attempt('other')],events),
+    {coveredMs:8000,tasks:2,spans:3});
+  assert.deepEqual(observedTaskTraceCoverage([alpha],[],events),{coveredMs:null,tasks:0,spans:0});
 });
 
 test('a reused span ID cannot pair boundaries across attempts or revisions', () => {

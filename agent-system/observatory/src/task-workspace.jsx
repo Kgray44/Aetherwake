@@ -1,0 +1,270 @@
+import React, { useMemo, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
+import {taskActivityHref} from './github-activity.mjs';
+import { useCardMotion } from './card-motion.jsx';
+import { attemptMatchesEvidence, criterionEvidenceStatus, evidenceClaimStatus } from './evidence-status.mjs';
+import { attemptJournal } from './task-attempts.mjs';
+import { dependencyGraph, organizeTasks, taskHref, workLabels } from './task-workspace.mjs';
+
+export const defaultTaskFilters = { query: '', source: 'all', state: 'all', sort: 'newest', group: 'none' };
+const labels = value => value.replaceAll('_', ' ');
+const date = value => value ? new Date(value).toLocaleDateString() : 'Unavailable';
+
+export function TaskRows({ tasks, controls, related, activityFor, Status, overviewResults }) {
+  const reduce = useReducedMotion();
+  const interaction = useCardMotion(true);
+  return <ul className="task-rows">
+    <AnimatePresence initial={false}>
+      {tasks.map(task => {
+        const control = Object.hasOwn(controls, task.id) ? controls[task.id] : null;
+        const result = overviewResults?.get(task.id);
+        const attempts = related(task.id, 'attempt').length;
+        const reports = related(task.id, 'evidence').length;
+        return <motion.li key={task.id} layout={reduce ? false : 'position'}
+          initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
+          exit={reduce ? undefined : { opacity: 0 }} transition={{ duration: reduce ? 0 : .18 }}>
+          <motion.a className="task-row" href={taskHref(task.id)} {...interaction}>
+            <span className="task-row-title">
+              <strong>{task.title}</strong>
+              <small>{task.classification?.primary ?? 'Class unavailable'} · {date(task.created_at)}</small>
+            </span>
+            <span className="task-row-state"><small>Task state</small><Status value={result?.queued ? 'queued' : task.state}/></span>
+            <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
+            <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{attempts} {attempts === 1 ? 'attempt' : 'attempts'} · {reports} imported {reports === 1 ? 'report' : 'reports'}</small></span>
+            <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
+          </motion.a>
+          {result && (result.artifact || result.observedMs != null || result.observedTokens != null) &&
+            <div className="task-row-results">
+              {result.artifact && <a href={result.artifact.uri} target="_blank" rel="noreferrer"
+                aria-label={'Open artifact for ' + task.title}>Open artifact <ArrowRight size={13} aria-hidden="true"/></a>}
+              {(result.observedMs != null || result.observedTokens != null) &&
+                <a href={taskHref(task.id)} aria-label={'Inspect latest attempt telemetry for ' + task.title}>
+                  {result.observedTokens != null ? result.observedTokens.toLocaleString() + ' observed tokens' : null}
+                  {result.observedTokens != null && result.observedMs != null ? ' · ' : null}
+                  {result.observedMs != null ? (result.observedMs / 1000).toLocaleString(undefined, { maximumFractionDigits:2 }) + ' s observed' : null}
+                </a>}
+            </div>}
+        </motion.li>;
+      })}
+    </AnimatePresence>
+  </ul>;
+}
+
+export function TaskExplorer({tasks,controls,related,activityFor,Status,Panel,onCreate,loading,filters,setFilters,work,workActivity}) {
+  const interaction=useCardMotion(true);
+  const groups=useMemo(()=>organizeTasks(tasks,{...filters,work},controls,workActivity.byTask),[tasks,filters,controls,work,workActivity]);
+  const queueViews=['all','active','waiting','review','issues','accepted','archived'];
+  if(work!=='all'&&!queueViews.includes(work))queueViews.splice(-1,0,work);
+  const states = [...new Set(tasks.map(task => task.state).filter(Boolean))].sort();
+  const count = groups.reduce((sum, [, items]) => sum + items.length, 0);
+  const field = event => {
+    const { name, value } = event.currentTarget;
+    setFilters(previous => ({ ...previous, [name]: value }));
+  };
+  return <Panel title="Task explorer" right={<button className="primary-button" type="button" onClick={onCreate}>
+    <Plus size={16} aria-hidden="true"/> Create proposal
+  </button>}>
+    <nav className="task-work-filters" aria-label="Task activity views">
+      {queueViews.map(view=><motion.a key={view} className="quiet-button task-work-filter" href={taskHref(undefined,view)}
+        aria-current={work===view?'page':undefined} {...interaction}
+        onClick={event=>{if(!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey)setFilters(previous=>({...previous,state:'all'}));}}>
+        {view==='all'?'Current Tasks':workLabels[view]}
+        <span>{view==='all'?tasks.length-workActivity.counts.archived:workActivity.counts[view]}</span>
+      </motion.a>)}
+    </nav>
+    <div className="task-filters">
+      <label>Search <span className="search"><Search size={16} aria-hidden="true"/>
+        <input name="query" type="search" value={filters.query} onChange={field} placeholder="Title, objective, or ID"/>
+      </span></label>
+      <div className="task-filter"><label htmlFor="task-filter-source">Source</label><select id="task-filter-source" name="source" value={filters.source} onChange={field}>
+        <option value="all">All Tasks</option><option value="private">Manageable private proposals</option>
+      </select></div>
+      <div className="task-filter"><label htmlFor="task-filter-state">State</label><select id="task-filter-state" name="state" value={filters.state} onChange={field}>
+        <option value="all">{work==='all'?'Current Tasks':'Any state in view'}</option>
+        {[...new Set([...states, ...(filters.state === 'all' ? [] : [filters.state])])].map(state =>
+          <option key={state} value={state}>{labels(state)}</option>)}
+      </select></div>
+      <div className="task-filter"><label htmlFor="task-filter-sort">Sort</label><select id="task-filter-sort" name="sort" value={filters.sort} onChange={field}>
+        <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
+        <option value="priority">Highest priority</option><option value="title">Title</option>
+      </select></div>
+      <div className="task-filter"><label htmlFor="task-filter-group">Group</label><select id="task-filter-group" name="group" value={filters.group} onChange={field}>
+        <option value="none">None</option><option value="state">State</option><option value="category">Category</option>
+      </select></div>
+    </div>
+    <div className="task-result-bar">
+      <span role="status"><Filter size={14} aria-hidden="true"/> {count} of {tasks.length} Tasks</span>
+      {(filters!==defaultTaskFilters||work!=='all')&&<a className="text-button" href={taskHref()} onClick={()=>setFilters(defaultTaskFilters)}>Reset filters</a>}
+    </div>
+    {!loading && !count && <p>{tasks.length ? 'No Tasks match these filters.' : 'No Tasks in the current feed.'}</p>}
+    {groups.map(([label, items]) => <section key={label} className="task-group" aria-label={labels(label)}>
+      {filters.group !== 'none' && <h3>{labels(label)} <span>{items.length}</span></h3>}
+      <TaskRows tasks={items} controls={controls} related={related} activityFor={activityFor} Status={Status}/>
+    </section>)}
+  </Panel>;
+}
+
+export function useTaskFilters() {
+  return useState(defaultTaskFilters);
+}
+
+export function PrerequisiteChecks({graph,Status}) {
+  const nodes=[...graph.upstream.map(node=>({...node,type:'Task'})),...graph.capabilities.map(node=>({...node,type:'Capability'}))];
+  return nodes.length>0&&<ul className="dependency-nodes" aria-label="Prerequisite checks">{nodes.map(node=>
+    <li key={node.type+':'+node.id}><span><small>{node.type}</small> {node.task?.title??node.id}</span><Status value={node.status}/></li>
+  )}</ul>;
+}
+
+export function TaskDependencies({task,tasks,lifecycle,summaries,Status}) {
+  const graph=dependencyGraph(task,tasks,{lifecycle,summaries});
+  const renderNodes = (nodes, empty, showStatus) => nodes.length ? <ul className="dependency-nodes">
+    {nodes.map(node => <li key={node.id}>
+      {node.task ? <a href={taskHref(node.id)}>{node.task.title}</a> : <span className="mono">{node.id}</span>}
+      <Status value={showStatus ? node.status : node.task?.state}/>
+    </li>)}
+  </ul> : <p className="low">{empty}</p>;
+  return <>
+    <div className="dependency-graph">
+      <div><h3>Prerequisite Tasks</h3>{renderNodes(graph.upstream, 'None declared', true)}</div>
+      <ArrowDown className="dependency-arrow" size={19} aria-hidden="true"/>
+      <div className="dependency-focus"><GitBranch size={16} aria-hidden="true"/><strong>{task.title}</strong></div>
+      <ArrowDown className="dependency-arrow" size={19} aria-hidden="true"/>
+      <div><h3>Dependent Tasks</h3>{renderNodes(graph.downstream, 'None in the current feed', false)}</div>
+    </div>
+    <h3 className="subheading">Required capabilities</h3>
+    {graph.capabilities.length>0 ? <ul className="dependency-nodes" aria-label="Required capabilities">
+      {graph.capabilities.map(node=><li key={node.id}><span>{node.id}{node.reason==='attested'&&<small> · Owner attested</small>}</span>
+        <Status value={node.status}/></li>)}
+    </ul> : <p className="low">None declared</p>}
+  </>;
+}
+
+export function TaskCapabilitySummary({ manageable }) {
+  return <div className="task-capabilities">
+    <h3>Execution controls</h3>
+    <p>{manageable ? 'Proposal state and editing are available below.' : 'This source publishes Task records for inspection.'}</p>
+    <dl>
+      <div><dt>Schedule and dispatch</dt><dd>Unavailable from this Task source</dd></div>
+      <div><dt>Pause, resume, stop and retry</dt><dd>Unavailable from this Task source</dd></div>
+    </dl>
+    <a className="text-button" href="#tasks">Browse Tasks <ArrowRight size={14} aria-hidden="true"/></a>
+  </div>;
+}
+
+export function TaskActivityLabel({ activity }) {
+  return <span className="task-activity-label"><strong>{activity.label}</strong>{activity.at&&<time dateTime={activity.at}>{new Date(activity.at).toLocaleString()}</time>}</span>;
+}
+
+const displayTime = value => value==null||!Number.isFinite(new Date(value).getTime())
+  ? 'Unavailable' : new Date(value).toLocaleString();
+
+export function TaskAttemptHistory({ attempts, events, audits, evidence, Status }) {
+  const [expanded,setExpanded]=useState({});
+  const reduce=useReducedMotion();
+  if (!attempts.length) return <p>No execution attempt has been linked to this Task yet.</p>;
+  return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt=>{
+    const history=attemptJournal(attempt,events,audits,evidence);
+    const elapsed=Date.parse(attempt.finished_at)-Date.parse(attempt.started_at);
+    const count=expanded[attempt.id]??8;
+    return <li className="record task-attempt-card" key={attempt.id} id={'task-attempt-'+attempt.id}>
+      <div className="record-title"><h3 tabIndex={-1}>Attempt {attempt.attempt_number}</h3><Status value={attempt.state}/></div>
+      <dl className="github-facts">
+        <div><dt>Executor</dt><dd>{[attempt.executor??attempt.provider,attempt.model].filter(Boolean).join(' / ')||'Unavailable from source'}</dd></div>
+        <div><dt>Started</dt><dd>{displayTime(attempt.started_at)}</dd></div>
+        <div><dt>Finished</dt><dd>{displayTime(attempt.finished_at)}</dd></div>
+        {Number.isFinite(elapsed)&&elapsed>=0&&<div><dt>Elapsed</dt><dd>{(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:3})} s</dd></div>}
+        {Number.isFinite(attempt.deadline)&&<div><dt>Attempt deadline</dt><dd>{displayTime(attempt.deadline)}</dd></div>}
+        <div><dt>Base revision</dt><dd><code>{attempt.revision}</code></dd></div>
+        {attempt.candidate_revision&&<div><dt>Candidate revision</dt><dd><code>{attempt.candidate_revision}</code></dd></div>}
+        {attempt.checkpoint_revision&&<div><dt>Checkpoint revision</dt><dd><code>{attempt.checkpoint_revision}</code></dd></div>}
+        {attempt.branch&&<div><dt>Branch</dt><dd><code>{attempt.branch}</code></dd></div>}
+      </dl>
+      {attempt.failure_diagnosis&&<div className="notice error"><strong>Failure</strong><span>{attempt.failure_diagnosis}</span></div>}
+      <details className="task-attempt-log" open={attempt===attempts.at(-1)}>
+        <summary>Execution log · {history.events.length} recorded events</summary>
+        {history.events.length>0?<ol>{history.events.slice(0,count).map(event=>
+          <motion.li key={event.id} initial={reduce?false:{opacity:0,y:3}} animate={{opacity:1,y:0}}>
+            <div><strong>{labels(event.title??'Execution event')}</strong> <small>{event.source}{event.status?' · '+labels(event.status):''}</small></div>
+            <time dateTime={event.at}>{displayTime(event.at)}</time>
+            {event.reason&&<p>{event.reason}</p>}
+            {event.metrics.length>0&&<ul>{event.metrics.map((metric,index)=><li key={index}>
+              {labels(metric.name)} · {metric.availability==='unavailable'?'Unavailable':metric.value??'Unavailable'} {metric.unit} · {metric.availability}
+            </li>)}</ul>}
+          </motion.li>)}</ol>:<p>No lifecycle receipts or trace events are linked to this attempt.</p>}
+        {history.events.length>count&&<button type="button" className="quiet-button" onClick={()=>setExpanded(previous=>({...previous,[attempt.id]:count+16}))}>Show earlier events</button>}
+      </details>
+      <details className="task-attempt-log">
+        <summary>Reported evidence · {history.evidence.length} records</summary>
+        {history.evidence.length>0?<ul className="task-links">{history.evidence.map(item=><li key={item.id}>
+          <strong>{item.criterion_id} · {labels(item.kind)}</strong><Status value={evidenceClaimStatus(item,attempts)}/>
+          <small>Revision <code>{item.revision}</code></small><EvidenceArtifact artifact={item.artifact}/>
+        </li>)}</ul>:<p>No evidence records are linked to this attempt and revision.</p>}
+      </details>
+    </li>;
+  })}</ol>;
+}
+
+export function TaskAcceptanceMatrix({task,canonical,evidence,attempts,reviewed,Status}) {
+  const revision=canonical?.attempts?.at(-1)?.candidate_revision??task.revision;
+  return <section aria-label="Task acceptance criteria">{(task.acceptance?.criteria??[]).map(criterion=>{
+    const reports=evidence.filter(item=>item.criterion_id===criterion.id);
+    const review=reviewed.get(criterion.id);
+    return <article className="record" key={criterion.id}>
+      <div className="record-title"><strong>{criterion.id}</strong>
+        <Status value={review?'owner_accepted':criterionEvidenceStatus(reports,revision,attempts)}/></div>
+      <p>{criterion.description}</p>
+      {review?<div className="task-review-summary">
+        <small>Accepted revision <code>{review.revision}</code></small>
+        {review.at&&<small>Owner review <time dateTime={review.at}>{displayTime(review.at)}</time></small>}
+        <EvidenceArtifact artifact={{uri:review.uri}}/>
+      </div>:<small>{reports.length} reported {reports.length===1?'record':'records'}{canonical?.lifecycle.state==='verifying'?' · Awaiting owner review':''}</small>}
+    </article>;
+  })}</section>;
+}
+
+function EvidenceArtifact({ artifact }) {
+  const uri = artifact?.uri;
+  if (!uri) return <span>No artifact reference was recorded.</span>;
+  const internal = taskActivityHref(uri);
+  if (internal) return <a href={internal}>Open linked activity</a>;
+  try {
+    const url = new URL(uri);
+    if (url.protocol === 'https:' && !url.username && !url.password && !url.search) {
+      return <a href={url.href} target="_blank" rel="noreferrer">Open evidence artifact</a>;
+    }
+  } catch { /* Local references are displayed as private identifiers only. */ }
+  return <details><summary>Private artifact · link unavailable</summary>{uri.startsWith('private-artifact:') && <code>{uri}</code>}</details>;
+}
+
+export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status }) {
+  const criteria = new Map((task.acceptance?.criteria ?? []).map(item => [item.id,item.description]));
+  if (!evidence.length && !reviewed.length) return <p>No verification results have been linked to this Task yet.</p>;
+  const ordered = [...evidence].sort((a,b)=>String(b.observed_at??b.created_at).localeCompare(String(a.observed_at??a.created_at)));
+  return <>
+    {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3><ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
+      <strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><small>Reviewed revision <code>{item.revision}</code></small>
+      {item.at&&<small>Owner review <time dateTime={item.at}>{displayTime(item.at)}</time></small>}
+      <EvidenceArtifact artifact={{uri:item.uri}}/>
+    </li>)}</ul></section>}
+    {ordered.map(item=>{
+      const attempt = attempts.find(run=>attemptMatchesEvidence(run,item));
+      const stamp = item.observed_at ?? item.created_at;
+      return <article className="record task-links" key={item.id}>
+        <div className="record-title"><strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><Status value={evidenceClaimStatus(item,attempts)}/></div>
+        <dl className="github-facts">
+          <div><dt>Evidence type</dt><dd>{labels(item.kind)}{item.synthetic ? ' · Synthetic' : ''}</dd></div>
+          <div><dt>Attempt</dt><dd>{attempt ? 'Attempt '+attempt.attempt_number : 'No matching attempt in the feed'}</dd></div>
+          <div><dt>{item.observed_at?'Observed':'Recorded'}</dt><dd>{stamp?new Date(stamp).toLocaleString():'Unavailable'}</dd></div>
+          <div><dt>Evidence revision</dt><dd><code>{item.revision}</code></dd></div>
+        </dl>
+        <EvidenceArtifact artifact={item.artifact}/>
+      </article>;
+    })}
+  </>;
+}
+
+export function RawTaskRecord({ records }) {
+  const [open, setOpen] = useState(false);
+  return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>Inspect raw records</summary>{open&&<pre className="json">{JSON.stringify(records,null,2)}</pre>}</details>;
+}

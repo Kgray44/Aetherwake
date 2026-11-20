@@ -1,9 +1,15 @@
 import { readBounded } from './github.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
-import { ingestTaskTelemetry, telemetryBaseline } from './task-telemetry.mjs';
+import { isTaskWorkerKey, taskOperation } from './task-engine.mjs';
+import { ingestTaskTelemetry, telemetryBaseline, sha256 } from './task-telemetry.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const tools=[
+ {name:'task_engine_v1',description:'Read, register or edit owner-scoped engineering Tasks. Workers may claim and report pre-authorized execution using their configured credential.',
+  inputSchema:{type:'object',additionalProperties:false,required:['request'],properties:{
+   request:{type:'object',required:['op'],properties:{op:{enum:['list','get','register','command','claim','report']}}},
+   verification:{type:'string',format:'uuid'},worker_key:{type:'string',minLength:32,maxLength:256}
+  }}},
  {name:'project_execution_snapshot',description:'Store a bounded sanitized private execution projection. Does not execute, approve or verify work.',inputSchema:{type:'object',additionalProperties:false,required:['projection'],properties:{projection:{type:'object'},verification:{type:'string',format:'uuid'}}}},
  {name:'read_execution_projection',description:'Read the caller-owned execution projection and its digest. Imported evidence is not independent proof.',inputSchema:{type:'object',additionalProperties:false,properties:{verification:{type:'string',format:'uuid'}}}},
  {name:'sync_task_telemetry',description:'Read a private Task telemetry baseline or append a sanitized incremental update as the authenticated Site visitor. Returns a durable delivery receipt. No execution or approval.',
@@ -19,7 +25,7 @@ async function receipt(projection){
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
  return {generated_at:projection.generated_at,digest:'sha256:'+digest,records:projection.records.length,events:projection.events.length,authority:projection.authority,acceptance:'not-granted'};
 }
-export async function mcp(request,env,{validate,validateEvent}){
+export async function mcp(request,env,{validate,validateEvent,taskRevision}){
  const reply=(body,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store','x-content-type-options':'nosniff'}});
  const owner=request.headers.get('oai-authenticated-user-id');
  if(!owner)return reply({error:'Authenticated caller required'},401);
@@ -38,13 +44,26 @@ export async function mcp(request,env,{validate,validateEvent}){
  if(message.method!=='tools/call')return fail(-32601,'Method not found');
  const name=message.params?.name,args=message.params?.arguments??{};
  if(!tools.some(t=>t.name===name))return fail(-32601,'Tool not found');
- const fields = name==='project_execution_snapshot' ? ['projection'] : name==='sync_task_telemetry' ? ['task_id','change'] : [];
+ const fields = name==='task_engine_v1' ? ['request','worker_key'] : name==='project_execution_snapshot' ? ['projection'] : name==='sync_task_telemetry' ? ['task_id','change'] : [];
  if(!args||Array.isArray(args)||typeof args!=='object'||Object.keys(args).some(k=>!['verification',...fields].includes(k)))return fail(-32602,'Invalid arguments');
  if(args.verification!==undefined&&!UUID.test(args.verification))return fail(-32602,'Invalid verification namespace');
  const namespace=args.verification?'verification:'+args.verification:'live';
  const result=(data,isError=false)=>rpc({content:[{type:'text',text:JSON.stringify(data)}],isError});
  if(!env.DB)return result({error:'Storage unavailable'},true);
  try{
+  if(name==='task_engine_v1'){
+   let access = 'agent';
+   if(args.worker_key !== undefined) {
+    if(owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID || !isTaskWorkerKey(args.worker_key) ||
+      !isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY) ||
+      await sha256(args.worker_key) !== await sha256(env.OBSERVATORY_TASK_WORKER_KEY)) {
+     return result({status:403,error:'Executor authorization required'},true);
+    }
+    access = 'worker';
+   }
+   const response = await taskOperation({ db: env.DB, owner, namespace, body: args.request, validate, access, revision: taskRevision });
+   return result({status:response.status,...response.body},response.status>=400);
+  }
   if(name==='sync_task_telemetry'){
    if(typeof args.task_id!=='string'||!telemetryTaskId.test(args.task_id))return fail(-32602,'Invalid Task ID');
    if(args.change===undefined)return result({baseline:await telemetryBaseline(env.DB,owner,namespace,args.task_id)});

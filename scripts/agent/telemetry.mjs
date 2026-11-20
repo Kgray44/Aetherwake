@@ -59,7 +59,9 @@ export async function runObserved({ task, context, repository, phase = "implemen
   const journalPath = path + ".journal";
   const runningAttempt=await beginAttempt(journalPath,{schema_version:1,record_type:'attempt',id,created_at:startedAt,repository,revision,task_id:task.id,attempt_number:attemptNumber,state:'running',started_at:startedAt,branch,...provider?{provider}:{},...model?{model}:{},failure_category:'none'});
   const spanId = "span_" + randomUUID();
-  await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started"}));
+  const startMeasurements = eventStream === "codex-exec-json" ?
+    [measure("provider_stream_requested", "observed", 1, "boolean", "codex_exec_jsonl", "observer_configuration")] : [];
+  await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started",measurements:startMeasurements}));
   const observatory = await startObservatorySync({ task, journal: journalPath }).catch(() => {
     process.stderr.write('Observatory synchronization could not start; the private journal is still recording.\n');
     return null;

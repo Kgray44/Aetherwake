@@ -29,7 +29,7 @@ const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
 
-function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
+function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, assets = {} } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec(migration);
@@ -42,6 +42,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0007_proposal_controls.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -92,8 +93,8 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
     assert.fail('Unexpected fetch: ' + pathname);
   };
   // A new Worker instance for each request exercises shared D1 rather than isolate memory.
-  const call = (path, options) => createWorker({ validate, validateEvent, assets: {}, sourceRevision: blob, fetcher })
-    .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token });
+  const call = (path, options) => createWorker({ validate, validateEvent, assets, sourceRevision: blob, fetcher })
+    .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token, OBSERVATORY_TASK_ENGINE_OWNER_ID: 'owner-1', OBSERVATORY_TASK_WORKER_KEY: taskKey });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
     headers: { ...ownerHeader, origin, 'content-type': 'application/json', ...headers },
@@ -115,6 +116,69 @@ test('hosted API checks identity and same-origin JSON before touching upstream',
   assert.equal((await post({ 'content-type': 'application/jsonx' })).status, 415);
   assert.equal((await post({ 'x-observatory-verification': 'live' })).status, 400);
   assert.equal(requests.length, 0);
+});
+
+test('PDF renderer survives a deployment while an older Task tab remains open', async t => {
+  const {call}=fixture(t,{assets:{
+    '/assets/task-report.worker.js':{type:'text/javascript',content:'current renderer'},
+    '/assets/task-report.worker-2v1c1DxX.js':{type:'text/javascript',content:'previous renderer'},
+  }});
+  for (const path of ['/assets/task-report.worker.js','/assets/task-report.worker-B2nFH3hs.js']) {
+    const response=await call(path);
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('content-type'),'text/javascript');
+    assert.equal(response.headers.get('cache-control'),'private, no-store');
+    assert.equal(await response.text(),'current renderer');
+  }
+  const present=await call('/assets/task-report.worker-2v1c1DxX.js');
+  assert.equal(await present.text(),'previous renderer');
+  assert.equal((await call('/assets/unrelated-B2nFH3hs.js')).status,404);
+});
+
+test('only fingerprinted static assets receive a long browser cache lifetime', async t => {
+  const {call}=fixture(t,{assets:{
+    '/':{type:'text/html',content:'index'},
+    '/assets/index-a1234567.js':{type:'text/javascript',content:'code'},
+    '/assets/shared.js':{type:'text/javascript',content:'code'},
+  }});
+  assert.equal((await call('/')).headers.get('cache-control'),'private, no-store');
+  assert.equal((await call('/assets/index-a1234567.js')).headers.get('cache-control'),'private, max-age=31536000, immutable');
+  assert.equal((await call('/assets/shared.js')).headers.get('cache-control'),'private, no-store');
+});
+
+test('cached-first overview serves private Tasks without making an upstream request', async t => {
+  const {call,post,requests,hitLimit}=fixture(t,{token:'read-test-token'});
+  const cold=await (await call('/api/overview?prefer=cached',{headers:ownerHeader})).json();
+  assert.equal(cold.github_refresh_pending,true);
+  assert.equal(cold.github.main.status,'unavailable');
+  assert.equal(requests.length,0);
+  const {task}=await (await post()).json();
+  hitLimit();
+  const before=requests.length;
+  const local=await (await call('/api/overview?prefer=cached',{headers:ownerHeader})).json();
+  assert.equal(local.github_refresh_pending,true);
+  assert.equal(local.github.main.status,'stale');
+  assert.equal(local.records.some(record=>record.id===task.id),true);
+  assert.equal(requests.length,before);
+  const refreshed=await (await call('/api/overview',{headers:ownerHeader})).json();
+  assert.equal(refreshed.github_refresh_pending,false);
+  assert.equal(refreshed.github.main.status,'stale');
+  assert.ok(requests.length>before);
+});
+
+test('only the owner sees whether a Codex executor credential is configured',async t=>{
+  const path='/api/task-engine/v1';
+  const headers={...ownerHeader,origin,'content-type':'application/json'};
+  const read=(call,identity={})=>call(path,{method:'POST',headers:{...headers,...identity},body:JSON.stringify({op:'list'})});
+  const key='worker-test-only-credential-value-000000';
+  const enabled=fixture(t,{taskKey:key});
+  const configured=await (await read(enabled.call)).text();
+  assert.deepEqual(JSON.parse(configured).executor_access,{codex:'configured'});
+  assert.equal(configured.includes(key),false);
+  const unauthorized=await (await read(enabled.call,{'oai-authenticated-user-id':'owner-2'})).json();
+  assert.equal(unauthorized.executor_access,undefined);
+  const disabled=fixture(t);
+  assert.deepEqual((await (await read(disabled.call)).json()).executor_access,{codex:'not_configured'});
 });
 
 test('private proposal control applies one versioned edit, fences concurrent writes and isolates owners', async t => {
@@ -587,7 +651,7 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  const rpc=(method,params,headers={...ownerHeader,'content-type':'application/json'})=>call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
  assert.equal((await rpc('tools/list',{}, {'content-type':'application/json'})).status,401);
  assert.equal((await rpc('tools/list',{}, {...ownerHeader,'content-type':'application/json',origin:'https://attacker.example'})).status,403);
- const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
+ const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['task_engine_v1','project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
  const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
  const params={name:'project_execution_snapshot',arguments:{projection:envelope,verification:namespace}};
  const saved=await(await rpc('tools/call',params)).json();assert.equal(saved.result.isError,false);
@@ -693,4 +757,97 @@ test('rate-limited GitHub permits private proposals bound to a known cached revi
   assert.deepEqual(data.proposals.publication, {});
   assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
   assert.equal(writes.length, 0);
+});
+
+test('Codex Task tool and Site API share registration, version, owner scope and audit events', async t => {
+  const key = 'test-only-' + 'k'.repeat(40);
+  const { call } = fixture(t, { taskKey: key });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const http = (body, extra = {}) => call('/api/task-engine/v1', {
+    method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body),
+  });
+  const tool = async (request, extras = {}) => {
+    const response = await call('/mcp', { method: 'POST', headers, body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'task_engine_v1', arguments: { request, ...extras } },
+    }) });
+    const value = await response.json();
+    return JSON.parse(value.result.content[0].text);
+  };
+  const registered = await tool({ op: 'register', operation_id: crypto.randomUUID(), fields: input });
+  assert.equal(registered.status, 201);
+  const { task, version } = registered;
+  const get = { op: 'get', task_id: task.id };
+  assert.equal((await http(get, { origin: 'https://foreign.example' })).status, 403);
+  assert.equal((await http(get, { 'oai-authenticated-user-id': 'owner-2' })).status, 404);
+  assert.equal((await http(get, { 'x-observatory-verification': namespace })).status, 404);
+  assert.equal((await (await http(get)).json()).task.id, task.id);
+  assert.equal((await tool(get)).version, version);
+  const command = { op: 'command', task_id: task.id, operation_id: crypto.randomUUID(), expected_version: version,
+    action: { type: 'admit', executor: 'codex' } };
+  assert.equal((await tool(command)).status, 403);
+  assert.equal((await http(command)).status, 200);
+  const claim = { op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task.id] };
+  assert.equal((await tool(claim)).status, 403);
+  assert.equal((await tool(claim, { worker_key: 'x'.repeat(47) })).status, 403);
+  const { claim: leased } = await tool(claim, { worker_key: key });
+  assert.equal(leased.attempt.id, (await tool(claim, { worker_key: key })).claim.attempt.id);
+  const detail = await tool(get);
+  assert.equal(detail.lifecycle.state, 'running');
+  assert.equal(detail.attempts[0].lease, undefined);
+  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'admit', 'claim']);
+  const overview = await (await call('/api/overview', { headers: ownerHeader })).json();
+  assert.equal(overview.records.find(item => item.id === task.id).state, 'running');
+  assert.equal(overview.records.find(item => item.id === leased.attempt.id).task_id, task.id);
+});
+
+test('owner admission activates a published proposal without rewriting its intake document', async t => {
+  const { call, post, writes } = fixture(t, { token: 'proposal-test-token' });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const creation = await post({ 'x-observatory-publish': 'github' });
+  const { task, github } = await creation.json();
+  assert.equal(github.state, 'published');
+  assert.equal(writes.length, 1);
+  const response = await call('/api/task-engine/v1', { method: 'POST', headers, body: JSON.stringify({
+    op: 'command', task_id: task.id, expected_version: 1, operation_id: crypto.randomUUID(),
+    action: { type: 'admit', executor: 'codex' },
+  }) });
+  const activated = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(activated.task.id, task.id);
+  assert.equal(activated.lifecycle.state, 'ready');
+  const publish = await call('/api/tasks/' + task.id + '/publish', { method: 'POST', headers, body: '{}' });
+  assert.equal((await publish.json()).github.state, 'published');
+  assert.equal(writes.length, 1);
+});
+
+test('a scoped executor can claim the verification Task without activating its live twin', async t => {
+  const key = 'test-only-' + 'k'.repeat(40);
+  const { call } = fixture(t, { taskKey: key });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const rpc = async (request, args = {}) => {
+    const response = await call('/mcp', { method: 'POST', headers, body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'task_engine_v1', arguments: { request, ...args } },
+    }) });
+    return JSON.parse((await response.json()).result.content[0].text);
+  };
+  const operation_id = crypto.randomUUID();
+  const register = { op: 'register', operation_id, fields: input };
+  const both = await Promise.all([rpc(register), rpc(register, { verification: namespace })]);
+  assert.deepEqual(both.map(reply => reply.status), [201, 201]);
+  const task_id = both[0].task.id;
+  assert.equal(both[1].task.id, task_id);
+  const receipt = await call('/api/task-engine/v1', {
+    method: 'POST', headers: { ...headers, 'x-observatory-verification': namespace }, body: JSON.stringify({
+      op: 'command', task_id, expected_version: 1, operation_id: crypto.randomUUID(),
+      action: { type: 'admit', executor: 'codex' },
+    }),
+  });
+  assert.equal(receipt.status, 200);
+  const claim = { op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task_id] };
+  assert.equal((await rpc(claim, { worker_key: key })).claim, null);
+  assert.equal((await rpc(claim, { worker_key: key, verification: namespace })).claim.task.id, task_id);
+  const states = await Promise.all([rpc({ op: 'get', task_id }), rpc({ op: 'get', task_id }, { verification: namespace })]);
+  assert.deepEqual(states.map(item => item.lifecycle.state), ['proposed', 'running']);
 });
