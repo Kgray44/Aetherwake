@@ -34,7 +34,7 @@ test('direct dependency edges preserve direction and unknown evidence', () => {
   assert.deepEqual(graph.downstream.map(({ id }) => id), ['next']);
 });
 
-import { commandForTask, executionActions, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
+import { commandForTask, desktopSessionTokens, executionActions, reviewRevision, taskEngineRequest, taskTokenRows } from './src/task-engine-client.mjs';
 
 test('canonical operation choices use stored state and the current attempt count', () => {
   assert.deepEqual(executionActions({ lifecycle: { state: 'blocked', stored_state: 'admitted', executor: 'codex' } }), ['pause', 'cancel']);
@@ -94,4 +94,10 @@ test('attempt details only include events bound to the Task, attempt and revisio
   const attempt={id:'a',task_id:'t',revision:'v'};
   const event={attempt_id:'a',task_id:'t',revision:'v',occurred_at:'2'};
   assert.deepEqual(attemptEvents(attempt,[event,{...event,revision:'stale'}, {...event,task_id:'other'}, {...event,occurred_at:'1'}]),[{...event,occurred_at:'1'},event]);
+});
+
+test('desktop session counters select the latest observed Task reading without summing or attributing it to an attempt', () => {
+  const metric={name:'desktop_total_tokens',unit:'tokens',source:'codex_desktop_session_usage',availability:'observed',value:10};
+  const event={task_id:'a',occurred_at:'2',measurements:[metric]};
+  assert.deepEqual(desktopSessionTokens('a',[event,{...event,occurred_at:'1',measurements:[{...metric,value:3}]},{...event,task_id:'b',occurred_at:'3',measurements:[{...metric,value:99}]}]),[{name:metric.name,value:10,at:'2'}]);
 });

@@ -40,3 +40,19 @@ export function taskTokenRows(accounting, id) {
   return accounting?.schemaVersion === 1 && Array.isArray(accounting.byAttempt)
     ? accounting.byAttempt.filter(row => row.taskId === id) : [];
 }
+
+export function desktopSessionTokens(taskId, events) {
+  const names = new Set(['desktop_input_tokens','desktop_cached_input_tokens','desktop_uncached_input_tokens',
+    'desktop_output_tokens','desktop_reasoning_output_tokens','desktop_total_tokens']);
+  const latest = new Map();
+  for (const event of events) {
+    if (event.task_id !== taskId) continue;
+    for (const metric of event.measurements ?? []) {
+      if (!names.has(metric.name) || metric.source !== 'codex_desktop_session_usage' || metric.unit !== 'tokens' ||
+          metric.availability !== 'observed' || !Number.isSafeInteger(metric.value) || metric.value < 0) continue;
+      const previous = latest.get(metric.name);
+      if (!previous || String(event.occurred_at ?? '') > previous.at) latest.set(metric.name, {name:metric.name,value:metric.value,at:String(event.occurred_at ?? '')});
+    }
+  }
+  return [...latest.values()];
+}

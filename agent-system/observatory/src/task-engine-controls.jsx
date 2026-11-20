@@ -1,11 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
+import { Activity, ArrowRight, CheckCircle2, Clock3, GitBranch, Link2, Pause, Play, RotateCcw, Square, XCircle } from 'lucide-react';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
 const actionLabels = {
   admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
   accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
+const actionIcons = { admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
+  reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
+const actionHints = { admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
+  resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
+  reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
+  supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
+const featuredActions = ['admit','resume','accept','retry','pause'];
+
 const humanize = value => String(value ?? 'unavailable').replaceAll('_', ' ');
 const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
 
@@ -17,12 +26,15 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
   const [result, setResult] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
+  const formHeading = useRef(null);
+  useEffect(() => { if (action) formHeading.current?.focus(); }, [action]);
   const { task, lifecycle, attempts, events } = detail;
   const options = executionActions(detail, { publishedIntake });
   if (!publishedIntake) {
     if (['proposed', 'blocked', 'paused', 'failed'].includes(lifecycle.stored_state)) options.push('supersede');
     options.push('associate');
   }
+  const featuredAction = featuredActions.find(key=>options.includes(key));
   const candidate = attempts.at(-1);
   const candidateRevision = reviewRevision(candidate);
   const blocker = lifecycle.blockers ?? [];
@@ -51,7 +63,7 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
   }
 
   function choose(type) {
-    if (['pause', 'resume', 'satisfy'].includes(type) && !action) {
+    if (['pause', 'resume'].includes(type) && !action) {
       void send({ type });
     } else {
       setAction(type);
@@ -90,29 +102,38 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
   }
 
   return <>
-    <div className="task-result-bar"><Status value={lifecycle.state}/>
-      <span>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</span>
-    </div>
-    <dl className="github-facts">
-      <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
-      <div><dt>Start time</dt><dd>{lifecycle.start_at == null ? 'Unscheduled' : stamp(lifecycle.start_at)}</dd></div>
-      <div><dt>Priority</dt><dd>{detail.priority}</dd></div>
-      <div><dt>Dependency cancellation</dt><dd>{lifecycle.cancel_with_dependency ? 'Enabled' : 'Off'}</dd></div>
-    </dl>
-    {blocker.length > 0 && <ul aria-label="Admission blockers">{blocker.map(item => <li key={item.type + ':' + item.id}>
-      {tasks.find(other => other.id === item.id)?.title ?? item.id} · {humanize(item.state)}
-    </li>)}</ul>}
-    <div className="form-actions">
-      {options.map(type => <button key={type} type="button" className={type === 'admit' ? 'primary-button' : 'quiet-button'}
-        aria-pressed={action === type} disabled={busy} onClick={() => choose(type)}>{actionLabels[type]}</button>)}
-      {unsatisfiedCapabilities.length > 0 && <button type="button" className="quiet-button" disabled={busy}
-        onClick={() => { setAction('satisfy'); setActionVersion(detail.version); setError(''); }}>
-        Attest capability
-      </button>}
-    </div>
+    <div className="task-command-shell">
+      <div className="task-command-context">
+        <header className="task-command-hero"><span className="task-command-signal"><Activity size={19} aria-hidden="true"/></span>
+          <div><Status value={lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
+        <dl className="task-command-facts">
+          <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
+          <div><dt><Clock3 size={14} aria-hidden="true"/>Start time</dt><dd>{lifecycle.start_at == null ? 'Unscheduled' : stamp(lifecycle.start_at)}</dd></div>
+          <div><dt>Priority</dt><dd>{detail.priority}</dd></div>
+          <div><dt>Dependency cancellation</dt><dd>{lifecycle.cancel_with_dependency ? 'Enabled' : 'Off'}</dd></div>
+        </dl>
+        {blocker.length > 0 && <section className="task-command-blockers"><h3>Blocking execution</h3><ul aria-label="Admission blockers">{blocker.map(item => <li key={item.type + ':' + item.id}>
+          {tasks.find(other => other.id === item.id)?.title ?? item.id} · {humanize(item.state)}
+        </li>)}</ul></section>}
+      </div>
+      <div className="task-command-deck">
+        <nav aria-label="Task actions" className="task-command-actions">
+          {[...options, ...(unsatisfiedCapabilities.length ? ['satisfy'] : [])]
+            .sort((a,b)=> Number(featuredAction===b)-Number(featuredAction===a))
+            .map(type => {
+              const Icon=actionIcons[type];
+              const title=actionLabels[type] ?? 'Attest capability';
+              const featured=featuredAction===type;
+              return <motion.button key={type} type="button" aria-label={title} aria-pressed={action===type}
+                className={'task-command-button'+(featured?' featured':'')+(type==='cancel'?' destructive':'')}
+                whileTap={reduce?undefined:{scale:.98}} disabled={busy} onClick={()=>choose(type)}>
+                <Icon size={17} aria-hidden="true"/><span><strong>{title}</strong><small>{actionHints[type]}</small></span><ArrowRight size={14} aria-hidden="true"/>
+              </motion.button>;
+            })}
+        </nav>
     {action && <motion.form key={action} aria-label={actionLabels[action] ?? 'Attest capability'}
-      className="form proposal-disclosure" onSubmit={submit} initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}>
-      <h3>{actionLabels[action] ?? 'Attest capability'}</h3>
+      className="form task-command-form" onSubmit={submit} initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}>
+      <h3 ref={formHeading} tabIndex={-1}>{actionLabels[action] ?? 'Attest capability'}</h3>
       {action === 'admit' && <>
         <p>Admission allows a configured Codex worker to claim this Task once its schedule and prerequisites are satisfied.</p>
         <label>Start at (local time, optional)<input name="start_at" type="datetime-local"/></label>
@@ -151,6 +172,8 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
     </motion.form>}
     {error && <p className="notice error" role="alert">{error}</p>}
     {result && <p role="status">{result}</p>}
+      </div>
+    </div>
     <details className="proposal-disclosure"><summary>Task audit history</summary>
       {events.length ? <ol>{[...events].reverse().map((event, index) => <li key={event.operation_id ?? index}>
         {stamp(event.at)} · {humanize(event.kind ?? event.type)} · {humanize(event.state)}
