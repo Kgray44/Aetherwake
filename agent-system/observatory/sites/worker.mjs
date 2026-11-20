@@ -1,3 +1,4 @@
+import { taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
@@ -20,6 +21,10 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const error = (message, status) => json({ error: message }, status);
 
 export function createWorker({ assets, validate, sourceRevision, validateEvent, fetcher = fetch }) {
+  async function taskRevision(env) {
+    const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN);
+    return isRevision(main.revision) && (main.status === 'available' || (main.status === 'stale' && main.observed_at)) ? main : null;
+  }
   async function api(request, env, url) {
     // Sites dispatch sets this header after authenticating the visitor and applying
     // the owner-only access policy. Service credentials lack visitor identity.
@@ -31,6 +36,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
+    const taskEngine = url.pathname === taskEnginePath;
     const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
     const control = url.pathname.match(/^\/api\/tasks\/(task_[a-f0-9-]+)\/control$/);
     const sync = url.pathname === '/api/sync';
@@ -39,7 +45,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
     const ciActions = url.pathname === '/api/github/actions';
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
-    if (!overview && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
+    if (!overview && !taskEngine && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
     const readOnly = overview || detailsRoute || ((control || automaticSync || ciActions) && request.method === 'GET');
     if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
@@ -52,6 +58,17 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (taskEngine) {
+      let body;
+      try { body = JSON.parse(await readBounded(request.body, 64 * 1024)); }
+      catch (cause) { return error('Invalid Task request', cause instanceof RangeError ? 413 : 400); }
+      const result = await taskOperation({
+        db: env.DB, owner, namespace, body, validate, revision: () => taskRevision(env),
+        access: owner === env.OBSERVATORY_TASK_ENGINE_OWNER_ID ? 'owner' : 'agent',
+      });
+      return json(result.body, result.status);
+    }
 
     if (ciActions) {
       const access = ciAccess(env, owner, verification);
@@ -89,7 +106,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       if (!UUID.test(id.slice(5))) return error('Invalid proposal ID', 400);
       if (readOnly) {
         const row = await env.DB.prepare(`SELECT version, priority, receipts FROM proposals
-          WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL`)
+          WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL AND engine IS NULL`)
           .bind(owner, namespace, id).first();
         return row ? json(proposalControl(row)) : error('Private proposal not found', 404);
       }
@@ -118,7 +135,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     if (overview) {
       const [snapshot, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, readToken),
-        env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
+        env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority, engine FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
         env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
@@ -127,6 +144,12 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       ]);
       const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
+      const authoritative = rows.results.filter(row => row.engine).flatMap(row => {
+        const task = JSON.parse(row.record);
+        return [task, ...JSON.parse(row.engine).attempts.map(attempt => taskAttemptRecord(task, attempt))];
+      });
+      const authoritativeIds = new Set(authoritative.map(item => item.record_type + ':' + item.id));
+      const canProject = item => !authoritativeIds.has(item.record_type + ':' + item.id);
       const { items, ...recordCoverage } = snapshot.records;
       return json({
         schema_version: 1,
@@ -134,7 +157,9 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         deployed_revision: sourceRevision,
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
-        records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))].filter(r => !projectedIds.has(r.record_type + ':' + r.id)).concat(projection?.records ?? []),
+        records: [...items.map(item => item.record), ...rows.results.filter(row => !row.engine).map(row => JSON.parse(row.record))]
+          .filter(r => canProject(r) && !projectedIds.has(r.record_type + ':' + r.id))
+          .concat((projection?.records ?? []).filter(canProject), authoritative),
         telemetry_scope: telemetryScope,
         execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events,
           sources: projection.sources, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
@@ -151,7 +176,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
           stale_revision_tasks: rows.results.filter(row => row.stale_revision === 1).map(row => row.task_id),
           publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
-          controls: Object.fromEntries(rows.results.filter(row => !row.github_state && !projectedIds.has('task:' + row.task_id))
+          controls: Object.fromEntries(rows.results.filter(row => !row.github_state && !row.engine && !projectedIds.has('task:' + row.task_id))
             .map(row => [row.task_id, { version: row.version, priority: row.priority }])),
         },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
@@ -209,7 +234,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
-      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent});
+      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent, taskRevision: () => taskRevision(env)});
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         try { return await api(request, env, url); }
         catch { return error('Observatory data temporarily unavailable', 503); }
