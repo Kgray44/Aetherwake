@@ -99,8 +99,12 @@ test('reported external operation chronology and timing stay separate from forma
   const canonical={task,lifecycle:{state:'verifying'},attempts:[]};
   const input={task,canonical,telemetrySource,events:[finish,{...finish,task_id:'another'},start]};
   const activity=taskEngineeringActivity(input);
-  assert.equal(Object.fromEntries(activity.counts)['Formal Task Engine attempts'],0);
-  assert.equal(Object.fromEntries(activity.counts)['Reported external operations'],1);
+  const counts=Object.fromEntries(activity.counts);
+  assert.equal(counts['Formal Task Engine attempts'],0);
+  assert.equal(counts['Reported external operations'],1);
+  assert.equal(counts['Reported verification operations'],1);
+  assert.equal(counts['Reported benchmark operations'],0);
+  assert.equal(counts['Criterion evidence records'],0);
   const chronology=buildTaskTimeline({...input,engineeringEvents:activity.events});
   assert.equal(chronology.length,2);
   assert.equal(chronology[0].outcome,'succeeded');
@@ -110,6 +114,7 @@ test('reported external operation chronology and timing stay separate from forma
   assert.match(report,/Reported verification · succeeded/);
   assert.match(report,/Reported by the source journal/);
   assert.match(report,/Imported engineering activity/);
+  assert.match(report,/"Reported verification operations","1"/);
 });
 
 test('Task chronology keeps late arrivals ordered by occurrence and reports missing or discrepant receipt clocks', () => {

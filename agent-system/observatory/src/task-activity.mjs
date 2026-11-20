@@ -183,6 +183,7 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
   const formalIds=new Set((authoritative?.attempts??[]).map(attempt=>attempt.id));
   const verification=evidence.filter(record=>record.task_id===task.id);
   const reported=reportedEvents(task,events,attempts,telemetrySource);
+  const reportedOperations=kind=>new Set(reported.filter(event=>!kind||event.activityType===kind).map(event=>event.operationId)).size;
   const engineeringEvents=[...githubEvents(references,github,authoritative?.engineering_snapshots??[]),...reported];
   return {
     references, events:engineeringEvents,
@@ -192,12 +193,14 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
       ['Known executor sessions',sessions.size],
       ['Linked engineering operations',operations.length],
       ['Dated engineering events',engineeringEvents.length],
-      ['Reported external operations',new Set(reported.map(event=>event.operationId)).size],
+      ['Reported external operations',reportedOperations()],
       ['Reported external sessions',new Set(reported.map(event=>event.sessionId).filter(Boolean)).size],
       ['Linked commits',operations.filter(ref=>ref.kind==='commit').length],
       ['Linked pull requests',operations.filter(ref=>ref.kind==='pull_request').length],
-      ['Reported verification records',new Set(verification.map(record=>record.id)).size],
-      ['Reported benchmarks',new Set(verification.filter(record=>record.kind==='benchmark').map(record=>record.id)).size],
+      ['Criterion evidence records',new Set(verification.map(record=>record.id)).size],
+      ['Benchmark evidence records',new Set(verification.filter(record=>record.kind==='benchmark').map(record=>record.id)).size],
+      ['Reported verification operations',reportedOperations('verification')],
+      ['Reported benchmark operations',reportedOperations('benchmark')],
     ],
     coverage:'Activity counts reflect explicit links and available records. Dated events can include GitHub-linked CI at the Task-linked revision. Categories can overlap and coverage may be partial.',
   };
