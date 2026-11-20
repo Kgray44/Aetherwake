@@ -464,7 +464,13 @@ async function main(configPath) {
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
               verificationNamespace:verification ?? null,managedConnection,
               ...(config.executor_transport==='app_server' ? {
-                execute:options=>executeAppServer(getConnector(),options),providerStream:'codex_app_server',
+                  execute:async options=>{
+                    // The persistent conversation belongs to this attempt process.
+                    // Release its Desktop session when the turn exits.
+                    const executor=openObservatoryConnector({cwd:options.cwd,executable:config.codex_bin});
+                    try { return await executeAppServer(executor,options); }
+                    finally { executor.close(); }
+                  },providerStream:'codex_app_server',
               } : {}),
               ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
               admitStorage }).catch(() => {

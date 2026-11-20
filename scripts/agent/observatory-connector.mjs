@@ -63,19 +63,22 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       send({ id, method, params });
     });
   }
-  const opening = (async () => {
+  const initialized = (async () => {
     await rpc('initialize', { clientInfo: { name: 'aads_telemetry', title: 'AADS Telemetry', version: '1.0.0' } }, startupTimeoutMs);
     send({ method: 'initialized' });
+  })();
+  initialized.catch(() => {});
+  let opening;
+  async function openToolThread() {
+    await initialized;
     const started = await rpc('thread/start', { cwd, ephemeral: true }, startupTimeoutMs);
     if (typeof started?.thread?.id !== 'string') throw Error('Codex connector session unavailable');
     return started.thread.id;
-  })();
-  // A short-lived process may exit before the first delivery call starts.
-  opening.catch(() => {});
+  }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
   async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession}) {
     runSignal.throwIfAborted();
-    await opening;
+    await initialized;
     const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
     const started=await rpc(resumeSessionId?'thread/resume':'thread/start',
       resumeSessionId?{...settings,threadId:resumeSessionId}:{...settings,ephemeral:false},startupTimeoutMs);
@@ -91,8 +94,11 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     let turnId, usage, finish;
     const completion=new Promise(resolve=>{finish=resolve;});
     const abort=()=>{
-      if (turnId) void rpc('turn/interrupt',{threadId:id,turnId}).catch(()=>{});
-      finish('interrupted');
+      if (turnId) {
+        void rpc('turn/interrupt',{threadId:id,turnId}).then(
+          () => finish('interrupted'), () => finish('disconnected')
+        );
+      }
     };
     threadListeners.set(id,(method,params)=>{
       if (method==='thread/tokenUsage/updated'&&!resumeSessionId) usage=params.tokenUsage?.total;
@@ -115,7 +121,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     close,
     runWorkspaceTurn,
     async call(args, toolName = tool) {
-      const threadId = await opening;
+      const threadId = await (opening ??= openToolThread());
       const result = await rpc('mcpServer/tool/call', { threadId, server, tool:toolName, arguments:args });
       let value;
       try { value = result.structuredContent ?? JSON.parse(result.content.find(item => item.type === 'text').text); }
