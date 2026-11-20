@@ -16,7 +16,7 @@ const CHATGPT_DOCUMENTATION = Object.freeze([
 ]);
 const documentation = new Set(CHATGPT_DOCUMENTATION);
 
-async function firstPartyChatCommand({ input, win, openExternal }) {
+async function firstPartyChatCommand({ input, win, openExternal, authorizeNavigation }) {
   if (
     !input ||
     typeof input !== "object" ||
@@ -37,6 +37,8 @@ async function firstPartyChatCommand({ input, win, openExternal }) {
   if (!url) throw new Error("invalid_first_party_target");
   if (!win || win.isDestroyed() || win.webContents.isDestroyed())
     return { status: "unavailable" };
+  if (typeof authorizeNavigation !== "function" || authorizeNavigation(url) !== true)
+    throw new Error("external_navigation_user_gesture_required");
   try {
     await openExternal(url);
     // OS acknowledgement does not establish login, foreground or navigation.

@@ -13,9 +13,27 @@ const readNames = new Set([
   "export",
   "readDraft",
   "readViewState",
-  "openCitation",
 ]);
 exports.isConversationRead = (input) => input && readNames.has(input.name);
+exports.isConversationExternalNavigation = (input) =>
+  input?.name === "openCitation";
+
+function canonicalCitation(source) {
+  const authority = typeof source === "string"
+    ? /^https:\/\/([^/?#]*)/iu.exec(source)?.[1]
+    : undefined;
+  const url = new URL(source);
+  if (!authority || authority.includes(":") || url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname.includes(".") || /\.(?:localhost|local|internal)\.?$/i.test(url.hostname) || isIP(url.hostname))
+    throw Error("citation_url_not_supported");
+  return url;
+}
+
+function citationBinding(reference, url) {
+  return {
+    ...reference,
+    urlDigest: createHash("sha256").update(url.href).digest("hex"),
+  };
+}
 
 function reviewedResources(preview, resources, errorCode) {
   const grouped = new Map();
@@ -45,6 +63,7 @@ exports.conversationCommand = async ({
   input,
   reviewSources = showVelaReview,
   openExternal,
+  reviewCitation,
   beforeMemoryPreview,
   validateMemoryReview,
 }) => {
@@ -57,11 +76,27 @@ exports.conversationCommand = async ({
     throw Error("invalid_conversation_command");
   if (input.name === "openCitation") {
     const { resourceId, messageId, index } = input.input;
-    const { url: source } = await call("conversationCitation", { resourceId, messageId, index });
-    const url = new URL(source);
-    if (url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname.includes(".") || /\.(?:localhost|local|internal)\.?$/i.test(url.hostname) || isIP(url.hostname))
-      throw Error("citation_url_not_supported");
-    await openExternal(url.href);
+    const reference = { resourceId, messageId, index };
+    const { url: source } = await call("conversationCitation", reference);
+    const url = canonicalCitation(source);
+    if (typeof reviewCitation !== "function")
+      throw Error("citation_native_review_required");
+    const binding = citationBinding(reference, url);
+    const grant = await reviewCitation({
+      ...binding,
+      url: url.href,
+      hostname: url.hostname,
+    });
+    if (!grant || typeof grant.consume !== "function")
+      throw Error("citation_native_review_required");
+    const { url: currentSource } = await call("conversationCitation", reference);
+    const currentUrl = canonicalCitation(currentSource);
+    const currentBinding = citationBinding(reference, currentUrl);
+    if (currentUrl.href !== url.href)
+      throw Error("citation_source_changed");
+    if (grant.consume(currentBinding) !== true)
+      throw Error("citation_authorization_expired");
+    await openExternal(currentUrl.href);
     return { requested: true };
   }
   if (input.name !== "send") return call("conversation", input);

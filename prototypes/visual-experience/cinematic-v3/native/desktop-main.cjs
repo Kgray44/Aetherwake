@@ -39,8 +39,14 @@ const { sendToWindow } = require("./host-lifecycle.cjs");
 const { backendExecutable } = require("./backend-executable.cjs");
 const {
   conversationCommand,
+  isConversationExternalNavigation,
   isConversationRead,
 } = require("./conversation-broker.cjs");
+const {
+  createCitationNavigationGrant,
+  createExternalNavigationActivation,
+  isExternalNavigationActivationInput,
+} = require("./external-navigation-authorization.cjs");
 const { velaCommand, isVelaRead, ensureVelaMemoryConsent } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
@@ -623,6 +629,29 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  const externalNavigationActivation = createExternalNavigationActivation({
+    ownerIsActive: () =>
+      !closing &&
+      !backendFailed &&
+      !win.isDestroyed() &&
+      !owner.isDestroyed() &&
+      owner.getURL() === localURL &&
+      win.isVisible() &&
+      !win.isMinimized() &&
+      win.isFocused(),
+  });
+  const observeExternalNavigationInput = (_event, input) => {
+    if (isExternalNavigationActivationInput(input))
+      externalNavigationActivation.observeInput();
+  };
+  const revokeExternalNavigationActivation = () =>
+    externalNavigationActivation.revoke();
+  owner.on("before-input-event", observeExternalNavigationInput);
+  owner.on("before-mouse-event", observeExternalNavigationInput);
+  owner.on("did-start-navigation", revokeExternalNavigationActivation);
+  owner.on("render-process-gone", revokeExternalNavigationActivation);
+  for (const event of ["blur", "hide", "minimize"])
+    win.on(event, revokeExternalNavigationActivation);
   let nativeReviewBusy=false;
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
@@ -693,7 +722,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-copy-text", (event, input) =>
     nativeClipboard.copy(event, input),
   );
-  win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
+  win.on("closed", () => { externalNavigationActivation.revoke(); documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
@@ -714,6 +743,14 @@ app.whenReady().then(async () => {
             : 200000)
       )
         throw new Error("command_too_large");
+      const externalNavigationCommand = command === "firstPartyChat" ||
+        command === "conversation" && isConversationExternalNavigation(input);
+      let externalNavigationAuthorized = false;
+      if (externalNavigationCommand) {
+        externalNavigationAuthorized = externalNavigationActivation.consume();
+        if (!externalNavigationAuthorized || !trustedActiveFrame(event))
+          throw Error("external_navigation_user_gesture_required");
+      }
       let apiGesture = false;
       let voiceGesture = false;
       let wakeGesture = false;
@@ -780,7 +817,8 @@ app.whenReady().then(async () => {
           "firstPartyChat",
           "folders",
         ].includes(command) &&
-        !(command === "conversation" && isConversationRead(input)) &&
+        !(command === "conversation" &&
+          (isConversationRead(input) || isConversationExternalNavigation(input))) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
         !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
@@ -889,12 +927,57 @@ app.whenReady().then(async () => {
           input,
           win,
           openExternal: (url) => shell.openExternal(url),
+          authorizeNavigation: () =>
+            externalNavigationAuthorized && trustedActiveFrame(event),
         });
       } else if (command === "conversation") {
         const memoryFrame = () => !closing && !backendFailed && trustedApplicationFrame(event) &&
           win.isVisible() && !win.isMinimized();
         result = await conversationCommand({
           win, call, input, reviewSources: reviewProvider, openExternal: (url) => shell.openExternal(url),
+          reviewCitation: async review => {
+            if (
+              !externalNavigationAuthorized ||
+              !review ||
+              typeof review !== "object" ||
+              Array.isArray(review) ||
+              Object.keys(review).length !== 6 ||
+              typeof review.url !== "string" ||
+              typeof review.hostname !== "string"
+            )
+              throw Error("invalid_citation_review");
+            const reviewedUrl = new URL(review.url);
+            if (
+              reviewedUrl.href !== review.url ||
+              reviewedUrl.hostname !== review.hostname ||
+              createHash("sha256").update(reviewedUrl.href).digest("hex") !== review.urlDigest
+            )
+              throw Error("invalid_citation_review");
+            const citationFrame = event.senderFrame;
+            const citationOwnerActive = () => trustedActiveFrame({
+              sender: owner,
+              senderFrame: citationFrame,
+            });
+            if (!citationOwnerActive()) throw Error("citation_frame_changed");
+            const choice = await reviewDialogs.showMessageBox(win, {
+              type: "question",
+              title: "Open external citation?",
+              message: `Open ${reviewedUrl.hostname} in your default browser?`,
+              detail: `Exact destination:\n${reviewedUrl.href}`,
+              buttons: ["Cancel", "Open in browser"],
+              defaultId: 0,
+              cancelId: 0,
+              noLink: true,
+            });
+            if (choice.response !== 1) throw Error("authorization_cancelled");
+            if (!citationOwnerActive()) throw Error("citation_frame_changed");
+            return createCitationNavigationGrant({
+              resourceId: review.resourceId,
+              messageId: review.messageId,
+              index: review.index,
+              urlDigest: review.urlDigest,
+            }, { ownerIsActive: citationOwnerActive });
+          },
           beforeMemoryPreview: async () => {
             if (!trustedActiveFrame(event) ||
                 await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
