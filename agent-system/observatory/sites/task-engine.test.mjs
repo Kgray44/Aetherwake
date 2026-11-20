@@ -19,7 +19,7 @@ const fields = name => ({
   primary: 'backend', profile_id: 'backend', criteria: ['Artifact is readable'], dependencies: [],
 });
 
-function setup(t) {
+function setup(t, { countAuditWrites = false } = {}) {
   const sqlite = new DatabaseSync(':memory:');
   t.after(() => sqlite.close());
   for (const migration of ['0000_proposals', '0003_proposal_publication', '0004_cached_proposal_revision',
@@ -31,7 +31,12 @@ function setup(t) {
     return { bind: (...args) => ({
       first: async () => stmt.get(...args) ?? null,
       all: async () => ({ results: stmt.all(...args) }),
-      run: async () => ({ meta: stmt.run(...args) }),
+      run: async () => {
+        const meta = stmt.run(...args);
+        const includesAuditWrite = /(?:UPDATE proposals SET record = \?, engine = \?|INSERT OR IGNORE INTO proposals)/.test(statement);
+        if (countAuditWrites && includesAuditWrite && meta.changes === 1) meta.changes = 2;
+        return { meta };
+      },
     }) };
   } };
   let now = Date.now();
@@ -399,4 +404,20 @@ test('a reviewed rejection retries at the exact candidate and fences later dirty
   assert.equal(executed,1);
   assert.equal((await get(task)).lifecycle.state,'failed');
   assert.equal(await git('status','--porcelain'),'?? uncertain.txt');
+});
+
+test('trigger-backed Task writes return success independently of D1 change counts', async t => {
+  const { call, register, command, get } = setup(t, { countAuditWrites: true });
+  const task = await register('D1 trigger write counts');
+  const admission = await command(task, 'admit', { executor: 'codex' });
+  assert.equal(admission.status, 200);
+  const claim = await call({ op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task.task.id] }, 'worker');
+  assert.equal(claim.status, 200);
+  const active = claim.body.claim;
+  const status = await call({ op: 'report', task_id: task.task.id, attempt_id: active.attempt.id, lease: active.lease,
+    operation_id: crypto.randomUUID(), report: { type: 'finished', result: 'candidate', revision: rev } }, 'worker');
+  assert.equal(status.status, 200);
+  const detail = await get(task);
+  assert.equal(detail.lifecycle.state, 'verifying');
+  assert.deepEqual(detail.events.map(item => item.kind), ['register', 'admit', 'claim', 'finished']);
 });

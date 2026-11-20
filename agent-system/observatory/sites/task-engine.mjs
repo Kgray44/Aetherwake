@@ -279,11 +279,11 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
     };
     const next = { ...row, record: JSON.stringify({ ...record(row), state: 'failed' }), engine: JSON.stringify(lifecycle), version };
     const updated = await query(
-      'UPDATE proposals SET record = ?, engine = ?, version = ? WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ?',
+      'UPDATE proposals SET record = ?, engine = ?, version = ? WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? RETURNING *',
       next.record, next.engine, version, owner, namespace, row.task_id, row.version,
-    ).run();
+    ).first();
     // A late heartbeat or another reader may have advanced the row first.
-    return Number(updated.meta.changes) === 1 ? next : await query(
+    return updated ?? await query(
       'SELECT * FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?', owner, namespace, row.task_id,
     ).first();
   }));
@@ -357,13 +357,12 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     const next = { ...lifecycle, event: event(id, kind, version, lifecycle.state, attemptId, eventDigest) };
     const guard = fenceGraph ? unchangedGraph : 'version = ?';
     const args = fenceGraph ? snapshotArgs() : [row.version];
-    const updated = await query(`
+    const result = await query(`
       UPDATE proposals SET record = ?, engine = ?, version = ?, priority = ?
       WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS ? AND ${guard}
-    `, JSON.stringify(task), JSON.stringify(next), version, priority, owner, namespace, row.task_id, row.github_state, ...args).run();
-    if (Number(updated.meta.changes) !== 1) return null;
-    const result = { ...row, record: JSON.stringify(task), engine: JSON.stringify(next), version, priority };
-    rows.set(row.task_id, result);
+      RETURNING *
+    `, JSON.stringify(task), JSON.stringify(next), version, priority, owner, namespace, row.task_id, row.github_state, ...args).first();
+    if (result) rows.set(row.task_id, result);
     return result;
   };
   const conflict = () => failure(409, 'Task graph changed. Reload or replay the same operation ID.');
@@ -388,10 +387,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     const result = await query(`
       INSERT OR IGNORE INTO proposals (owner_id, namespace, task_id, created_at, record, engine, priority, stale_revision)
       SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${unchangedGraph}
+      RETURNING *
     `, owner, namespace, id, task.created_at, JSON.stringify(task), JSON.stringify(lifecycle), priority,
-    Number(source.status === 'stale'), ...snapshotArgs()).run();
-    if (Number(result.meta.changes) !== 1) return conflict();
-    return success(await view({ task_id: id, record: JSON.stringify(task), engine: JSON.stringify(lifecycle), version: 1, priority, receipts: '[]' }), 201);
+    Number(source.status === 'stale'), ...snapshotArgs()).first();
+    return result ? success(await view(result), 201) : conflict();
   }
 
   if (body.op === 'claim') {
