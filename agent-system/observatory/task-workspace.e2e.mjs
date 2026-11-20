@@ -248,6 +248,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.setViewportSize({width:820,height:620});
+  const telemetry = page.getByRole('region',{name:'Task telemetry'});
+  await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
+  await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
