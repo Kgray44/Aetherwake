@@ -240,6 +240,11 @@
             "maxLength": 128
           }
         },
+        "deliverables": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
         "requirements": {
           "type": "array",
           "maxItems": 50,
