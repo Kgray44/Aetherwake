@@ -68,7 +68,7 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
    if(typeof args.task_id!=='string'||!telemetryTaskId.test(args.task_id))return fail(-32602,'Invalid Task ID');
    if(args.change===undefined)return result({baseline:await telemetryBaseline(env.DB,owner,namespace,args.task_id)});
    const response=await ingestTaskTelemetry({db:env.DB,owner,namespace,id:args.task_id,body:args.change,validate,validateEvent});
-   return result({status:response.status,...response.body},response.status!==200);
+   return result({status:response.status,...response.body});
   }
   if(name==='project_execution_snapshot'){
    const projection=validateProjection(args.projection,validate,validateEvent);

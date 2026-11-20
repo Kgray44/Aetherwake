@@ -712,6 +712,24 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
 });
 
 
+test('live telemetry can start after eight Tasks and isolated capacity returns an actionable receipt',async t=>{
+  const {call}=fixture(t);
+  const generated_at=new Date().toISOString();
+  async function sync(index,verification) {
+    const record={...proposedTask(input,rev),id:'task_capacity_'+index};
+    const request={jsonrpc:'2.0',id:index,method:'tools/call',params:{name:'sync_task_telemetry',arguments:{
+      task_id:record.id,...(verification?{verification}:{}),change:{base:null,generated_at,records:[record],events:[]},
+    }}};
+    const response=await call('/mcp',{method:'POST',headers:{...ownerHeader,'content-type':'application/json'},body:JSON.stringify(request)});
+    const data=(await response.json()).result;
+    assert.equal(data.isError,false);
+    return JSON.parse(data.content[0].text);
+  }
+  for (let i=1;i<=9;i++) assert.equal((await sync(i)).status,200);
+  for (let i=1;i<=8;i++) assert.equal((await sync(i,namespace)).status,200);
+  assert.deepEqual(await sync(9,namespace),{status:413,error:'Private Task telemetry storage limit reached'});
+});
+
 test('fabricated passing evidence without an attempt never becomes accepted in the projected UI',async t=>{
  const {call}=fixture(t);
  const task=proposedTask(input,rev);

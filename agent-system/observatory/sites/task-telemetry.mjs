@@ -5,7 +5,7 @@ const digestPattern = /^[a-f0-9]{64}$/;
 const bytes = new TextEncoder();
 const limit = 2 * MAX_SYNC_BYTES;
 const maxRows = 24;
-const maxNamespaceRows = 8;
+const maxVerificationNamespaceRows = 8;
 
 export async function sha256(value) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.encode(value))),
@@ -82,11 +82,13 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
           LENGTH(CAST(? AS BLOB)) + LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)) + LENGTH(CAST(event_receipt_batches AS BLOB)))
             FROM task_telemetry WHERE owner_id = ? AND namespace = ?), 0) <= ?`)
       .bind(owner, namespace, id, digest, receivedAt, payload, eventReceiptBatches, owner, maxRows,
-        owner, namespace, maxNamespaceRows, payload, eventReceiptBatches, owner, namespace, limit).run();
+        owner, namespace, namespace === 'live' ? maxRows : maxVerificationNamespaceRows,
+        payload, eventReceiptBatches, owner, namespace, limit).run();
   if (stored.meta.changes !== 1) {
     const after = await readTelemetry(db, owner, namespace, id);
     if (after?.digest === digest) return { status: 200, body: receipt(after) };
-    return fail(409, 'Concurrent update or private telemetry storage limit reached');
+    if (!after || after.digest === existing?.digest) return fail(413, 'Private Task telemetry storage limit reached');
+    return fail(409, 'Concurrent telemetry update. Read the current baseline and retry.');
   }
   return { status: 200, body: receipt({ digest, received_at: receivedAt, projection }) };
 }
