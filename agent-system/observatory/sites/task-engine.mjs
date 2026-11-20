@@ -9,7 +9,8 @@ const scopeLimit = 500;
 const claimLimit = 2;
 const leaseMs = 60_000;
 const maxAttempts = 3;
-const attemptTimeoutMs = 30 * 60_000;
+const defaultAttemptMinutes = 30;
+const attemptLimit = lifecycle => lifecycle.max_attempt_minutes ?? defaultAttemptMinutes;
 const terminal = new Set(['completed', 'failed', 'cancelled', 'superseded', 'archived']);
 function safeReference(value) {
   if (typeof value !== 'string' || value.length > 1000 || !/^https:\/\/[^\s]+$/.test(value)) return false;
@@ -87,7 +88,7 @@ export function taskAttemptRecord(task, attempt) {
 function publicLifecycle(row, rows, now) {
   const stored = details(row);
   const { attempts, event, cycle_start, ...lifecycle } = stored;
-  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
+  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), max_attempt_minutes:attemptLimit(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
 }
 
 function requirementReferences(fields) {
@@ -147,6 +148,10 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (action.executor !== 'codex') return failure(400, 'Unsupported executor');
     const start = action.start_at === undefined ? now : Date.parse(action.start_at);
     const prereqs = action.prerequisites ?? [];
+    const minutes = action.max_attempt_minutes === undefined ? defaultAttemptMinutes : action.max_attempt_minutes;
+    if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > defaultAttemptMinutes) {
+      return failure(400, 'Maximum attempt duration must be a whole number from 1 to 30 minutes');
+    }
     if (!Number.isFinite(start) || !Array.isArray(prereqs) || prereqs.length > 100 ||
         !prereqs.every(item => task.prerequisites.capabilities.includes(item))) {
       return failure(400, 'Invalid schedule or capability prerequisites');
@@ -155,7 +160,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
       return failure(400, 'Invalid dependency cancellation policy');
     }
     return { lifecycle: { ...lifecycle, state: 'admitted', executor: action.executor,
-      start_at: start, prerequisites: unique(prereqs), cancel_with_dependency: action.cancel_with_dependency === true } };
+      start_at: start, max_attempt_minutes: minutes, prerequisites: unique(prereqs), cancel_with_dependency: action.cancel_with_dependency === true } };
   }
   if (type === 'satisfy' && ['admitted', 'queued', 'scheduled'].includes(current)) {
     if (!task.prerequisites.capabilities.includes(action.prerequisite)) return failure(400, 'Unknown prerequisite');
@@ -274,12 +279,16 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
     if (attempt?.state !== 'running' || attempt.lease_until > now) return row;
 
     attempt.state = 'orphaned';
-    attempt.failure = 'Executor lease expired. Reconcile possible effects before retrying.';
+    const deadlineReached = attempt.lease_until === attempt.deadline;
+    attempt.failure = deadlineReached
+      ? 'Attempt time limit reached. Reconcile possible effects before retrying.'
+      : 'Executor lease expired. Reconcile possible effects before retrying.';
     attempt.finished_at = timestamp(now);
     lifecycle.state = 'failed';
     const version = row.version + 1;
     lifecycle.event = {
-      operation_id: crypto.randomUUID(), digest: 'scheduler', kind: 'lease_expired', actor: 'scheduler',
+      operation_id: crypto.randomUUID(), digest: 'scheduler', kind: deadlineReached ? 'attempt_time_limit_reached' : 'lease_expired', actor: 'scheduler',
+      reason: attempt.failure,
       version, state: 'failed', at: timestamp(now), attempt_id: attempt.id,
     };
     const next = { ...row, record: JSON.stringify({ ...record(row), state: 'failed' }), engine: JSON.stringify(lifecycle), version };
@@ -425,10 +434,11 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     if (!candidate) return success({ claim: null });
     const task = record(candidate);
     const lifecycle = details(candidate);
+    const deadline = now + attemptLimit(lifecycle) * 60_000;
     const attempt = {
       id: 'attempt_' + crypto.randomUUID(), attempt_number: lifecycle.attempts.length + 1, executor: lifecycle.executor,
       revision: lifecycle.followup_revision ?? task.revision, state: 'running', started_at: timestamp(now), lease: crypto.randomUUID(),
-      lease_until: now + leaseMs, deadline: now + attemptTimeoutMs,
+      lease_until: Math.min(now + leaseMs, deadline), deadline,
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
     if (checkpoint?.session_id && checkpoint.checkpoint_revision) {
@@ -460,6 +470,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const action = body.action;
   const latest = lifecycle.attempts.at(-1);
   const receipt = {
+    ...(action?.type === 'admit' ? { max_attempt_minutes:attemptLimit(change.lifecycle), start_at:timestamp(change.lifecycle.start_at) } : {}),
     ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
     ...(action?.type === 'edit' ? { fields:[
       ...['title','objective','classification','prerequisites','requirements','acceptance'].filter(key =>

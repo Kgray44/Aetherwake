@@ -151,6 +151,34 @@ test('archive keeps accepted prerequisites and feedback reopens at the accepted 
   assert.ok(next.task.objective.endsWith(feedback));
 });
 
+test('owner time limits constrain the claim deadline and leave a specific receipt at expiry', async t => {
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('time limit');
+  const admit=minutes=>command(task,'admit',{executor:'codex',max_attempt_minutes:minutes});
+  for (const invalid of [0,31,1.5,'5',null]) assert.equal((await admit(invalid)).status,400);
+  const admitted=await admit(1);
+  assert.equal(admitted.status,200);
+  assert.equal(admitted.body.lifecycle.max_attempt_minutes,1);
+  assert.equal(admitted.body.events.at(-1).max_attempt_minutes,1);
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  assert.equal(claim.attempt.deadline-Date.parse(claim.attempt.started_at),60_000);
+  assert.equal(claim.attempt.lease_until,claim.attempt.deadline);
+  advance(59_999);
+  assert.equal((await get(task)).lifecycle.state,'running');
+  advance(1);
+  const expired=await get(task);
+  assert.equal(expired.lifecycle.state,'failed');
+  assert.match(expired.attempts[0].failure,/time limit reached/i);
+  assert.equal(expired.events.at(-1).kind,'attempt_time_limit_reached');
+  const unattended=await register('lost contact');
+  const longer=await command(unattended,'admit',{executor:'codex',max_attempt_minutes:2});
+  assert.equal(longer.status,200);
+  await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  advance(120_000);
+  const lost=await get(unattended);
+  assert.equal(lost.events.at(-1).kind,'lease_expired');
+});
+
 test('scheduled execution, cancellation propagation and checkpoint recovery', async t => {
   const { call, register, command, get, advance } = setup(t);
   const a = await register('A');
