@@ -8,15 +8,18 @@ import { validateRecord, validateTraceEvent } from './validate-record.mjs';
 const identity = /^[A-Za-z0-9_.:-]{1,160}$/;
 const revision = /^[a-f0-9]{40}$/;
 const terminalStates = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
-const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event']);
-const streamSource = 'codex_exec_jsonl';
+const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event',
+  'codex_app_server_token_usage_updated']);
 
 /** Observe a claimed execution without owning its lifecycle or making an executor call. */
-export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory, verificationNamespace },
+export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory, verificationNamespace,
+  providerStream = 'codex_exec_jsonl' },
   { startDelivery = startObservatorySync, managedConnection } = {}) {
   if (!isAbsolute(journal) || (deliveryDirectory !== undefined && !isAbsolute(deliveryDirectory)) ||
       task?.record_type !== 'task' || validateRecord(task).length || !identity.test(task.id) || !identity.test(attempt?.id ?? '') ||
-      !revision.test(attempt?.revision ?? '')) throw Error('Invalid claim telemetry configuration');
+      !revision.test(attempt?.revision ?? '') || !['codex_exec_jsonl','codex_app_server'].includes(providerStream)) {
+    throw Error('Invalid claim telemetry configuration');
+  }
 
   const executionTask = { ...task, revision:attempt.revision };
   const spanId = 'codex-' + attempt.id;
@@ -33,7 +36,7 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
       if (startedAt !== undefined) throw Error('Claim telemetry already exists');
       const requested = {
         name:'provider_stream_requested',availability:'observed',unit:'boolean',value:1,
-        source:streamSource,method:'observer_configuration',
+        source:providerStream,method:'observer_configuration',
       };
       const start = event('span_start',[requested],{state:'started',eventId:spanId + '-start'});
       if (!await appendEvent(journal,start)) throw Error('Claim telemetry already exists');
@@ -63,7 +66,7 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
     finish({ measurements = [], state, executionEnd }) {
       if (closing) return closing;
       if (startedAt === undefined || !terminalStates.has(state) || !Array.isArray(measurements) ||
-          measurements.length > 64 || measurements.some(row => row?.source !== streamSource)) {
+          measurements.length > 64 || measurements.some(row => row?.source !== providerStream)) {
         throw Error('Invalid claim telemetry completion');
       }
       const duration = {
@@ -88,10 +91,10 @@ export function createClaimTelemetryHooks(workspace, delivery = {}) {
   const directory = join(workspace, '.git', 'agent-harness');
   let observer;
   return {
-    async onTelemetryStart({ task, attempt, verificationNamespace }) {
+    async onTelemetryStart({ task, attempt, verificationNamespace, providerStream }) {
       const next = createClaimTelemetry({
         task,attempt,journal:join(directory, 'claimed-execution.journal'),
-        deliveryDirectory:join(directory, 'observatory-sync'), verificationNamespace,
+        deliveryDirectory:join(directory, 'observatory-sync'), verificationNamespace,providerStream,
       }, delivery);
       await next.start();
       observer = next;

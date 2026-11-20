@@ -88,7 +88,8 @@ export function taskAttemptRecord(task, attempt) {
     repository: task.repository, revision: attempt.revision, task_id: task.id,
     attempt_number: attempt.attempt_number, started_at: attempt.started_at,
     created_at: attempt.started_at, state: states[attempt.state] ?? attempt.state,
-    provider: attempt.executor,
+    provider: attempt.execution_identity?.provider??attempt.executor,
+    ...(attempt.execution_identity ? {model:attempt.execution_identity.model} : {}),
     ...(attempt.finished_at ? { finished_at: attempt.finished_at } : {}),
     ...(attempt.failure ? { failure_category: 'environment', failure_diagnosis: attempt.failure } : {}),
     ...(attempt.branch ? { branch: attempt.branch } : {}),
@@ -261,6 +262,15 @@ function workerChange(lifecycle, body, now) {
     return failure(400, 'Invalid or changed executor session');
   }
   if (report.session_id) active.session_id = report.session_id;
+  if (report.execution_identity!==undefined) {
+    const {provider,model,source}=report.execution_identity??{};
+    const token=value=>typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
+    if (!active.session_id||!token(provider)||!token(model)||source!=='codex_app_server_thread_start'||
+        (active.execution_identity&&(active.execution_identity.provider!==provider||active.execution_identity.model!==model))) {
+      return failure(400,'Invalid or changed executor model identity');
+    }
+    active.execution_identity={provider,model,source};
+  }
   if (report.branch !== undefined && (typeof report.branch !== 'string' || report.branch.length > 200 ||
       !/^[\w/.-]+$/.test(report.branch) || (active.branch && active.branch !== report.branch))) {
     return failure(400, 'Invalid or changed workspace branch');

@@ -474,6 +474,22 @@ test('an observer reconciles lost workers and persists one fenced lease-expiry r
   assert.equal((await get(starting)).version, first.version);
 });
 
+test('a leased worker can bind an observed App Server model to an immutable attempt session', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('Observed executor model');
+  await command(task,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  const session_id=crypto.randomUUID();
+  const identity={provider:'openai',model:'observed-model',source:'codex_app_server_thread_start'};
+  const report=execution_identity=>call({op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
+    lease:claim.lease,operation_id:crypto.randomUUID(),report:{type:'heartbeat',session_id,execution_identity}},'worker');
+  assert.equal((await report(identity)).status,200);
+  assert.equal((await report({...identity,model:'changed-model'})).status,400);
+  const attempt=(await get(task)).attempts[0];
+  assert.deepEqual(attempt.execution_identity,identity);
+  assert.equal(taskAttemptRecord(task.task,attempt).model,identity.model);
+});
+
 test('revision-pinned PR and CI references survive replay and stay owner scoped', async t => {
   const { call, register, command, get } = setup(t);
   const created = await register('References');

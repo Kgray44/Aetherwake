@@ -145,7 +145,6 @@ export function codexTaskPrompt(task, attempt) {
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
     'Use targeted repository searches and governance sections. Keep command output focused and reuse facts already read unless the source changed or needs independent verification.',
-    'When the checkout supports governance-context --compact, prefer it for routed guidance. Read all applicable binding requirements.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
@@ -195,21 +194,44 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   }
 }
 
+async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,signal}) {
+  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
+    resumeSessionId:attempt.resume_session_id,signal,onSession});
+  if (result.usage&&onUsage) {
+    const fields={total:'totalTokens',input:'inputTokens',cached_input:'cachedInputTokens',
+      cache_write_input:'cacheWriteInputTokens',output:'outputTokens',reasoning_output:'reasoningOutputTokens'};
+    const metrics=Object.entries(fields).flatMap(([name,key])=>{
+      const value=result.usage[key];
+      return Number.isSafeInteger(value)&&value>=0 ? [{
+        name:'provider_'+name+'_tokens',unit:'tokens',value,availability:'observed',
+        source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
+      }] : [];
+    });
+    if (metrics.length) {
+      try { await onUsage(metrics); }
+      catch { console.error('App Server token telemetry could not be recorded.'); }
+    }
+  }
+  return {ok:result.status==='completed',stopped:signal.aborted};
+}
+
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage,
-  verificationNamespace, prepareWorkspace, managedConnection, interval = 12_000 }) {
+  verificationNamespace, prepareWorkspace, managedConnection, providerStream, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
   const heartbeats = new AbortController();
   let sessionId;
+  let executionIdentity;
   let identity;
   let desired;
   let leaseLost = false;
   const report = async (type, fields = {}) => {
     const request = { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
       operation_id: randomUUID(), report: { type, ...fields,
-        ...(sessionId ? { session_id: sessionId } : {}), ...(identity ? { branch: identity.branch } : {}) } };
+        ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
+        ...(identity ? { branch: identity.branch } : {}) } };
     // Reconcile an ambiguous response by replaying the same operation, never the execution.
     try { return await send(request); }
     catch (error) {
@@ -284,9 +306,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         managedConnection ? { managedConnection } : undefined));
     }
     telemetryStarted = true;
-    await telemetry(onTelemetryStart, { verificationNamespace });
+    await telemetry(onTelemetryStart, { verificationNamespace, ...(providerStream ? {providerStream} : {}) });
     outcome = await execute({ executable, cwd: workspace, task, attempt,
-      onSession: value => { sessionId = value; },
+      onSession: (value,observedIdentity) => { sessionId = value; executionIdentity=observedIdentity; },
       onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
       signal: workerSignal });
   } catch {
@@ -321,11 +343,14 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       } catch {
         result = undefined;
       }
-      if (result && !result.dirty && result.branch === identity.branch) {
+      const lacksDeliverable=task.deliverables?.length>0&&result?.revision===attempt.revision;
+      if (result && !result.dirty && result.branch === identity.branch && !lacksDeliverable) {
         await measureStage('candidate_submission','integration',() => report('finished', { result: 'candidate', revision: result.revision }));
         executionState = 'completed';
       } else {
-        await report('failed', { failure: 'Candidate workspace did not yield a clean, pinned revision.' });
+        await report('failed', { failure: lacksDeliverable
+          ? 'The executor completed without creating a revision for the declared deliverables.'
+          : 'Candidate workspace did not yield a clean, pinned revision.' });
       }
     } else {
       if (workerSignal.aborted) executionState = 'interrupted';
@@ -361,6 +386,9 @@ async function main(configPath) {
   const credential = process.env.AADS_TASK_WORKER_KEY;
   if (!credential || credential.length < 32) throw Error('AADS_TASK_WORKER_KEY is required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
+  if (config.executor_transport!==undefined && !['exec','app_server'].includes(config.executor_transport)) {
+    throw Error('Invalid worker execution transport');
+  }
   if (!isAbsolute(config.codex_bin) || !isAbsolute(config.workspace_root) || (!config.workspaces && !config.auto_provision) ||
       !Array.isArray(config.storage_check) || !config.storage_check.length || !config.storage_check.every(value => typeof value === 'string') ||
       !isAbsolute(config.storage_check[0])) throw Error('Worker configuration is incomplete');
@@ -393,8 +421,9 @@ async function main(configPath) {
     cwd: root, windowsHide: true, timeout: 5000, maxBuffer: 8192,
   });
   let connector;
+  const getConnector=()=>connector??=openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
   function call(args, toolName) {
-    const current = connector ??= openObservatoryConnector({ cwd: root, tool, executable: config.codex_bin });
+    const current = getConnector();
     return current.call(args,toolName).catch(error => {
       if (!error.status && connector === current) { current.close(); connector = undefined; }
       throw error;
@@ -416,6 +445,9 @@ async function main(configPath) {
             const workspace = workspaces.get(result.claim.task.id);
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
               verificationNamespace:verification ?? null,managedConnection,
+              ...(config.executor_transport==='app_server' ? {
+                execute:options=>executeAppServer(getConnector(),options),providerStream:'codex_app_server',
+              } : {}),
               ...(workspace ? {} : {prepareWorkspace:input => provisionTaskWorkspace({root, author, ...input})}),
               admitStorage }).catch(() => {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');

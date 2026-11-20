@@ -484,7 +484,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const pdf=await download.createReadStream();
   const chunks=[];
   for await (const chunk of pdf) chunks.push(chunk);
-  assert.equal(Buffer.concat(chunks).subarray(0,5).toString(),'%PDF-');
+  const report=Buffer.concat(chunks);
+  assert.equal(report.subarray(0,5).toString(),'%PDF-');
+  assert.match(report.toString('latin1'),/\/Outlines\s+\d+\s+0\s+R/);
   await page.getByRole('button',{name:'Archive Task'}).click();
   await page.getByRole('form',{name:'Archive Task'}).getByRole('button',{name:'Confirm'}).click();
   await page.getByText(/Task archived · Owner accepted/).waitFor();

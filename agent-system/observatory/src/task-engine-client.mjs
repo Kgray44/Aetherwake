@@ -47,16 +47,16 @@ export function reviewRevision(attempt) {
 }
 
 const appServerSource = 'codex_app_server_token_usage_updated';
-const appServerMethod = 'single_ephemeral_thread_total';
+const appServerMethods = new Set(['single_ephemeral_thread_total','fresh_thread_total']);
 
 function appServerTokenRow(taskId, repository, attempt, events) {
   const receipts = events.filter(event => event.kind === 'measurement' && event.task_id === taskId &&
     event.attempt_id === attempt.id && event.revision === attempt.revision && event.repository === repository &&
-    (event.measurements ?? []).some(metric => metric.source === appServerSource && metric.method === appServerMethod));
+    (event.measurements ?? []).some(metric => metric.source === appServerSource && appServerMethods.has(metric.method)));
   if (receipts.length !== 1) return null;
   const tokens = name => {
     const samples = receipts[0].measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
-      metric.source === appServerSource && metric.method === appServerMethod);
+      metric.source === appServerSource && appServerMethods.has(metric.method));
     const metric = samples.length === 1 ? samples[0] : null;
     return metric?.availability === 'observed' && metric.unit === 'tokens' &&
       Number.isSafeInteger(metric.value) && metric.value >= 0 ? metric.value : null;
@@ -68,7 +68,8 @@ function appServerTokenRow(taskId, repository, attempt, events) {
   const reasoningOutputTokens = reasoning != null && outputTokens != null && reasoning > outputTokens ? null : reasoning;
   return {
     taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
-    provider:attempt.provider ?? attempt.executor ?? 'codex', model:attempt.model, state:attempt.state,
+    provider:attempt.execution_identity?.provider ?? attempt.provider ?? attempt.executor ?? 'codex',
+    model:attempt.execution_identity?.model ?? attempt.model, identitySource:attempt.execution_identity?.source, state:attempt.state,
     coverage:'observed', source:'Codex App Server',
     observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
       cacheWriteInputTokens:tokens('cache_write_input'),

@@ -257,7 +257,8 @@ export function TaskTokenAccounting({ rows }) {
         <th scope="col">Output</th><th scope="col">Total</th><th scope="col">Coverage</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.attemptId + ':' + row.revision}>
         <th scope="row">{row.attemptNumber ?? row.attemptId}<small className="row-meta">{row.revision.slice(0, 10)}</small></th>
-        <td>{[row.provider, row.model].filter(Boolean).join(' / ') || 'Unavailable'}</td>
+        <td>{[row.provider, row.model].filter(Boolean).join(' / ') || 'Unavailable'}
+          {row.identitySource==='codex_app_server_thread_start'&&<small className="row-meta">Observed at App Server thread start</small>}</td>
         <td>{display(row.observed.inputTokens)}</td><td>{display(row.observed.cachedInputTokens)}</td>
         <td>{display(row.observed.outputTokens)}</td><td>{display(row.observed.totalTokens)}</td><td>{row.coverage}{row.source && <small className="row-meta">{row.source}</small>}</td>
       </tr>)}</tbody>
