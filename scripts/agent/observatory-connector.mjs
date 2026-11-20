@@ -166,6 +166,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (result.isError || value.error || (value.status !== undefined && (value.status < 200 || value.status >= 300))) {
         const error = Error('Observatory declined the request');
         error.status = value.status;
+        if (value.error==='Task graph changed. Reload or replay the same operation ID.') error.code='task_version_conflict';
+        if (value.error==='Attempt lease is stale or invalid') error.code='lease_rejected';
         throw error;
       }
       return value;
