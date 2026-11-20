@@ -6,11 +6,11 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test:workspace:e2e": "npm run build && node --test task-workspace.e2e.mjs",
     "start": "node server.mjs",
     "test": "node --test test.mjs acceptance.test.mjs engineering-analytics.test.mjs failure-investigation.test.mjs task-workspace.test.mjs",
     "build:sites": "npm run build && node sites/build.mjs",
-    "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs sites/github-detail.test.mjs sites/ci-controls.test.mjs",
-    "test:workspace:e2e": "npm run build && node --test task-workspace.e2e.mjs"
+    "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs sites/github-detail.test.mjs sites/ci-controls.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

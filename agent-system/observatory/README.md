@@ -23,6 +23,17 @@ Playwright Chromium browser. Set OBSERVATORY_BROWSER_EXECUTABLE to use an
 existing Chromium executable. The test uses built assets, real Worker handlers,
 an isolated SQLite database, and fixture GitHub responses.
 
+When the Task Engine API is available, private intake registers Tasks through
+it. Execution controls read the stored lifecycle separately from computed
+readiness and record owner actions using the current Task version. A scheduled
+start is submitted in UTC from the operator’s local time. Opening a control
+confers no authority. The Worker authorizes each action. Evidence links are
+revision-pinned, and per-attempt token accounting preserves observed coverage
+and unavailable values from the analytics projection.
+
+Set OBSERVATORY_ENGINE_E2E=1 on a combined checkout with Milestone B’s Worker
+to run the canonical schedule and queue-control browser scenario.
+
 ## Run
 
 From a checked-out repository with Node.js 20.19+ or 22.12+:

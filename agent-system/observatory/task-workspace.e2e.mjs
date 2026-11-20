@@ -16,7 +16,7 @@ const taskTitle = 'Worker-backed workspace verification';
 const editTitle = 'Worker-backed editor verification';
 const owner = 'isolated-browser-test';
 
-async function start(t) {
+async function start(t, { canonical = false } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   for (const name of readdirSync(new URL('./sites/drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
@@ -37,7 +37,8 @@ async function start(t) {
   const validateEvent = ajv.compile(JSON.parse(read('../contracts/trace-v1.schema.json')));
   const index = read('./dist/index.html');
   const assets = { '/': { content: index, type: 'text/html; charset=utf-8' } };
-  for (const [, path] of index.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)) {
+  for (const name of readdirSync(new URL('./dist/assets/', import.meta.url))) {
+    const path = '/assets/' + name;
     assets[path] = { content: read('./dist' + path), type: path.endsWith('.css') ? 'text/css' : 'application/javascript' };
   }
   const worker = createWorker({
@@ -57,7 +58,9 @@ async function start(t) {
     const request = new Request(new URL(req.url, origin), {
       method, headers, ...(method === 'POST' ? { body: Readable.toWeb(req), duplex: 'half' } : {}),
     });
-    const response = await worker.fetch(request, { DB });
+    const response = !canonical && new URL(request.url).pathname === '/api/task-engine/v1'
+      ? new Response(null, { status: 404 })
+      : await worker.fetch(request, { DB, OBSERVATORY_TASK_ENGINE_OWNER_ID: owner });
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
   });
@@ -143,4 +146,65 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
   await page.getByRole('button', { name: 'Load latest version' }).click();
   await editor.waitFor({ state: 'hidden' });
   assert.deepEqual(pageErrors, []);
+});
+
+test('owner schedules an engine Task, observes blockers and controls the queue', {
+  timeout: 120_000, skip: !process.env.OBSERVATORY_ENGINE_E2E,
+}, async t => {
+  const origin = await start(t, { canonical: true });
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
+  });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ reducedMotion: 'reduce' });
+  const send = async body => {
+    const response = await fetch(origin + '/api/task-engine/v1', {
+      method: 'POST', headers: { origin, 'content-type': 'application/json', 'x-observatory-verification': namespace },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.ok, true);
+    return response.json();
+  };
+  const prerequisite = await send({ op: 'register', operation_id: crypto.randomUUID(), fields: {
+    title: 'Canonical prerequisite', objective: 'Supply an explicit unresolved prerequisite during the initial schedule.',
+    primary: 'integration', profile_id: 'integration', criteria: ['Supply an approved result'],
+  } });
+  await page.goto(origin + '/?verification=' + namespace + '#tasks');
+  await page.getByRole('button', { name: 'Create proposal' }).click();
+  await page.getByLabel('Task title').fill('Canonical schedule verification');
+  await page.getByLabel('Tangible objective').fill('Use the existing engine API to register, schedule and control a genuine isolated Task.');
+  await page.getByLabel('Prerequisite task IDs').fill(prerequisite.task.id);
+  await page.getByLabel('Acceptance criteria').fill('Observe the canonical schedule and audit receipts.');
+  await page.getByRole('button', { name: 'Create Task', exact: true }).click();
+  const editor = page.getByRole('form', { name: 'Edit proposed task' });
+  await editor.getByLabel('Task title').fill('Canonical schedule edited');
+  await editor.getByRole('button', { name: 'Save proposal' }).click();
+  await page.getByText('Task saved.', { exact: true }).waitFor();
+
+  await page.getByRole('button', { name: 'Admit to Codex queue', exact: true }).click();
+  const admission = page.getByRole('form', { name: 'Admit to Codex queue' });
+  await admission.getByLabel('Start at').fill('2050-01-01T13:00');
+  await admission.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await page.getByRole('list', { name: 'Admission blockers' }).getByText(/Canonical prerequisite/).waitFor();
+  const id = new URL(page.url()).hash.split('/').at(-1);
+  let detail = await send({ op: 'get', task_id: id });
+  assert.equal(detail.lifecycle.stored_state, 'admitted');
+  assert.equal(detail.lifecycle.state, 'blocked');
+  assert.equal(detail.lifecycle.executor, 'codex');
+  assert.equal(detail.lifecycle.start_at, await page.evaluate(() => new Date('2050-01-01T13:00').getTime()));
+
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.getByText(/Stored state paused/).waitFor();
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await page.getByText(/Stored state queued/).waitFor();
+  await page.getByRole('button', { name: 'Cancel Task', exact: true }).click();
+  const cancel = page.getByRole('form', { name: 'Cancel Task' });
+  await cancel.getByRole('button', { name: 'Confirm' }).click();
+  await page.getByText(/Stored state cancelled/).waitFor();
+  await page.reload();
+  await page.getByText(/Stored state cancelled/).waitFor();
+  detail = await send({ op: 'get', task_id: id });
+  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'resume', 'cancel']);
+  assert.equal(detail.task.owner_acceptance, 'not_reviewed');
 });

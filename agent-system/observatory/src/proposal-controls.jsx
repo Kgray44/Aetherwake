@@ -4,11 +4,11 @@ import { Save } from 'lucide-react';
 import { proposalChecks } from '../intake.mjs';
 import { dependencyGraph } from './task-workspace.mjs';
 
-const takeSnapshot = (task, control) => ({ task, version: control.version, priority: control.priority });
+const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({ task, version: control.version, priority: control.priority, editable });
 
-export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable }) {
+export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable }) {
   const reduce = useReducedMotion();
-  const [snapshot, setSnapshot] = useState(() => takeSnapshot(task, control));
+  const [snapshot, setSnapshot] = useState(() => takeSnapshot(task, control, engineEditable));
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -30,13 +30,14 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     other.id !== task.id && manageable(other) && ['proposed', 'blocked'].includes(other.state));
 
   useEffect(() => {
+    if (engineCommand) return;
     const controller = new AbortController();
     fetch(endpoint, { headers, signal: controller.signal }).then(async response => {
       const data = response.ok ? await response.json() : null;
       if (!controller.signal.aborted) setHistory(data?.history ?? false);
     }).catch(() => { if (!controller.signal.aborted) setHistory(false); });
     return () => controller.abort();
-  }, [endpoint, headers, control.version]);
+  }, [endpoint, headers, control.version, Boolean(engineCommand)]);
 
   function reset(next) {
     setSnapshot(next);
@@ -56,6 +57,12 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     setError('');
     setSaved('');
     try {
+      if (engineCommand) {
+        const next = await engineCommand(action, snapshot.version);
+        reset(takeSnapshot(next.task, next, !next.lifecycle.executor && ['proposed', 'blocked'].includes(next.lifecycle.stored_state)));
+        setSaved("Task saved.");
+        return;
+      }
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
@@ -119,10 +126,11 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     <p className="low">Version {snapshot.version} · {snapshot.priority} priority</p>
     {changed && <div className="notice" role="status">
       <span>Version {control.version} is available. {draft ? 'Loading it clears your unsaved changes.' : 'Load it to continue.'}</span>
-      <button className="quiet-button" type="button" disabled={busy} onClick={() => reset(takeSnapshot(task, control))}>Load latest version</button>
+      <button className="quiet-button" type="button" disabled={busy} onClick={() => reset(takeSnapshot(task, control, engineEditable))}>Load latest version</button>
     </div>}
     {error && <p role="alert" className="notice error">{error}</p>}
-    {stored.state === 'proposed' && <form key={snapshot.version} aria-label="Edit proposed task" className="form task-editor"
+    {engineCommand && !snapshot.editable && <p>Task fields are read-only in the current execution state.</p>}
+    {snapshot.editable && <form key={snapshot.version} aria-label="Edit proposed task" className="form task-editor"
       onSubmit={edit} onChange={event => { setDraft(readFields(event.currentTarget)); setSaved(''); }}>
       <fieldset className="task-editor-fields" disabled={busy}>
         <label>Task title <input name="title" defaultValue={stored.title} required minLength={4} maxLength={160}/></label>
@@ -161,7 +169,7 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
       </div>
     </form>}
     {stored.state !== 'proposed' && saved && <p role="status">{saved}</p>}
-    {['proposed', 'blocked'].includes(stored.state) && <details className="proposal-disclosure" open>
+    {!engineCommand && ['proposed', 'blocked'].includes(stored.state) && <details className="proposal-disclosure" open>
       <summary>Proposal state controls</summary>
       <form className="form" aria-label="Change proposal state" key={snapshot.version} onSubmit={changeState}>
         <label>New state <select value={transition} onChange={event => { setTransition(event.target.value); setConfirm(false); }} required>
@@ -185,13 +193,13 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
         </button></div>
       </form>
     </details>}
-    <details className="proposal-disclosure"><summary>Change history</summary>
+    {!engineCommand && <details className="proposal-disclosure"><summary>Change history</summary>
       {history === null ? <p>Loading history…</p> : history === false ? <p>History unavailable.</p> : history.length === 0
         ? <p>No changes recorded.</p>
         : <ol>{[...history].reverse().map(receipt => <li key={receipt.operation_id}>
           Version {receipt.version} · {receipt.state ?? receipt.type} · {receipt.actor} · {new Date(receipt.at).toLocaleString()}
           {receipt.reason && <p>{receipt.reason}</p>}
         </li>)}</ol>}
-    </details>
+    </details>}
   </>;
 }

@@ -7,7 +7,7 @@ const defaultFilters = { query: '', source: 'all', state: 'all', sort: 'newest',
 const labels = value => value.replaceAll('_', ' ');
 const date = value => value ? new Date(value).toLocaleDateString() : 'Unavailable';
 
-export function TaskRows({ tasks, controls, related, Status }) {
+export function TaskRows({ tasks, controls, related, activityFor, Status }) {
   const reduce = useReducedMotion();
   return <ul className="task-rows">
     <AnimatePresence initial={false}>
@@ -21,9 +21,9 @@ export function TaskRows({ tasks, controls, related, Status }) {
               <strong>{task.title}</strong>
               <small>{task.classification?.primary ?? 'Class unavailable'} · {date(task.created_at)}</small>
             </span>
-            <Status value={task.state}/>
+            <span className="task-row-state"><small>Task state</small><Status value={task.state}/></span>
             <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
-            <span className="task-counts">{related(task.id, 'attempt').length} attempts · {related(task.id, 'evidence').length} evidence</span>
+            <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{related(task.id, 'attempt').length} attempts · {related(task.id, 'evidence').length} evidence</small></span>
             <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
           </a>
         </motion.li>;
@@ -32,7 +32,7 @@ export function TaskRows({ tasks, controls, related, Status }) {
   </ul>;
 }
 
-export function TaskExplorer({ tasks, controls, related, Status, Panel, onCreate, loading, filters, setFilters }) {
+export function TaskExplorer({ tasks, controls, related, activityFor, Status, Panel, onCreate, loading, filters, setFilters }) {
   const groups = useMemo(() => organizeTasks(tasks, filters, controls), [tasks, filters, controls]);
   const states = [...new Set(tasks.map(task => task.state).filter(Boolean))].sort();
   const count = groups.reduce((sum, [, items]) => sum + items.length, 0);
@@ -70,7 +70,7 @@ export function TaskExplorer({ tasks, controls, related, Status, Panel, onCreate
     {!loading && !count && <p>{tasks.length ? 'No Tasks match these filters.' : 'No Tasks in the current feed.'}</p>}
     {groups.map(([label, items]) => <section key={label} className="task-group" aria-label={labels(label)}>
       {filters.group !== 'none' && <h3>{labels(label)} <span>{items.length}</span></h3>}
-      <TaskRows tasks={items} controls={controls} related={related} Status={Status}/>
+      <TaskRows tasks={items} controls={controls} related={related} activityFor={activityFor} Status={Status}/>
     </section>)}
   </Panel>;
 }
@@ -112,4 +112,8 @@ export function TaskCapabilitySummary({ manageable }) {
     </dl>
     <a className="text-button" href="#tasks">Browse Tasks <ArrowRight size={14} aria-hidden="true"/></a>
   </div>;
+}
+
+export function TaskActivityLabel({ activity }) {
+  return <span className="task-activity-label"><strong>{activity.label}</strong>{activity.at&&<time dateTime={activity.at}>{new Date(activity.at).toLocaleString()}</time>}</span>;
 }

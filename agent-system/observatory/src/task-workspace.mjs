@@ -51,3 +51,22 @@ export function dependencyGraph(current, tasks) {
       .map(task => node(task.id)),
   };
 }
+
+export function taskActivity(task, attempts, events, lifecycle) {
+  const humanize = state => String(state).replaceAll('_', ' ');
+  if (lifecycle && ['running', 'pausing', 'cancelling', 'queued', 'scheduled', 'ready', 'paused'].includes(lifecycle.state)) {
+    return { label: 'Engine ' + humanize(lifecycle.state), at: lifecycle.state === 'scheduled'
+      && Number.isFinite(lifecycle.start_at) ? new Date(lifecycle.start_at).toISOString() : null };
+  }
+  const time = attempt => attempt.finished_at ?? attempt.started_at ?? attempt.created_at;
+  const latest = attempts.filter(attempt => attempt.task_id === task.id).sort((a, b) =>
+    String(time(b) ?? '').localeCompare(String(time(a) ?? '')))[0];
+  const event = events.filter(event => event.task_id === task.id && (!latest || event.attempt_id === latest.id))
+    .sort((a, b) => String(b.occurred_at).localeCompare(String(a.occurred_at)))[0];
+  if (latest) return {
+    label: latest.state === 'running' ? 'Attempt last reported running' : 'Latest attempt ' + humanize(latest.state),
+    at: [time(latest), event?.occurred_at].filter(Boolean).sort().at(-1) ?? null,
+  };
+  if (event) return { label: 'Execution event reported', at: event.occurred_at ?? null };
+  return { label: 'No execution reported', at: null };
+}
