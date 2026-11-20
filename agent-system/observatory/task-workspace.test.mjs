@@ -149,7 +149,7 @@ test('desktop session counters select the latest observed Task reading without s
 });
 
 import { taskActivityHref } from './src/github-activity.mjs';
-import { buildTaskTimeline } from './src/task-timeline.mjs';
+import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
 
 test('Task PR and CI references resolve to Observatory routes', () => {
   assert.equal(taskActivityHref('https://github.com/Kgray44/Aetherwake/pull/319/files'), '#pull-requests/319');
@@ -173,6 +173,49 @@ test('Task Timeline orders dated source events and excludes records belonging to
   assert.ok(timeline[0].details.some(([name,value])=>name==='Outcome'&&value==='failed'));
 });
 
+test('App Server totals populate the same attempt token rows without adding to CLI counts', () => {
+  const taskId = 'task_a', repository = 'Kgray44/Aetherwake';
+  const attempt = { task_id:taskId, id:'a1', revision:'rev', attempt_number:1, executor:'codex' };
+  const fields = {total:282838,input:280895,output:1943,cached_input:243456,reasoning_output:149,cache_write_input:0};
+  const receipt = { kind:'measurement', task_id:taskId, attempt_id:attempt.id, revision:'rev', repository,
+    measurements:Object.entries(fields).map(([name,value]) => ({
+      name:'provider_' + name + '_tokens',unit:'tokens',value,availability:'observed',
+      source:'codex_app_server_token_usage_updated',method:'single_ephemeral_thread_total',
+    })),
+  };
+  const empty = {taskId,attemptId:'a1',revision:'rev',coverage:'unavailable',observed:{totalTokens:null}};
+  const build = (row, events) => taskTokenRows({schemaVersion:1,byAttempt:[row]},taskId,[attempt],events,repository);
+  const [usage] = build(empty,[receipt]);
+  assert.deepEqual(usage.observed,{
+    totalTokens:282838,inputTokens:280895,outputTokens:1943,cachedInputTokens:243456,
+    reasoningOutputTokens:149,cacheWriteInputTokens:0,uncachedInputTokens:37439,turns:1,
+  });
+  const cli = {...empty,coverage:'complete',observed:{totalTokens:123}};
+  assert.deepEqual(build(cli,[receipt]),[cli]);
+  assert.deepEqual(build(empty,[receipt,receipt]),[empty]);
+  assert.deepEqual(build(empty,[{...receipt,revision:'different'}]),[empty]);
+});
+
+test('heartbeat receipts update one executor indicator and stay out of the Timeline', () => {
+  const task = {id:'test',created_at:'2026-11-20T04:00:00Z'};
+  const attempt = {id:'attempt',task_id:task.id,started_at:task.created_at,lease_until:Date.parse('2026-11-20T04:01:00Z')};
+  const audits = [
+    {kind:'heartbeat',attempt_id:'attempt',operation_id:'one',at:'2026-11-20T04:00:10Z'},
+    {kind:'heartbeat',attempt_id:'attempt',operation_id:'two',at:'2026-11-20T04:00:20Z'},
+    {kind:'heartbeat',attempt_id:'other',operation_id:'three',at:'2026-11-20T04:00:40Z'},
+    {kind:'lease_expired',attempt_id:'attempt',operation_id:'four',at:'2026-11-20T04:01:00Z'},
+  ];
+  const input = {taskId:task.id,attempt,audits,state:'running'};
+  const heartbeat = executorHeartbeat({...input,now:Date.parse('2026-11-20T04:00:25Z')});
+  assert.equal(heartbeat.lastAt,'2026-11-20T04:00:20Z');
+  assert.equal(heartbeat.status,'receiving');
+  assert.equal(executorHeartbeat({...input,now:attempt.lease_until}).status,'overdue');
+  assert.equal(executorHeartbeat({...input,state:'failed'}).status,'ended');
+  const timeline = buildTaskTimeline({task,attempts:[attempt],audits});
+  assert.equal(timeline.some(item=>item.title==='Executor lease expired'),true);
+  assert.equal(timeline.some(item=>item.title.includes('heartbeat')),false);
+});
+
 test('Overview shows the latest attempt metrics and a revision-pinned artifact', () => {
   const task = { id:'task-1', repository:'Kgray44/Aetherwake' };
   const latest = { id:'attempt-2', task_id:task.id, revision:'new', started_at:'2026-11-20T04:00:00Z' };
@@ -180,7 +223,7 @@ test('Overview shows the latest attempt metrics and a revision-pinned artifact',
   const trace = { task_id:task.id, attempt_id:latest.id, revision:latest.revision, repository:task.repository,
     trace_id:'trace', span_id:'span', phase:'implementation' };
   const observed = { name:'provider_total_tokens',unit:'tokens',source:'codex_app_server_token_usage_updated',
-    availability:'observed',value:75 };
+    availability:'observed',method:'single_ephemeral_thread_total',value:75 };
   const artifact = {kind:'artifact',uri:'https://example.test/artifact',revision:'candidate'};
   const events = [
     {...trace,kind:'span_start',occurred_at:'2026-11-20T04:00:00.000Z'},

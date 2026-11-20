@@ -268,7 +268,14 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 @media(max-width:760px) { .analytics-grid > .section-aside { position:static; } }
 
 .task-timeline-grid { display:grid; grid-template-columns:minmax(0,1.34fr) minmax(0,1fr); gap:clamp(1rem,2.5vw,2.5rem); align-items:start; }
-.task-timeline-filters { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:1.05rem; }
+.task-timeline-toolbar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.7rem; margin-bottom:1.05rem; }
+.task-timeline-filters { display:flex; gap:.4rem; flex-wrap:wrap; }
+.executor-heartbeat { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; min-width:0; padding:.38rem .6rem; border:1px solid #355260; border-radius:6px; color:var(--muted); background:#10212c; font-size:.78rem; }
+.executor-heartbeat .live-dot { margin:0; }
+.heartbeat-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+.heartbeat-receiving strong { color:#95ddc5; }
+.heartbeat-overdue { color:#efbf86; border-color:#71593b; }
+.executor-heartbeat time { font-variant-numeric:tabular-nums; }
 .task-timeline-filters [aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
 .task-timeline-list {
   --time-col:5.3rem;

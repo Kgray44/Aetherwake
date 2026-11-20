@@ -1,7 +1,7 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {motion,useReducedMotion} from 'motion/react';
 import {Activity, ArrowRight, CheckCircle2, ClipboardCheck, FileCheck2, Flag, GitCommitHorizontal} from 'lucide-react';
-import {buildTaskTimeline} from './task-timeline.mjs';
+import {buildTaskTimeline,executorHeartbeat} from './task-timeline.mjs';
 import {taskActivityHref} from './github-activity.mjs';
 import {StickySectionAside} from './sticky-section-aside.jsx';
 
@@ -10,7 +10,29 @@ const time = value => new Date(value).toLocaleString(undefined,{hour:'numeric',m
 const day = value => new Date(value).toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'});
 const categories=['All','Task','Attempt','Audit','Trace','Evidence'];
 
-export function TaskTimeline({task,attempts,events,audits,evidence,records,onOpenAttempt}) {
+const heartbeatLabels = {
+  receiving:'Heartbeat received', awaiting:'Awaiting first heartbeat',
+  overdue:'Heartbeat overdue', ended:'Last executor heartbeat',
+};
+
+function ExecutorHeartbeat({taskId, attempt, state, audits}) {
+  const [, refresh] = useState(0);
+  const heartbeat = executorHeartbeat({taskId,attempt,state,audits});
+  const leaseUntil = heartbeat?.leaseUntil;
+  useEffect(() => {
+    if (leaseUntil == null || leaseUntil <= Date.now()) return;
+    const timer = window.setTimeout(() => refresh(n => n + 1), leaseUntil - Date.now() + 20);
+    return () => window.clearTimeout(timer);
+  }, [leaseUntil]);
+  if (!heartbeat) return null;
+  return <div className={'executor-heartbeat heartbeat-' + heartbeat.status} aria-label="Executor heartbeat" role="group">
+    <span className={heartbeat.status==='receiving'?'live-dot':'heartbeat-dot'} aria-hidden="true"/>
+    <strong role="status">{heartbeatLabels[heartbeat.status]}</strong>
+    {heartbeat.lastAt && <time dateTime={heartbeat.lastAt}>{new Date(heartbeat.lastAt).toLocaleString()}</time>}
+  </div>;
+}
+
+export function TaskTimeline({task,attempts,events,audits,evidence,records,executorAttempt,executorState,onOpenAttempt}) {
   const reduce=useReducedMotion();
   const items=useMemo(()=>buildTaskTimeline({task,attempts,events,audits,evidence,records}),[task,attempts,events,audits,evidence,records]);
   const [filter,setFilter]=useState('All');
@@ -47,10 +69,13 @@ export function TaskTimeline({task,attempts,events,audits,evidence,records,onOpe
   }
 
   return <section className="task-timeline" aria-label="Task timeline">
-    <nav aria-label="Timeline filters" className="task-timeline-filters">
-      {categories.filter(kind=>kind==='All'||items.some(item=>item.type===kind)).map(kind=>
-        <button type="button" className="quiet-button" key={kind} aria-pressed={filter===kind} onClick={()=>{setFilter(kind);setLimit(14);}}>{kind}</button>)}
-    </nav>
+    <div className="task-timeline-toolbar">
+      <nav aria-label="Timeline filters" className="task-timeline-filters">
+        {categories.filter(kind=>kind==='All'||items.some(item=>item.type===kind)).map(kind=>
+          <button type="button" className="quiet-button" key={kind} aria-pressed={filter===kind} onClick={()=>{setFilter(kind);setLimit(14);}}>{kind}</button>)}
+      </nav>
+      <ExecutorHeartbeat taskId={task.id} attempt={executorAttempt} state={executorState} audits={audits}/>
+    </div>
     <div className="task-timeline-grid">
       <div>
         {visible.length===0 ? <p>No dated events are available for this Task.</p> :

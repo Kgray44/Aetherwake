@@ -58,7 +58,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
   const tokenAccounting=buildEngineeringAnalytics({records:[task,...taskRecords],events:taskEvents}).tokenAccounting;
-  const tokens=taskTokenRows(tokenAccounting,task.id);
+  const tokens=taskTokenRows(tokenAccounting,task.id,taskAttempts,taskEvents,task.repository);
   const desktop=desktopSessionTokens(task.id,taskEvents);
   const urls=new Set([
     ...(canonical?.lifecycle.links??[]).map(link=>link.uri),

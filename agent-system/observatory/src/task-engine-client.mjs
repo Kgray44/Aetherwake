@@ -46,9 +46,52 @@ export function reviewRevision(attempt) {
   return attempt?.candidate_revision ?? attempt?.revision ?? null;
 }
 
-export function taskTokenRows(accounting, id) {
-  return accounting?.schemaVersion === 1 && Array.isArray(accounting.byAttempt)
+const appServerSource = 'codex_app_server_token_usage_updated';
+const appServerMethod = 'single_ephemeral_thread_total';
+
+function appServerTokenRow(taskId, repository, attempt, events) {
+  const receipts = events.filter(event => event.kind === 'measurement' && event.task_id === taskId &&
+    event.attempt_id === attempt.id && event.revision === attempt.revision && event.repository === repository &&
+    (event.measurements ?? []).some(metric => metric.source === appServerSource && metric.method === appServerMethod));
+  if (receipts.length !== 1) return null;
+  const tokens = name => {
+    const samples = receipts[0].measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
+      metric.source === appServerSource && metric.method === appServerMethod);
+    const metric = samples.length === 1 ? samples[0] : null;
+    return metric?.availability === 'observed' && metric.unit === 'tokens' &&
+      Number.isSafeInteger(metric.value) && metric.value >= 0 ? metric.value : null;
+  };
+  const totalTokens = tokens('total'), inputTokens = tokens('input'), outputTokens = tokens('output');
+  if (totalTokens == null || (inputTokens != null && outputTokens != null && inputTokens + outputTokens !== totalTokens)) return null;
+  const cached = tokens('cached_input'), reasoning = tokens('reasoning_output');
+  const cachedInputTokens = cached != null && inputTokens != null && cached > inputTokens ? null : cached;
+  const reasoningOutputTokens = reasoning != null && outputTokens != null && reasoning > outputTokens ? null : reasoning;
+  return {
+    taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
+    provider:attempt.provider ?? attempt.executor ?? 'codex', model:attempt.model, state:attempt.state,
+    coverage:'observed', source:'Codex App Server',
+    observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
+      cacheWriteInputTokens:tokens('cache_write_input'),
+      uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:1 },
+  };
+}
+
+export function taskTokenRows(accounting, id, attempts = [], events = [], repository) {
+  const rows = accounting?.schemaVersion === 1 && Array.isArray(accounting.byAttempt)
     ? accounting.byAttempt.filter(row => row.taskId === id) : [];
+  if (!repository || !events.length) return rows;
+  const byAttempt = new Map(rows.map(row => [row.attemptId + ':' + row.revision, row]));
+  for (const attempt of attempts) {
+    if (attempt.task_id !== id) continue;
+    const key = attempt.id + ':' + attempt.revision;
+    const previous = byAttempt.get(key);
+    // The two providers can report the same usage. Prefer the qualified CLI
+    // receipt when complete, or use the single scoped App Server total.
+    if (previous?.coverage === 'complete' && previous.observed.totalTokens != null) continue;
+    const current = appServerTokenRow(id, repository, attempt, events);
+    if (current) byAttempt.set(key, current);
+  }
+  return [...byAttempt.values()].sort((a,b) => (a.attemptNumber ?? 0) - (b.attemptNumber ?? 0));
 }
 
 export function desktopSessionTokens(taskId, events) {

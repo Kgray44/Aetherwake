@@ -7,8 +7,26 @@ const receiptTitles = {
   resume:'Task resumed', cancel:'Cancellation requested', archive:'Task archived', reopen:'Task reopened with feedback',
   supersede:'Task superseded', associate:'Delivery reference linked', dependency_cancelled:'Cancelled by dependency',
   failed:'Executor reported failure', finished:'Candidate submitted for review', stopped:'Executor stopped',
-  heartbeat:'Executor heartbeat', lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
+  lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
 };
+
+const activeExecution = new Set(['running','pausing','cancelling']);
+
+export function executorHeartbeat({ taskId, attempt, state, audits = [], now = Date.now() }) {
+  if (!attempt?.id) return null;
+  let lastAt = null;
+  for (const receipt of audits) {
+    if ((receipt.kind ?? receipt.type) !== 'heartbeat' || receipt.attempt_id !== attempt.id ||
+        (receipt.target_id && receipt.target_id !== taskId) || !Number.isFinite(Date.parse(receipt.at))) continue;
+    if (!lastAt || Date.parse(receipt.at) > Date.parse(lastAt)) lastAt = receipt.at;
+  }
+  const active = activeExecution.has(state);
+  if (!active && !lastAt) return null;
+  const leaseUntil = active && Number.isFinite(attempt.lease_until) ? attempt.lease_until : null;
+  const status = !active ? 'ended' : leaseUntil != null && now >= leaseUntil ? 'overdue'
+    : lastAt ? 'receiving' : 'awaiting';
+  return {status,lastAt,leaseUntil};
+}
 
 export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evidence=[], records=[]}) {
   const rows = [];
@@ -34,6 +52,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
   for (const receipt of audits) {
     if (receipt.target_id && receipt.target_id !== task.id) continue;
     const operation = receipt.kind ?? receipt.type ?? 'operation';
+    if (operation === 'heartbeat') continue;
     add({id:'audit:'+receipt.operation_id,at:receipt.at,type:'Audit',title:receiptTitles[operation]??humanize(operation),
       milestone:operation==='accept', attemptId:attemptById.has(receipt.attempt_id)?receipt.attempt_id:null,
       description:humanize(receipt.state),

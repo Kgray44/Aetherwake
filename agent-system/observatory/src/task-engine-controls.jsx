@@ -6,7 +6,7 @@ import { PrerequisiteChecks } from './task-workspace.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
 import { StickySectionAside } from './sticky-section-aside.jsx';
 import { useCardMotion } from './card-motion.jsx';
-import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
+import { executionActions, reviewRevision } from './task-engine-client.mjs';
 
 const actionLabels = {
   configure_execution:'Edit execution settings', admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
@@ -247,20 +247,19 @@ function safeLink(uri) {
   } catch { return undefined; }
 }
 
-export function TaskTokenAccounting({ accounting, taskId }) {
-  const rows = taskTokenRows(accounting, taskId);
+export function TaskTokenAccounting({ rows }) {
   if (!rows.length) return <p>No observed token accounting is available for this Task.</p>;
   const display = value => value == null ? 'Unavailable' : value.toLocaleString();
   return <div className="analytics-table">
     <table>
-      <caption>Observed Codex turn receipts by attempt. Costs are unavailable from this source.</caption>
+      <caption>Observed Codex token receipts by attempt. Costs require a billing source.</caption>
       <thead><tr><th scope="col">Attempt</th><th scope="col">Model</th><th scope="col">Input</th><th scope="col">Cached</th>
         <th scope="col">Output</th><th scope="col">Total</th><th scope="col">Coverage</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.attemptId + ':' + row.revision}>
         <th scope="row">{row.attemptNumber ?? row.attemptId}<small className="row-meta">{row.revision.slice(0, 10)}</small></th>
         <td>{[row.provider, row.model].filter(Boolean).join(' / ') || 'Unavailable'}</td>
         <td>{display(row.observed.inputTokens)}</td><td>{display(row.observed.cachedInputTokens)}</td>
-        <td>{display(row.observed.outputTokens)}</td><td>{display(row.observed.totalTokens)}</td><td>{row.coverage}</td>
+        <td>{display(row.observed.outputTokens)}</td><td>{display(row.observed.totalTokens)}</td><td>{row.coverage}{row.source && <small className="row-meta">{row.source}</small>}</td>
       </tr>)}</tbody>
     </table>
   </div>;

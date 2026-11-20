@@ -19,6 +19,8 @@ export function TaskRows({ tasks, controls, related, activityFor, Status, overvi
       {tasks.map(task => {
         const control = Object.hasOwn(controls, task.id) ? controls[task.id] : null;
         const result = overviewResults?.get(task.id);
+        const attempts = related(task.id, 'attempt').length;
+        const reports = related(task.id, 'evidence').length;
         return <motion.li key={task.id} layout={reduce ? false : 'position'}
           initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0 }} transition={{ duration: reduce ? 0 : .18 }}>
@@ -29,7 +31,7 @@ export function TaskRows({ tasks, controls, related, activityFor, Status, overvi
             </span>
             <span className="task-row-state"><small>Task state</small><Status value={result?.queued ? 'queued' : task.state}/></span>
             <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
-            <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{related(task.id, 'attempt').length} attempts · {related(task.id, 'evidence').length} evidence</small></span>
+            <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{attempts} {attempts === 1 ? 'attempt' : 'attempts'} · {reports} imported {reports === 1 ? 'report' : 'reports'}</small></span>
             <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
           </motion.a>
           {result && (result.artifact || result.observedMs != null || result.observedTokens != null) &&
