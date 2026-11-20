@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attemptEvents, dependencyGraph, organizeTasks, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
+import { attemptEvents, dependencyGraph, organizeTasks, overviewTaskResults, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
 
 const accepted = { id: 'accepted', title: 'Ready input', state: 'accepted', classification: { primary: 'integration' } };
 const blocked = { id: 'blocked', title: 'Build runtime', state: 'blocked', classification: { primary: 'integration' } };
@@ -171,4 +171,27 @@ test('Task Timeline orders dated source events and excludes records belonging to
   assert.deepEqual(timeline.map(item=>item.id),['end:a','trace:phase','start:a','audit:operation','task:task_a']);
   assert.equal(timeline[1].description,'Attempt 1');
   assert.ok(timeline[0].details.some(([name,value])=>name==='Outcome'&&value==='failed'));
+});
+
+test('Overview shows the latest attempt metrics and a revision-pinned artifact', () => {
+  const task = { id:'task-1', repository:'Kgray44/Aetherwake' };
+  const latest = { id:'attempt-2', task_id:task.id, revision:'new', started_at:'2026-11-20T04:00:00Z' };
+  const earlier = { id:'attempt-1', task_id:task.id, revision:'old', started_at:'2026-11-19T04:00:00Z' };
+  const trace = { task_id:task.id, attempt_id:latest.id, revision:latest.revision, repository:task.repository,
+    trace_id:'trace', span_id:'span', phase:'implementation' };
+  const observed = { name:'provider_total_tokens',unit:'tokens',source:'codex_app_server_token_usage_updated',
+    availability:'observed',value:75 };
+  const artifact = {kind:'artifact',uri:'https://example.test/artifact',revision:'candidate'};
+  const events = [
+    {...trace,kind:'span_start',occurred_at:'2026-11-20T04:00:00.000Z'},
+    {...trace,kind:'span_end',occurred_at:'2026-11-20T04:00:02.000Z'},
+    {...trace,kind:'measurement',occurred_at:'2026-11-20T04:00:01.000Z',measurements:[observed]},
+    {...trace,attempt_id:earlier.id,revision:earlier.revision,kind:'measurement',measurements:[{...observed,value:999}]},
+  ];
+  const summaries = new Map([[task.id,{lifecycle:{state:'ready',stored_state:'queued',links:[artifact]}}]]);
+  assert.deepEqual(overviewTaskResults([task],[latest,earlier],events,summaries).get(task.id), {
+    artifact,queued:true,observedMs:2000,observedTokens:75,
+  });
+  const duplicate = overviewTaskResults([task],[latest], [...events,events[2]],summaries).get(task.id);
+  assert.equal(duplicate.observedTokens,null);
 });

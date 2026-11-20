@@ -11,13 +11,14 @@ export const defaultTaskFilters = { query: '', source: 'all', state: 'all', sort
 const labels = value => value.replaceAll('_', ' ');
 const date = value => value ? new Date(value).toLocaleDateString() : 'Unavailable';
 
-export function TaskRows({ tasks, controls, related, activityFor, Status }) {
+export function TaskRows({ tasks, controls, related, activityFor, Status, overviewResults }) {
   const reduce = useReducedMotion();
   const interaction = useCardMotion(true);
   return <ul className="task-rows">
     <AnimatePresence initial={false}>
       {tasks.map(task => {
         const control = Object.hasOwn(controls, task.id) ? controls[task.id] : null;
+        const result = overviewResults?.get(task.id);
         return <motion.li key={task.id} layout={reduce ? false : 'position'}
           initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0 }} transition={{ duration: reduce ? 0 : .18 }}>
@@ -26,11 +27,22 @@ export function TaskRows({ tasks, controls, related, activityFor, Status }) {
               <strong>{task.title}</strong>
               <small>{task.classification?.primary ?? 'Class unavailable'} · {date(task.created_at)}</small>
             </span>
-            <span className="task-row-state"><small>Task state</small><Status value={task.state}/></span>
+            <span className="task-row-state"><small>Task state</small><Status value={result?.queued ? 'queued' : task.state}/></span>
             <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
             <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{related(task.id, 'attempt').length} attempts · {related(task.id, 'evidence').length} evidence</small></span>
             <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
           </motion.a>
+          {result && (result.artifact || result.observedMs != null || result.observedTokens != null) &&
+            <div className="task-row-results">
+              {result.artifact && <a href={result.artifact.uri} target="_blank" rel="noreferrer"
+                aria-label={'Open artifact for ' + task.title}>Open artifact <ArrowRight size={13} aria-hidden="true"/></a>}
+              {(result.observedMs != null || result.observedTokens != null) &&
+                <a href={taskHref(task.id)} aria-label={'Inspect latest attempt telemetry for ' + task.title}>
+                  {result.observedTokens != null ? result.observedTokens.toLocaleString() + ' observed tokens' : null}
+                  {result.observedTokens != null && result.observedMs != null ? ' · ' : null}
+                  {result.observedMs != null ? (result.observedMs / 1000).toLocaleString(undefined, { maximumFractionDigits:2 }) + ' s observed' : null}
+                </a>}
+            </div>}
         </motion.li>;
       })}
     </AnimatePresence>

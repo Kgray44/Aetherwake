@@ -1,9 +1,37 @@
+import { traceTimeline } from './trace-timeline.mjs';
+
 const idPattern = /^[A-Za-z0-9_.:-]{1,160}$/;
 const priorities = ['urgent', 'high', 'normal', 'low'];
 export const workLabels={
   active:'Executing',waiting:'Queued or paused',review:'Awaiting review',issues:'At risk',accepted:'Accepted',
   succeeded:'Successful attempts',reportedRunning:'Reported running',unlinked:'No execution linked',archived:'Archived',
 };
+
+export function overviewTaskResults(tasks, attempts, events, summaries) {
+  const result = new Map();
+  for (const task of tasks) {
+    const lifecycle = summaries.get(task.id)?.lifecycle;
+    const latest = attempts.filter(item => item.task_id === task.id).sort((a, b) =>
+      String(b.started_at ?? b.created_at ?? '').localeCompare(String(a.started_at ?? a.created_at ?? '')))[0];
+    const linked = latest ? events.filter(event =>
+      event.task_id === task.id && event.attempt_id === latest.id &&
+      event.revision === latest.revision && event.repository === task.repository) : [];
+    const totals = linked.flatMap(event => event.kind === 'measurement' ? event.measurements ?? [] : [])
+      .filter(metric => metric.name === 'provider_total_tokens' && metric.unit === 'tokens' &&
+        metric.source === 'codex_app_server_token_usage_updated' && metric.availability === 'observed' &&
+        Number.isSafeInteger(metric.value) && metric.value >= 0);
+    const references = [...(lifecycle?.links ?? []), ...(lifecycle?.evidence ?? [])];
+    const artifact = references.findLast(ref => (ref.kind === 'artifact' || ref.criterion_id) &&
+      typeof ref.uri === 'string' && /^https:\/\/[^\s]+$/.test(ref.uri));
+    const queued = lifecycle?.state === 'ready' && lifecycle.stored_state === 'queued';
+    result.set(task.id, {
+      artifact:artifact ?? null, queued,
+      observedMs:linked.length ? traceTimeline(linked).coveredMs : null,
+      observedTokens:totals.length === 1 ? totals[0].value : null,
+    });
+  }
+  return result;
+}
 
 export function taskHref(id,work) {
   if(id!==undefined)return '#tasks/'+encodeURIComponent(id).replaceAll('%3A',':');
