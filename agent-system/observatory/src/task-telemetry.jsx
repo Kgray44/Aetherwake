@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useCardMotion } from './card-motion.jsx';
+import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
@@ -38,9 +39,12 @@ function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
 }
 
-export function TaskTelemetry({ task, attempts, telemetry, events, accounting }) {
+export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
+  const accounting = useMemo(() => records ? buildEngineeringAnalytics({
+    records: records.filter(record => record.id === task.id || record.task_id === task.id), events,
+  }).tokenAccounting : null, [task.id, records, events]);
   const tokens = taskTokenRows(accounting, task.id);
   const desktop = desktopSessionTokens(task.id,events);
   const measurements = useMemo(() => measurementRows(telemetry, events), [telemetry, events]);
