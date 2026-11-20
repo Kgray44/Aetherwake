@@ -333,6 +333,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.getByText('Task complete',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
+    document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
   await jump.getByRole('button',{name:'Timeline',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
@@ -374,7 +376,30 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     const node = document.querySelector('.task-command-button:hover');
     return node && Math.abs(new DOMMatrix(getComputedStyle(node).transform).m42 + 1) < .05;
   });
+  await page.setViewportSize({width:1440,height:660});
+  const hoverRow=timeline.getByRole('button',{name:/Task created/});
+  await hoverRow.hover();
+  await page.waitForFunction(()=>{
+    const label=document.querySelector('.task-timeline-event:hover .task-timeline-label');
+    return label&&Math.abs(new DOMMatrix(getComputedStyle(label).transform).m42+1)<.06;
+  });
+  await page.getByRole('heading',{name:'Task Timeline',exact:true}).hover();
+  await page.waitForFunction(()=>{
+    const row=[...document.querySelectorAll('.task-timeline-event')].find(node=>node.textContent.includes('Task created'));
+    return row&&getComputedStyle(row.querySelector('.task-timeline-label')).transform==='none';
+  });
+  const sticky=await page.evaluate(()=>{
+    const grid=document.querySelector('.task-timeline-grid');
+    const rail=document.querySelector('#task-timeline-details');
+    const originalTop=grid.getBoundingClientRect().top+window.scrollY;
+    window.scrollTo({top:originalTop+56,behavior:'instant'});
+    return {top:rail.getBoundingClientRect().top,position:getComputedStyle(rail).position,
+      record:getComputedStyle(document.querySelector('.detail-right')).position};
+  });
+  assert.deepEqual({position:sticky.position,record:sticky.record},{position:'sticky',record:'sticky'});
+  assert.ok(Math.abs(sticky.top-16)<3);
   await page.setViewportSize({width:820,height:620});
+  assert.equal(await page.locator('#task-timeline-details').evaluate(node=>getComputedStyle(node).position),'static');
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
   await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();

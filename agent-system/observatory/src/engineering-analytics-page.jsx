@@ -1,3 +1,4 @@
+import {StickySectionAside} from './sticky-section-aside.jsx';
 import React, { useMemo, useState } from 'react';
 import { Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, Clock3, Cpu, FileCheck2, GitPullRequest, Workflow } from 'lucide-react';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
@@ -198,7 +199,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
           ['Median recorded attempt', spanTime(data.attempts.medianMs)], ['Attempts with both time boundaries', count(data.attempts.timed)]
         ]}/>
       </Panel></Rise>
-      <Rise><Panel title="Recent failed CI runs" right={<a className="text-button" href={activityHref('runs')}>All CI runs <ArrowUpRight size={15}/></a>}>
+      <StickySectionAside><Rise><Panel title="Recent failed CI runs" right={<a className="text-button" href={activityHref('runs')}>All CI runs <ArrowUpRight size={15}/></a>}>
         {recent.length ? <ul className="github-meta-list">{recent.map(item => {
           const id = activityId('runs', item);
           return <li key={id ?? item.url}><div><a href={id ? activityHref('runs', id) : item.url}>{item.title || item.label}</a>
@@ -206,15 +207,17 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
             <Status value={activityState('runs', item)}/>
           </li>;
         })}</ul> : <p className="low">{data.ci.total === null ? 'CI results are unavailable.' : 'No failures in the loaded CI window.'}</p>}
-      </Panel></Rise>
+      </Panel></Rise></StickySectionAside>
+    </div>
+    <div className="analytics-grid">
       <Rise><Panel title="Task outcomes"><div className="analytics-split">
         <div><h3>Task states</h3><Counts entries={data.tasks.byState} empty="No Task states observed."/></div>
         <div><h3>Task classes</h3><Counts entries={data.tasks.byClass} empty="No Task classes observed."/></div>
       </div></Panel></Rise>
-      <Rise><Panel title="Attempt outcomes"><div className="analytics-split">
+      <StickySectionAside><Rise><Panel title="Attempt outcomes"><div className="analytics-split">
         <div><h3>Attempt states</h3><Counts entries={data.attempts.byState} empty="No attempt states observed."/></div>
         <div><h3>Failure categories</h3><Counts entries={data.attempts.byFailure} empty="No classified failures observed."/></div>
-      </div></Panel></Rise>
+      </div></Panel></Rise></StickySectionAside>
     </div>
     <Rise><Panel title="Recorded execution phases" right={<Clock3 size={18} className="muted-icon"/>}><PhaseTable trace={data.trace}/></Panel></Rise>
     <div className="analytics-grid">
@@ -223,7 +226,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         <Counts entries={data.evidence.byStatus ?? data.evidence.byResult} empty="No evidence observations in this view."/>
         <small>Reported passes are distinct from owner acceptance.</small>
       </Panel></Rise>
-      <Rise><Panel title="Source coverage">
+      <StickySectionAside><Rise><Panel title="Source coverage">
         <MetricRows fields={[
           ['PR feed', label(data.pulls.status || 'unavailable')], ['Last successful PR refresh', stamp(data.pulls.observedAt)],
           ['Repository PR totals refreshed', stamp(totals?.observedAt)], ['CI feed', label(data.ci.status || 'unavailable')], ['Last successful CI refresh', stamp(data.ci.observedAt)],
@@ -231,7 +234,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
           ['Conflicting observations', ready ? count(data.sources.recordConflicts + data.sources.traceConflicts) : 'Unavailable'],
           ['API budget remaining', count(github?.api?.remaining)], ['API budget resets', stamp(github?.api?.reset_at)]
         ]}/>
-      </Panel></Rise>
+      </Panel></Rise></StickySectionAside>
     </div>
     <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting}/></Panel></Rise>
     <Rise><Panel title="Provider and resource observations" right={<Cpu size={18} className="muted-icon"/>}><Usage usage={data.usage}/></Panel></Rise>
