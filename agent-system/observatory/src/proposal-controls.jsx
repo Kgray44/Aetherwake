@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Save } from 'lucide-react';
 import { proposalChecks } from '../intake.mjs';
+import { TaskScopeFields } from './task-scope.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
 
 const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({ task, version: control.version, priority: control.priority, editable });
@@ -24,7 +25,8 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
   const dependencies = dependencyGraph({
     ...task, prerequisites: { task_ids: draft?.dependencies ?? stored.prerequisites.task_ids },
   }, tasks).upstream;
-  const missing = Object.entries(draft ? proposalChecks(draft) : {}).filter(([, valid]) => !valid).map(([name]) => name);
+  const checks = draft ? proposalChecks(draft) : {};
+  const missing = Object.entries(checks).filter(([, valid]) => !valid).map(([name]) => name);
   const selfDependency = dependencies.some(node => node.id === task.id);
   const replacements = tasks.filter(other =>
     other.id !== task.id && manageable(other) && ['proposed', 'blocked'].includes(other.state));
@@ -98,20 +100,11 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     const form = event.currentTarget;
     const data = new FormData(form);
     const fields = readFields(form);
-    const references = String(data.get('requirements') || '').split('\n').filter(line => line.trim());
-    if (references.some(line => line.split('|').length < 2 || line.split('|').length > 3)) {
-      setError('Enter a kind and URI for each requirement. A revision is optional.');
-      return;
-    }
-    const requirements = references.map(line => {
-      const [kind, uri, revision] = line.split('|').map(part => part.trim());
-      return { kind, uri, ...(revision ? { revision } : {}) };
-    });
     if (!Object.values(proposalChecks(fields)).every(Boolean) || fields.dependencies.includes(task.id)) {
       setError('Complete admission checks and remove any self-dependency.');
       return;
     }
-    submit({ type: 'edit', fields: { ...fields, requirements, priority: data.get('priority') } });
+    submit({ type: 'edit', fields: { ...fields, priority: data.get('priority') } });
   }
 
   function changeState(event) {
@@ -145,9 +138,7 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
         </div>
         <label>Prerequisite Task IDs <input name="dependencies" defaultValue={stored.prerequisites.task_ids.join(', ')}/></label>
         <label>Required capabilities <input name="capabilities" defaultValue={stored.prerequisites.capabilities.join(', ')}/></label>
-        <label>Requirements, one kind | URI | optional revision per line
-          <textarea name="requirements" defaultValue={(stored.requirements ?? []).map(ref => [ref.kind, ref.uri, ref.revision].filter(Boolean).join(' | ')).join('\n')}/>
-        </label>
+        <TaskScopeFields task={stored} checks={checks}/>
         <label>Verification profile <input name="profile_id" defaultValue={stored.acceptance.profile_id} required/></label>
         <label>Acceptance criteria, one per line
           <textarea name="criteria" defaultValue={stored.acceptance.criteria.map(criterion => criterion.description).join('\n')} required/>

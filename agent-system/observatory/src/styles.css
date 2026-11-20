@@ -276,6 +276,18 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-event.milestone { border-color:#4b876c; background:#172f2a; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; }
 .task-detail-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.65rem; margin-bottom:1rem; }
+.task-scope-fields { display:grid; gap:.75rem; min-width:0; padding:.8rem 1rem 1rem; border:1px solid var(--border); border-radius:.6rem; }
+.task-scope-fields legend { padding:0 .4rem; color:var(--accent); font-size:.82rem; }
+.task-scope-fields small,.task-scope-summary small { color:var(--muted); }
+.task-scope-fields [aria-invalid="true"] { border-color:#a45b53; }
+.task-scope-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr)); gap:.65rem; margin-top:1rem; }
+.task-scope-summary section { border:1px solid var(--border); border-radius:.6rem; padding:.7rem .85rem; min-width:0; }
+.task-scope-summary h3 { margin:0 0 .4rem; font-size:.88rem; }
+.task-scope-summary ul { margin:0; padding-left:1rem; }
+.task-scope-summary li { margin:.28rem 0; overflow-wrap:anywhere; }
+.task-scope-summary li small { margin-right:.4rem; }
+.task-scope-summary a { color:var(--accent); }
+.task-scope-summary code { display:block; }
 .task-section-nav { display:flex; flex-wrap:wrap; gap:.45rem; margin:0 0 1rem; }
 .task-section-nav .quiet-button { font-size:.78rem; padding:.44rem .65rem; }
 .task-section-nav .quiet-button:hover { border-color:#557587; }
