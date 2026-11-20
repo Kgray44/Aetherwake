@@ -128,13 +128,15 @@ function Usage({ usage }) {
   </div>;
 }
 
-function TokenAccounting({ accounting }) {
+function TokenAccounting({ accounting, receipts }) {
   const [taskId, setTaskId] = useState('');
-  const selected = accounting.byTask.find(row => row.taskId === taskId);
-  const usage = selected?.observed ?? accounting.observed;
+  const selected = receipts.byTask.find(row => row.taskId === taskId);
+  const totals = selected?.totals ?? receipts.totals;
+  const usage = totals.tokens;
+  const turnUsage = accounting.byTask.find(row=>row.taskId===selected?.taskId)?.observed ?? accounting.observed;
   const attempts = selected
-    ? accounting.byAttempt.filter(row => row.taskId === selected.taskId)
-    : accounting.byAttempt.filter(row => row.coverage !== 'unavailable');
+    ? selected.rows
+    : receipts.byTask.flatMap(row=>row.rows.filter(attempt=>attempt.coverage!=='unavailable'));
   return <>
     <label>Task <select value={selected?.taskId ?? ''} onChange={event => setTaskId(event.target.value)}>
       <option value="">All loaded Tasks</option>
@@ -143,12 +145,15 @@ function TokenAccounting({ accounting }) {
     <MetricRows fields={[
       ['Input and output total', count(usage.totalTokens)], ['Input tokens', count(usage.inputTokens)],
       ['Output tokens', count(usage.outputTokens)], ['Cached input tokens', count(usage.cachedInputTokens)],
-      ['Uncached input tokens', count(usage.uncachedInputTokens)], ['Recorded turns', count(usage.turns)],
+      ['Uncached input tokens', count(usage.uncachedInputTokens)],
+      ['Attempts with token totals',totals.attemptsWithTotals+' of '+totals.attempts],
+      ['App Server receipts',count(totals.appServerReceipts)], ['Billing',receipts.billing],
+      ['Recorded CLI turns', count(turnUsage.turns)],
       ['Unattributed turns in this projection', count(accounting.unattributedTurns)]
     ]}/>
-    <p className="low">Totals cover recorded Codex turns. Partial attempts can include additional usage.</p>
+    <p className="low">Totals cover loaded attempt receipts. Daily trends use CLI turns. Session-only usage and uncovered attempts can add further consumption.</p>
     {attempts.length > 0 && <details><summary>Attempt breakdown</summary><div className="analytics-table">
-      <table><thead><tr><th scope="col">Attempt</th><th scope="col">State</th><th scope="col">Configured model</th>
+      <table><thead><tr><th scope="col">Attempt</th><th scope="col">State</th><th scope="col">Recorded model</th>
         <th scope="col">Core usage coverage</th><th scope="col">Observed total tokens</th></tr></thead>
         <tbody>{attempts.map(row => <tr key={row.attemptId}>
           <th scope="row">{row.attemptNumber === null ? row.attemptId : row.attemptId + ' · #' + row.attemptNumber}</th>
@@ -236,7 +241,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         ]}/>
       </Panel></Rise></StickySectionAside>
     </div>
-    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting}/></Panel></Rise>
+    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting}/></Panel></Rise>
     <Rise><Panel title="Provider and resource observations" right={<Cpu size={18} className="muted-icon"/>}><Usage usage={data.usage}/></Panel></Rise>
   </>;
 }

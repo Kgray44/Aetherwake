@@ -430,6 +430,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
         activity:{kind:'deployment_validation',source:'sites',operation_id:operationId,outcome:'succeeded'},
       },timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
         timedEvent('integration','span_end',350),timedEvent('implementation','span_end',300),{
+        ...timedEvent('implementation','measurement',280),
+        measurements:[['total',90],['input',80],['cached_input',60],['output',10]].map(([key,value])=>({
+          name:'provider_'+key+'_tokens',value,unit:'tokens',availability:'observed',
+          source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
+        })),
+      },{
         trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
         trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
         revision: candidate, occurred_at: '2026-01-01T08:00:00.000Z', session_id: sessionId,
@@ -486,7 +492,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await receiptDetail.getByText('Observatory first received',{exact:true}).waitFor();
   assert.equal(await receiptDetail.getByText(traceReceivedAt,{exact:true}).count(), 1);
   assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
-  await timeline.getByText(/First-receipt timestamps are available for 6 of 6 journal events/).waitFor();
+  await timeline.getByText(/First-receipt timestamps are available for 7 of 7 journal events/).waitFor();
   const reportedEvidence=page.locator('#task-evidence').getByRole('region',{name:'Reported verification activity'});
   await reportedEvidence.getByText(/Reported deployment validation · succeeded/).click();
   await reportedEvidence.getByText('Reported by the source journal',{exact:true}).waitFor();
@@ -593,7 +599,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const timingDetails = timing.getByRole('region',{name:'Selected timing details'});
   await timingDetails.getByText('Matched journal span',{exact:true}).waitFor();
   await timingDetails.getByRole('button',{name:'Open attempt details'}).waitFor();
-  await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();
+  await telemetry.getByText('90 tokens',{exact:true}).first().waitFor();
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
@@ -661,4 +667,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await waitingView.waitFor();
   assert.equal(await waitingView.getAttribute('aria-current'),'page');
   await page.getByRole('link',{name:/Candidate review verification.*Manage/}).waitFor();
+  await page.getByRole('button',{name:'Engineering analytics',exact:true}).click();
+  await page.getByRole('heading',{name:'Codex token accounting',exact:true}).waitFor();
+  const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output total'});
+  await attemptTotal.getByText('90',{exact:true}).waitFor();
+  await page.locator('.analytics-counts > div').filter({hasText:'App Server receipts'}).getByText('1',{exact:true}).waitFor();
 });

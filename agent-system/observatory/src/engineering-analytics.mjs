@@ -1,5 +1,5 @@
 import { compareEngineeringExperiments } from './engineering-experiments.mjs';
-import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
+import { accountEngineeringTokens, accountLoadedAttemptReceipts } from './engineering-token-accounting.mjs';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { activityId } from './github-activity.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
@@ -212,6 +212,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
   const spanCounts = counts(complete, span => span.phase);
   const sourceConflicts = recordData.conflicts + eventData.conflicts;
   const tokenAccounting = accountEngineeringTokens({tasks,attempts,events:eventData.items,days,cutoff,sourceConflicts});
+  const attemptReceiptAccounting = accountLoadedAttemptReceipts({tasks,attempts,events:eventData.items,cutoff,turnAccounting:tokenAccounting});
   const telemetry = byType('telemetry');
 
   return {
@@ -249,6 +250,7 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
       byPhase:timeline.phases.map(phase => ({...phase, spans:spanCounts[phase.phase]})),
     },
     tokenAccounting,
+    attemptReceiptAccounting,
     experiments:compareEngineeringExperiments({
       pairs:experimentPairs,tasks,attempts,telemetry,cutoff,accounting:tokenAccounting,
       conflicted:sourceConflicts > 0 || tokenAccounting.unattributedTurns > 0,
