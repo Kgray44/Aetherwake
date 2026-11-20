@@ -210,7 +210,8 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
       return failure(400, 'A changed assumption is required before retrying');
     }
-    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: action.changed_assumption.trim() } };
+    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: action.changed_assumption.trim(),
+      resume_attempt_id:lifecycle.attempts.findLast(item=>item.session_id)?.id } };
   }
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {
     return { lifecycle: { ...lifecycle, state: current === 'running' ? 'pausing' : 'paused' } };
@@ -241,6 +242,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     return { task:{ ...task, owner_acceptance:'not_reviewed' }, lifecycle:{
       ...lifecycle, state:'queued', start_at:now, cycle_start:lifecycle.attempts.length,
       evidence:[], feedback:action.feedback.trim(), followup_revision:accepted.candidate_revision,
+      resume_attempt_id:accepted.session_id?accepted.id:undefined,
     } };
   }
   if (type === 'archive' && ['completed','proposed','blocked','failed','cancelled','superseded'].includes(current)) {
@@ -258,7 +260,8 @@ function workerChange(lifecycle, body, now) {
   const report = body.report;
   if (!report || !['heartbeat', 'finished', 'failed', 'stopped'].includes(report.type)) return failure(400, 'Invalid attempt report');
   if (report.session_id !== undefined && (typeof report.session_id !== 'string' ||
-      !sessionPattern.test(report.session_id) || (active.session_id && active.session_id !== report.session_id))) {
+      !sessionPattern.test(report.session_id) || (active.session_id && active.session_id !== report.session_id) ||
+      (active.resume_session_id && active.resume_session_id !== report.session_id))) {
     return failure(400, 'Invalid or changed executor session');
   }
   if (report.session_id) active.session_id = report.session_id;
@@ -462,7 +465,13 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     }
     if (running.length >= claimLimit) return success({ claim: null });
     const candidate = admitted.filter(row => !body.task_ids || body.task_ids.includes(row.task_id)).map(row => rows.get(row.task_id))
-      .filter(row => waitState(record(row), details(row), rows, now).state === 'ready')
+      .filter(row => {
+        const lifecycle=details(row);
+        const checkpoint=lifecycle.attempts.find(item=>item.id===lifecycle.resume_attempt_id);
+        const requiresCleanContinuation=checkpoint?.session_id&&checkpoint.state!=='paused';
+        return (!requiresCleanContinuation||body.conversation_continuation===true)&&
+          waitState(record(row),lifecycle,rows,now).state==='ready';
+      })
       .sort((a, b) => priorities.indexOf(b.priority) - priorities.indexOf(a.priority) ||
         a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id))[0];
     if (!candidate) return success({ claim: null });
@@ -475,9 +484,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       lease_until: Math.min(now + leaseMs, deadline), deadline,
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
-    if (checkpoint?.session_id && checkpoint.checkpoint_revision) {
+    if (checkpoint?.session_id) {
       attempt.resume_session_id = checkpoint.session_id;
-      attempt.revision = checkpoint.checkpoint_revision;
+      if (checkpoint.state==='paused'&&checkpoint.checkpoint_revision) attempt.revision = checkpoint.checkpoint_revision;
+      else attempt.resume_requires_clean=true;
     }
     delete lifecycle.resume_attempt_id;
     lifecycle.state = 'running';

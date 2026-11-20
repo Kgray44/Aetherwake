@@ -799,8 +799,20 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
       params: { name: 'task_engine_v1', arguments: { request, ...extras } },
     }) });
     const value = await response.json();
-    return JSON.parse(value.result.content[0].text);
+    assert.deepEqual(value.result.structuredContent,JSON.parse(value.result.content[0].text));
+    return value.result.structuredContent;
   };
+  const listed = await call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})});
+  const schema = (await listed.json()).result.tools.find(item=>item.name==='task_engine_v1').inputSchema;
+  const requestProperties = schema.properties.request.properties;
+  assert.equal(requestProperties.operation_id.format,'uuid');
+  assert.equal(requestProperties.expected_version.type,'integer');
+  assert.ok(requestProperties.fields.required.includes('objective'));
+  assert.ok(requestProperties.action.properties.type.enum.includes('admit'));
+  assert.ok(!requestProperties.action.properties.type.enum.includes('accept'));
+  assert.match(schema.properties.verification.description,/Independent of request.operation_id/);
+  const missingId=await tool({op:'register',fields:input},{verification:namespace});
+  assert.deepEqual(missingId,{status:400,error:'Operation UUID required'});
   const registered = await tool({ op: 'register', operation_id: crypto.randomUUID(), fields: input });
   assert.equal(registered.status, 201);
   const { task, version } = registered;
@@ -812,8 +824,9 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   assert.equal((await tool(get)).version, version);
   const command = { op: 'command', task_id: task.id, operation_id: crypto.randomUUID(), expected_version: version,
     action: { type: 'admit', executor: 'codex' } };
-  assert.equal((await tool(command)).status, 403);
-  assert.equal((await http(command)).status, 200);
+  assert.equal((await tool({...command,action:{type:'accept'}})).status,403);
+  assert.equal((await tool(command)).status,200);
+  assert.equal((await tool(command)).version,version+1);
   const claim = { op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task.id] };
   assert.equal((await tool(claim)).status, 403);
   assert.equal((await tool(claim, { worker_key: 'x'.repeat(47) })).status, 403);
@@ -826,6 +839,23 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   const overview = await (await call('/api/overview', { headers: ownerHeader })).json();
   assert.equal(overview.records.find(item => item.id === task.id).state, 'running');
   assert.equal(overview.records.find(item => item.id === leased.attempt.id).task_id, task.id);
+
+  const fixtureTask=await tool({op:'register',operation_id:crypto.randomUUID(),fields:input},{verification:namespace});
+  const fixtureCommand=(expected_version,action)=>tool({op:'command',task_id:fixtureTask.task.id,
+    operation_id:crypto.randomUUID(),expected_version,action},{verification:namespace});
+  const edited=await fixtureCommand(fixtureTask.version,{type:'edit',fields:{...input,title:'Edited MCP fixture',priority:'high'}});
+  assert.equal(edited.task.title,'Edited MCP fixture');
+  const scheduled=await fixtureCommand(edited.version,{type:'admit',executor:'codex',start_at:'2050-01-01T13:00:00Z'});
+  assert.equal(scheduled.lifecycle.state,'scheduled');
+  assert.equal((await fixtureCommand(edited.version,{type:'pause'})).status,409);
+  const paused=await fixtureCommand(scheduled.version,{type:'pause'});
+  assert.equal(paused.lifecycle.state,'paused');
+  const resumed=await fixtureCommand(paused.version,{type:'resume'});
+  assert.equal(resumed.lifecycle.state,'scheduled');
+  const configured=await fixtureCommand(resumed.version,{type:'configure_execution',start_at:null});
+  assert.equal(configured.lifecycle.state,'ready');
+  assert.equal((await fixtureCommand(configured.version,{type:'cancel'})).lifecycle.state,'cancelled');
+  assert.equal((await tool({op:'get',task_id:fixtureTask.task.id})).status,404);
 });
 
 test('owner admission activates a published proposal without rewriting its intake document', async t => {

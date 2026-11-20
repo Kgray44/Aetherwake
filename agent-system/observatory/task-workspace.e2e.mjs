@@ -343,6 +343,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const heldFeed=new Promise(resolve=>{unblockFeed=resolve;});
   await page.route(overviewRoute,async route=>{await heldFeed;await route.continue();});
   let candidate;
+  const conversationId='10000000-0000-4000-8000-000000000001';
   try {
     const {claim}=await executor({op:'claim',operation_id:crypto.randomUUID(),task_ids:[execution.task.id]});
     assert.equal(claim.task.id,execution.task.id);
@@ -360,7 +361,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       admitStorage: async () => {},
       onTelemetryStart: () => {},
       // Only the provider boundary is replaced. The worker checkpoints and reports the real Git result.
-      execute: async ({ cwd, task, signal }) => {
+      execute: async ({ cwd, task, signal, onSession }) => {
+        await onSession(conversationId);
+        assert.equal((await send({op:'get',task_id:task.id})).attempts[0].session_id,conversationId);
         await runFile(process.execPath, ['-e',
           'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id,
         ], { cwd, signal, windowsHide: true });
@@ -421,6 +424,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.getByText('Task complete',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'Open in Codex',exact:true}).getAttribute('href'),'codex://threads/'+conversationId);
   const matrix=page.getByRole('region',{name:'Task acceptance criteria'});
   await matrix.getByText('owner accepted',{exact:true}).waitFor();
   assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');

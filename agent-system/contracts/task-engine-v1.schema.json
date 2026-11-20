@@ -90,6 +90,9 @@
         "operation_id": {
           "$ref": "#/$defs/uuid"
         },
+        "conversation_continuation": {
+          "type": "boolean"
+        },
         "task_ids": {
           "type": "array",
           "maxItems": 500,
@@ -726,6 +729,9 @@
         },
         "resume_session_id": {
           "$ref": "#/$defs/uuid"
+        },
+        "resume_requires_clean": {
+          "type": "boolean"
         },
         "execution_identity": {
           "$ref": "#/$defs/executionIdentity"

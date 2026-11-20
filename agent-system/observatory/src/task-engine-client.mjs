@@ -42,6 +42,13 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   return result;
 }
 
+export function codexThreadHref(attempt) {
+  const id = attempt?.session_id;
+  return attempt?.executor==='codex'&&typeof id==='string'&&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)
+    ? 'codex://threads/'+id : null;
+}
+
 export function reviewRevision(attempt) {
   return attempt?.candidate_revision ?? attempt?.revision ?? null;
 }
