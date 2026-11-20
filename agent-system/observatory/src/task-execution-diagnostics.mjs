@@ -22,15 +22,16 @@ function benchmarkComparison(record) {
     return [name,format(standard),format(compact),(delta>0?'+':'')+format(delta)];
   });
   rows.push(['Billing','Unknown','Unknown','Unknown']);
+  const result=String(record.result??'Unavailable').replaceAll('_',' ').replace(/^./,initial=>initial.toUpperCase());
   return {
     id:record.id, title:'Standard vs compact benchmark',
-    summary:'The matched receipts report byte-identical verified output. Token counts are final Codex App Server thread totals. Billing was unavailable from the signed-in source.',
+    summary:'Reported artifact byte identity is unverified. Token counts are final Codex App Server thread totals. Billing was unavailable from the signed-in source.',
     columns:['Metric','Standard','Compact','Compact − standard'],rows,
     provenance:[
       ['Provider and model',pair.provider+' / '+pair.model],
       ['Benchmark revision',pair.source_revision],
-      ['Verified artifact',pair.artifact_path],
-      ['Artifact SHA-256 (both arms)',pair.artifact_sha256],
+      ['Reported artifact SHA-256 (both arms)',pair.artifact_sha256],
+      ['Reported evidence result',result],
       ['Standard receipt SHA-256',pair.standard.receipt_sha256],
       ['Compact receipt SHA-256',pair.compact.receipt_sha256],
       ['Receipt hash scope','Verified benchmark log entry, excluding the line ending'],

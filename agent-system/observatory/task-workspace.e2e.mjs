@@ -390,11 +390,16 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     criterion_id:execution.task.acceptance.criteria[0].id,kind:'benchmark',result:'inconclusive',synthetic:false,
     observed_at,artifact:{kind:'artifact',uri:'private-artifact:evidence_matched_benchmark'},matched_benchmark:benchmark,
   };
+  const mismatchedDigest='f'.repeat(64);
+  const mismatchedBenchmark={
+    ...benchmarkRecord,id:'evidence_mismatched_benchmark',revision:'e'.repeat(40),
+    matched_benchmark:{...benchmark,artifact_sha256:mismatchedDigest,artifact_path:'private-fixture/rejected.md'},
+  };
   const synced = await fetch(origin+'/api/task-telemetry/'+execution.task.id,{
     method:'POST',headers:{origin,'content-type':'application/json','x-observatory-verification':namespace,
       'x-observatory-sync-scope':await sha256(JSON.stringify(['observatory-telemetry-v1',owner,'verification:'+namespace]))},
     body:JSON.stringify({base:null,generated_at:observed_at,events:[],records:[
-      {...execution.task,state:'proposed',owner_acceptance:'not_reviewed'},benchmarkRecord,
+      {...execution.task,state:'proposed',owner_acceptance:'not_reviewed'},benchmarkRecord,mismatchedBenchmark,
     ]}),
   });
   assert.ok(synced.ok,await synced.text());
@@ -485,7 +490,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const comparison = telemetry.getByRole('region',{name:'Standard vs compact benchmark'});
   const expectedTokens = new Intl.NumberFormat('en-US').format(benchmark.standard.total_tokens);
   await comparison.getByRole('row',{name:new RegExp('Total tokens '+expectedTokens)}).waitFor();
+  assert.equal(await comparison.count(),1);
+  await comparison.getByText(/Reported artifact byte identity is unverified/).waitFor();
+  await comparison.getByText('Inconclusive',{exact:true}).waitFor();
   assert.equal(await comparison.getByText('Unknown',{exact:true}).count(),3);
+  assert.equal(await telemetry.getByText(mismatchedDigest,{exact:true}).count(),0);
+  assert.equal(await comparison.getByText('Verified artifact',{exact:true}).count(),0);
   for(const digest of [benchmark.standard.receipt_sha256,benchmark.compact.receipt_sha256,benchmark.artifact_sha256]){
     await comparison.getByText(digest,{exact:true}).waitFor();
   }

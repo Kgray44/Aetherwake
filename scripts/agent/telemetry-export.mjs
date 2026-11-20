@@ -15,7 +15,17 @@ export function sanitizeExport({ repository, records=[], events=[] }) {
     case 'attempt': return {...base,...pick(r,['attempt_number','state','started_at','finished_at','provider','model','failure_category'])};
     case 'telemetry': return {...base,...pick(r,['phase','observed_at']),measurements:r.measurements.map(sanitizeMeasurement)};
     // Evidence artifacts may contain sensitive local paths. Only hashed identifiers exported.
-    case 'evidence': return {...base,...pick(r,['criterion_id','kind','result','observed_at','synthetic','matched_benchmark']),artifact:{kind:'artifact',uri:'private-artifact:'+r.id,...hash(r.artifact?.revision)?{revision:r.artifact.revision}:{}}};
+    case 'evidence': {
+      const evidence = {...base,...pick(r,['criterion_id','kind','result','observed_at','synthetic']),
+        artifact:{kind:'artifact',uri:'private-artifact:'+r.id,...hash(r.artifact?.revision)?{revision:r.artifact.revision}:{}}};
+      if(r.matched_benchmark!==undefined) {
+        if(!validMatchedBenchmark(r.matched_benchmark))throw Error('Invalid matched benchmark evidence');
+        // Accept legacy receipt paths on input and omit them from the projection.
+        const {artifact_path,...matched_benchmark}=r.matched_benchmark;
+        evidence.matched_benchmark=matched_benchmark;
+      }
+      return evidence;
+    }
     case 'context_snapshot': return {...base,...pick(r,['generated_at','freshness','task_digest']),requirements:(r.requirements||[]).map(safeRef),components:(r.components||[]).map((c,index)=>({name:'component_'+index,owner_ref:safeRef(c.owner_ref,index)}))};
     case 'verification_profile': return {...base,...pick(r,['profile_id','task_classes','blocking_policy']),checks:r.checks.map(c=>({...pick(c,['id','required','manual_approval']),procedure:'Private procedure withheld'}))};
     default: throw Error('Unsupported export record');
