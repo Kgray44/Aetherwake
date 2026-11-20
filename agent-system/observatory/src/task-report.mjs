@@ -192,6 +192,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       section('Evidence ledger and linked engineering activity'),
       ...blocks(evidence,item=>words(item.kind??'Evidence')+'   '+item.id),
       ...blocks(activity.references,item=>item.label,item=>[['Reference',item.url],['Linked revisions',item.revisions.join(', ')||'Unavailable']]),
+      ...(activity.verificationReports.length?[subhead('Reported verification activity'),
+        ...blocks(activity.verificationReports,item=>item.title,item=>[['Recorded occurrence',item.at],...item.details])]:[]),
       section('Appendix · Task operations'),
       ...blocks(taskAudits.filter(item=>item.kind!=='heartbeat'),item=>(item.at??'Time unavailable')+'  ·  '+words(item.kind??item.type??'Operation')),
       section('Appendix · Heartbeat receipts'),

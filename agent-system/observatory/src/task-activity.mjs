@@ -5,6 +5,7 @@ const labels = {
   ci_run:'CI run', test:'Test', artifact:'Artifact', investigation:'Investigation',
   deployment:'Deployment', executor_session:'Executor session',
 };
+const verificationKinds = new Set(['verification','test','benchmark','deployment_validation']);
 
 function safeActivityUrl(uri) {
   try {
@@ -183,10 +184,13 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
   const formalIds=new Set((authoritative?.attempts??[]).map(attempt=>attempt.id));
   const verification=evidence.filter(record=>record.task_id===task.id);
   const reported=reportedEvents(task,events,attempts,telemetrySource);
+  const verificationReports=[...new Map(reported
+    .filter(item=>verificationKinds.has(item.activityType)&&item.outcome!=='started').map(item=>[item.id,item])).values()]
+    .sort((a,b)=>Date.parse(b.at)-Date.parse(a.at)||a.id.localeCompare(b.id));
   const reportedOperations=kind=>new Set(reported.filter(event=>!kind||event.activityType===kind).map(event=>event.operationId)).size;
   const engineeringEvents=[...githubEvents(references,github,authoritative?.engineering_snapshots??[]),...reported];
   return {
-    references, events:engineeringEvents,
+    references, events:engineeringEvents, verificationReports,
     counts:[
       ['Formal Task Engine attempts',authoritative?formalIds.size:null],
       ['Other reported attempts',new Set(attempts.filter(a=>a.task_id===task.id&&!formalIds.has(a.id)).map(a=>a.id)).size],

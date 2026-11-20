@@ -105,6 +105,7 @@ test('reported external operation chronology and timing stay separate from forma
   assert.equal(counts['Reported verification operations'],1);
   assert.equal(counts['Reported benchmark operations'],0);
   assert.equal(counts['Criterion evidence records'],0);
+  assert.deepEqual(activity.verificationReports.map(item=>[item.outcome,item.operationId]),[['succeeded',operation]]);
   const chronology=buildTaskTimeline({...input,engineeringEvents:activity.events});
   assert.equal(chronology.length,2);
   assert.equal(chronology[0].outcome,'succeeded');
@@ -114,6 +115,7 @@ test('reported external operation chronology and timing stay separate from forma
   assert.match(report,/Reported verification · succeeded/);
   assert.match(report,/Reported by the source journal/);
   assert.match(report,/Imported engineering activity/);
+  assert.match(report,/Reported verification activity/);
   assert.match(report,/"Reported verification operations","1"/);
 });
 

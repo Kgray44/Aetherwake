@@ -3,6 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
 import {taskActivityHref} from './github-activity.mjs';
+import {taskEngineeringActivity} from './task-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
 import { attemptMatchesEvidence, criterionEvidenceStatus, evidenceClaimStatus } from './evidence-status.mjs';
 import { attemptJournal } from './task-attempts.mjs';
@@ -245,9 +246,10 @@ function EvidenceArtifact({ artifact }) {
   return <details><summary>Private artifact · link unavailable</summary>{uri.startsWith('private-artifact:') && <code>{uri}</code>}</details>;
 }
 
-export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status }) {
+export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, events, telemetrySource, Status }) {
   const criteria = new Map((task.acceptance?.criteria ?? []).map(item => [item.id,item.description]));
-  if (!evidence.length && !reviewed.length) return <p>No verification results have been linked to this Task yet.</p>;
+  const {verificationReports} = taskEngineeringActivity({task,attempts,events,telemetrySource});
+  if (!evidence.length && !reviewed.length && !verificationReports.length) return <p>No verification results have been linked to this Task yet.</p>;
   const ordered = [...evidence].sort((a,b)=>String(b.observed_at??b.created_at).localeCompare(String(a.observed_at??a.created_at)));
   return <>
     {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3><ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
@@ -269,6 +271,15 @@ export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status 
         <EvidenceArtifact artifact={item.artifact}/>
       </article>;
     })}
+    {verificationReports.length>0&&<section aria-label="Reported verification activity">
+      <h3>Reported verification activity</h3>
+      {verificationReports.map(item=><details className="record" key={item.id}>
+        <summary>{item.title} · <time dateTime={item.at}>{displayTime(item.at)}</time></summary>
+        <dl className="github-facts">
+          {item.details.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      </details>)}
+    </section>}
   </>;
 }
 
