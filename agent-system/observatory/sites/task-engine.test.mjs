@@ -285,7 +285,7 @@ test('verification workers reject checkouts connected to a different delivery na
   await mkdir(connection, { recursive: true });
   const config = namespace => writeFile(join(connection, 'connection.json'), JSON.stringify({
     version: 1, ...(namespace ? { verification: namespace } : {}),
-  }));
+  }), { mode: 0o600 });
   await config();
   await checkWorkspaceTelemetryScope(root, undefined);
   await assert.rejects(checkWorkspaceTelemetryScope(root, verification), /telemetry namespace/);
