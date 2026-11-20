@@ -1,14 +1,53 @@
-import { ownerReviewByCriterion } from './evidence-status.mjs';
+import { attemptMatchesEvidence, ownerReviewByCriterion } from './evidence-status.mjs';
 import { attemptTraceCoverage } from './trace-timeline.mjs';
+import { validMatchedBenchmark } from '../matched-benchmark.mjs';
 
 const number = new Intl.NumberFormat('en-US');
 const percent = new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:1});
 const seconds = milliseconds => (milliseconds / 1000).toFixed(2) + ' s';
 
+function benchmarkComparison(record) {
+  const pair = record.matched_benchmark;
+  const metrics = [
+    ['Input tokens',arm=>arm.input_tokens],
+    ['Cached input tokens',arm=>arm.cached_input_tokens],
+    ['Uncached input tokens',arm=>arm.input_tokens-arm.cached_input_tokens],
+    ['Output tokens',arm=>arm.output_tokens],
+    ['Total tokens',arm=>arm.total_tokens],
+    ['Successful commands',arm=>arm.commands],
+    ['Turn time',arm=>arm.turn_ms,ms=>(ms/1000).toFixed(3)+' s'],
+  ];
+  const rows = metrics.map(([name,measure,format=value=>number.format(value)])=>{
+    const standard=measure(pair.standard), compact=measure(pair.compact), delta=compact-standard;
+    return [name,format(standard),format(compact),(delta>0?'+':'')+format(delta)];
+  });
+  rows.push(['Billing','Unknown','Unknown','Unknown']);
+  const result=String(record.result??'Unavailable').replaceAll('_',' ').replace(/^./,initial=>initial.toUpperCase());
+  return {
+    id:record.id, title:'Standard vs compact benchmark',
+    summary:'Reported artifact byte identity is unverified. Token counts are final Codex App Server thread totals. Billing was unavailable from the signed-in source.',
+    columns:['Metric','Standard','Compact','Compact − standard'],rows,
+    provenance:[
+      ['Provider and model',pair.provider+' / '+pair.model],
+      ['Benchmark revision',pair.source_revision],
+      ['Reported artifact SHA-256 (both arms)',pair.artifact_sha256],
+      ['Reported evidence result',result],
+      ['Standard receipt SHA-256',pair.standard.receipt_sha256],
+      ['Compact receipt SHA-256',pair.compact.receipt_sha256],
+      ['Receipt hash scope','Verified benchmark log entry, excluding the line ending'],
+      ['Linked evidence',record.id],
+      ['Evidence revision',record.revision],
+    ],
+  };
+}
+
 export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tokens, records }) {
   const coverage = attemptTraceCoverage(attempts, trace.spans);
   const accepted = ownerReviewByCriterion(task, canonical);
   const evidence = records.filter(record => record.task_id === task.id && record.record_type === 'evidence');
+  const comparisons = evidence.filter(record=>record.repository===task.repository&&record.kind==='benchmark'&&
+    record.synthetic===false&&validMatchedBenchmark(record.matched_benchmark)&&
+    attempts.some(attempt=>attemptMatchesEvidence(attempt,record))).map(benchmarkComparison);
   const findings = [];
   for (const row of coverage) {
     if (row.untracedMs <= 0) continue;
@@ -46,5 +85,5 @@ export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tok
     detail:accepted.size + ' criterion receipt(s) reference an accepted artifact revision. No separate verification records are linked.'});
   if (attempts.length > 1) findings.push({title:'Multiple attempts',
     detail:attempts.length + ' attempts are recorded. Review their outcomes and retry reasons before attributing repeated work.'});
-  return { coverage, accepted, evidence, findings };
+  return { coverage, accepted, evidence, findings, comparisons };
 }

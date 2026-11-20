@@ -206,6 +206,14 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Verification baseline');
   const baseline = await git('rev-parse', 'HEAD');
   const { origin, executor, seedGithubDetail } = await start(t, { canonical: true, revision: baseline });
+  const benchmark = process.env.OBSERVATORY_MATCHED_BENCHMARK_RECEIPT
+    ? JSON.parse(readFileSync(process.env.OBSERVATORY_MATCHED_BENCHMARK_RECEIPT,'utf8')).matched_benchmark
+    : {
+      source_revision:'e'.repeat(40), artifact_path:'verification/report.md', artifact_sha256:'c'.repeat(64),
+      provider:'test-provider', model:'test-model',
+      standard:{receipt_sha256:'a'.repeat(64),input_tokens:100,cached_input_tokens:20,output_tokens:5,total_tokens:105,commands:2,turn_ms:1000},
+      compact:{receipt_sha256:'b'.repeat(64),input_tokens:150,cached_input_tokens:40,output_tokens:10,total_tokens:160,commands:4,turn_ms:2000},
+    };
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
@@ -391,6 +399,27 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   detail = await send({ op: 'get', task_id: execution.task.id });
   assert.equal(detail.task.owner_acceptance, 'accepted');
   assert.equal(detail.lifecycle.evidence[0].revision, candidate);
+  const { sha256 } = await import('./sites/task-telemetry.mjs');
+  const observed_at = new Date().toISOString();
+  const benchmarkRecord = {
+    schema_version:1,record_type:'evidence',id:'evidence_matched_benchmark',created_at:observed_at,
+    repository:execution.task.repository,revision:candidate,task_id:execution.task.id,attempt_id:detail.attempts[0].id,
+    criterion_id:execution.task.acceptance.criteria[0].id,kind:'benchmark',result:'inconclusive',synthetic:false,
+    observed_at,artifact:{kind:'artifact',uri:'private-artifact:evidence_matched_benchmark'},matched_benchmark:benchmark,
+  };
+  const mismatchedDigest='f'.repeat(64);
+  const mismatchedBenchmark={
+    ...benchmarkRecord,id:'evidence_mismatched_benchmark',revision:'e'.repeat(40),
+    matched_benchmark:{...benchmark,artifact_sha256:mismatchedDigest,artifact_path:'private-fixture/rejected.md'},
+  };
+  const synced = await fetch(origin+'/api/task-telemetry/'+execution.task.id,{
+    method:'POST',headers:{origin,'content-type':'application/json','x-observatory-verification':namespace,
+      'x-observatory-sync-scope':await sha256(JSON.stringify(['observatory-telemetry-v1',owner,'verification:'+namespace]))},
+    body:JSON.stringify({base:null,generated_at:observed_at,events:[],records:[
+      {...execution.task,state:'proposed',owner_acceptance:'not_reviewed'},benchmarkRecord,mismatchedBenchmark,
+    ]}),
+  });
+  assert.ok(synced.ok,synced.ok?'':await synced.text());
   const evidence = page.getByRole('region', { name: 'Execution and delivery evidence' });
   const attemptPanel=page.locator('#task-attempts');
   await attemptPanel.getByText('Candidate revision',{exact:true}).waitFor();
@@ -419,6 +448,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const telemetryHeaders = { 'x-observatory-verification': namespace };
   const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
   const { telemetry_scope: scope } = await overview.json();
+  const {digest:telemetryBaseline} = await synced.json();
   const firstAttempt = detail.attempts[0];
   const operationId = 'e'.repeat(64);
   const timedEvent = (phase, kind, offset) => ({
@@ -429,7 +459,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const received = await page.request.post(origin + '/api/task-telemetry/' + execution.task.id, {
     headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
     data: {
-      base: null, generated_at: new Date().toISOString(), records: [execution.task],
+      base: telemetryBaseline, generated_at: new Date().toISOString(), records: [],
       events: [{
         trace_version:1,event_id:'activity_'+operationId+'_result',task_id:execution.task.id,
         trace_id:operationId,span_id:operationId,repository:execution.task.repository,revision:candidate,
@@ -510,6 +540,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.ok(lateRefreshes.every(preference=>preference==='cached'));
   await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
+  const earlier = timeline.getByRole('button',{name:'Show earlier events'});
+  if (await earlier.count()) await earlier.click();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();
   await timeline.getByRole('button',{name:/Task submitted/}).waitFor();
   await timeline.getByRole('button',{name:'Attempt',exact:true}).click();
@@ -625,6 +657,18 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await timingDetails.getByText('Matched journal span',{exact:true}).waitFor();
   await timingDetails.getByRole('button',{name:'Open attempt details'}).waitFor();
   await telemetry.getByText('90 tokens',{exact:true}).first().waitFor();
+  const comparison = telemetry.getByRole('region',{name:'Standard vs compact benchmark'});
+  const expectedTokens = new Intl.NumberFormat('en-US').format(benchmark.standard.total_tokens);
+  await comparison.getByRole('row',{name:new RegExp('Total tokens '+expectedTokens)}).waitFor();
+  assert.equal(await comparison.count(),1);
+  await comparison.getByText(/Reported artifact byte identity is unverified/).waitFor();
+  await comparison.getByText('Inconclusive',{exact:true}).waitFor();
+  assert.equal(await comparison.getByText('Unknown',{exact:true}).count(),3);
+  assert.equal(await telemetry.getByText(mismatchedDigest,{exact:true}).count(),0);
+  assert.equal(await comparison.getByText('Verified artifact',{exact:true}).count(),0);
+  for(const digest of [benchmark.standard.receipt_sha256,benchmark.compact.receipt_sha256,benchmark.artifact_sha256]){
+    await comparison.getByText(digest,{exact:true}).waitFor();
+  }
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
