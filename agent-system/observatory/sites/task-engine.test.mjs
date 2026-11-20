@@ -246,3 +246,46 @@ test('one bounded Codex stream delivers session identity and sanitized usage', a
   assert.equal(seen[1].find(item => item.name === 'provider_input_tokens').value, 10);
   assert.equal(JSON.stringify(seen).includes('do not retain'), false);
 });
+
+test('an observer reconciles lost workers and persists one fenced lease-expiry receipt', async t => {
+  const { call, register, command, get, advance } = setup(t);
+  const starting = await register('Expired worker');
+  await command(starting, 'admit', { executor: 'codex' });
+  const { claim } = (await call({ op: 'claim', operation_id: crypto.randomUUID() }, 'worker')).body;
+  assert.equal((await get(starting)).lifecycle.state, 'running');
+  advance(60_001);
+  const [first, second] = await Promise.all([get(starting), get(starting)]);
+  for (const readback of [first, second]) {
+    assert.equal(readback.lifecycle.state, 'failed');
+    assert.equal(readback.attempts[0].state, 'orphaned');
+    const events = readback.events.filter(event => event.kind === 'lease_expired');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actor, 'scheduler');
+    assert.equal(events[0].attempt_id, claim.attempt.id);
+  }
+  const report = await call({ op: 'report', task_id: claim.task.id, attempt_id: claim.attempt.id,
+    lease: claim.lease, operation_id: crypto.randomUUID(), report: { type: 'heartbeat' } }, 'worker');
+  assert.equal(report.status, 409);
+  assert.equal((await get(starting)).version, first.version);
+});
+
+test('revision-pinned PR and CI references survive replay and stay owner scoped', async t => {
+  const { call, register, command, get } = setup(t);
+  const created = await register('References');
+  const link = (kind, path) => ({ kind, uri: 'https://github.com/Kgray44/Aetherwake/' + path, revision: rev });
+  const pull = link('pull_request', 'pull/1');
+  const ci = link('ci_run', 'actions/runs/2');
+  const request = { op: 'command', task_id: created.task.id, expected_version: created.version,
+    operation_id: crypto.randomUUID(), action: { type: 'associate', reference: pull } };
+  const first = await call(request, 'agent');
+  assert.equal(first.status, 200);
+  assert.equal((await call(request, 'agent')).body.version, first.body.version);
+  assert.equal((await call(request, 'agent', 'other')).status, 404);
+  const attached = await command(await get(created), 'associate', { reference: ci }, 'agent');
+  assert.equal(attached.status, 200);
+  const bad = { ...ci, uri: ci.uri + '?token=private' };
+  assert.equal((await command(await get(created), 'associate', { reference: bad }, 'agent')).status, 400);
+  const detail = await get(created);
+  assert.deepEqual(detail.lifecycle.links, [pull, ci]);
+  assert.equal(detail.events.filter(event => event.kind === 'associate').length, 2);
+});

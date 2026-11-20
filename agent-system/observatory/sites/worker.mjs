@@ -1,4 +1,4 @@
-import { taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
+import { readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
@@ -135,8 +135,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     if (overview) {
       const [snapshot, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, readToken),
-        env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority, engine FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
-          .bind(owner, namespace, MAX_PROPOSALS).all(),
+        readTaskRows({ db: env.DB, owner, namespace }),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
         env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
           .bind(owner, namespace).all(),
@@ -144,7 +143,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       ]);
       const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
-      const authoritative = rows.results.filter(row => row.engine).flatMap(row => {
+      const authoritative = rows.filter(row => row.engine).flatMap(row => {
         const task = JSON.parse(row.record);
         return [task, ...JSON.parse(row.engine).attempts.map(attempt => taskAttemptRecord(task, attempt))];
       });
@@ -157,7 +156,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         deployed_revision: sourceRevision,
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
-        records: [...items.map(item => item.record), ...rows.results.filter(row => !row.engine).map(row => JSON.parse(row.record))]
+        records: [...items.map(item => item.record), ...rows.filter(row => !row.engine).map(row => JSON.parse(row.record))]
           .filter(r => canProject(r) && !projectedIds.has(r.record_type + ':' + r.id))
           .concat((projection?.records ?? []).filter(canProject), authoritative),
         telemetry_scope: telemetryScope,
@@ -172,11 +171,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           },
         },
         proposals: {
-          total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null,
+          total: rows.length, limit: MAX_PROPOSALS, verification: verification !== null,
           publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
-          stale_revision_tasks: rows.results.filter(row => row.stale_revision === 1).map(row => row.task_id),
-          publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
-          controls: Object.fromEntries(rows.results.filter(row => !row.github_state && !row.engine && !projectedIds.has('task:' + row.task_id))
+          stale_revision_tasks: rows.filter(row => row.stale_revision === 1).map(row => row.task_id),
+          publication: Object.fromEntries(rows.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
+          controls: Object.fromEntries(rows.filter(row => !row.github_state && !row.engine && !projectedIds.has('task:' + row.task_id))
             .map(row => [row.task_id, { version: row.version, priority: row.priority }])),
         },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
