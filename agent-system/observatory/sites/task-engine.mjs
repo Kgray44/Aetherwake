@@ -428,6 +428,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     }
     const previous = lifecycle.attempts.at(-1);
     if (!attempt.resume_session_id && ['failed', 'orphaned'].includes(previous?.state) && lifecycle.changed_assumption) {
+      // A reviewed rejection leaves its clean candidate in the checkout.
+      // The worker still requires exact HEAD and fences any dirty effects.
+      attempt.revision = previous.state === 'failed' && revisionPattern.test(previous.candidate_revision)
+        ? previous.candidate_revision : previous.revision;
       attempt.retry = {
         prior_attempt_id: previous.id,
         prior_state: previous.state,

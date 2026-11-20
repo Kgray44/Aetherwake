@@ -227,3 +227,6 @@ of case and whitespace. The next claim pins the prior failed or orphaned Attempt
 its disposition, and the bounded owner note. The worker uses that context to check
 the changed assumption before revisiting the failed approach. Raw executor diagnostic
 text remains outside the retry prompt. Claim replay returns the same retry context.
+After owner rejection, a retry starts at the rejected candidate revision. Other
+retries inherit the prior execution revision. The worker requires a clean checkout
+at the exact claim pin and preserves unresolved changes for owner reconciliation.

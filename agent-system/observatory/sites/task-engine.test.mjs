@@ -335,3 +335,68 @@ test('owner retries carry fresh failure evidence into dispatch and reject repeat
   assert.equal((await fail(third)).status,200);
   assert.equal((await command(await get(created),'retry',{changed_assumption:'A fourth different attempt'})).status,409);
 });
+
+test('a reviewed rejection retries at the exact candidate and fences later dirty effects', async t => {
+  const {call,register,command,get,pin} = setup(t);
+  const parent = await mkdtemp(join(tmpdir(),'aads-rejected-retry-'));
+  t.after(() => rm(parent,{force:true,recursive:true}));
+  const workspace = await realpath(parent);
+  const exec = promisify(execFile);
+  const git = async (...args) => (await exec('git',args,{cwd:workspace,windowsHide:true})).stdout.trim();
+  await git('init');
+  await git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  await git('switch','-c','codex/aads-task-rejected-retry');
+  await git('config','user.name','Test worker');
+  await git('config','user.email','test@example.test');
+  await git('commit','--allow-empty','-m','base pin');
+  const base = await git('rev-parse','HEAD');
+  pin(base);
+  const task = await register('reviewed rejection');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const claim = async () => (await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body.claim;
+  const send = async request => {
+    const response = await call(request,'worker');
+    if (response.status !== 200) throw Object.assign(Error(response.body.error),{status:response.status});
+    return response.body;
+  };
+  const run = (item,execute) => runClaim({
+    claim:item,send,workspace,signal:AbortSignal.timeout(30_000),admitStorage:async () => {},execute,
+  });
+  const first = await claim();
+  await run(first,async ({cwd,onSession}) => {
+    await writeFile(join(cwd,'candidate.txt'),'first candidate');
+    onSession(crypto.randomUUID());
+    return {ok:true};
+  });
+  const reviewing = await get(task);
+  assert.equal(reviewing.lifecycle.state,'verifying');
+  const candidate = reviewing.attempts[0].candidate_revision;
+  assert.notEqual(candidate,base);
+  assert.equal(await git('rev-parse','HEAD'),candidate);
+  assert.equal((await command(reviewing,'reject',{reason:'Candidate missed the criterion'})).status,200);
+  assert.equal((await command(await get(task),'retry',{changed_assumption:'Recheck the missed criterion'})).status,200);
+
+  const second = await claim();
+  assert.equal(second.attempt.revision,candidate);
+  assert.equal(second.attempt.retry.prior_attempt_id,first.attempt.id);
+  let executed = 0;
+  await run(second,async ({cwd}) => {
+    executed++;
+    assert.equal(await git('rev-parse','HEAD'),candidate);
+    assert.equal(await git('status','--porcelain'),'');
+    await writeFile(join(cwd,'uncertain.txt'),'unresolved work');
+    return {ok:false};
+  });
+  assert.equal(executed,1);
+  const failed = await get(task);
+  assert.equal(failed.attempts[0].revision,base);
+  assert.equal(failed.attempts[0].candidate_revision,candidate);
+  assert.equal(failed.attempts[1].candidate_revision,undefined);
+  assert.equal((await command(failed,'retry',{changed_assumption:'Review possible effects before retrying'})).status,200);
+  const third = await claim();
+  assert.equal(third.attempt.revision,candidate);
+  await run(third,async () => { executed++;return {ok:true}; });
+  assert.equal(executed,1);
+  assert.equal((await get(task)).lifecycle.state,'failed');
+  assert.equal(await git('status','--porcelain'),'?? uncertain.txt');
+});
