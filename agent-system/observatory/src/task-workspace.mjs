@@ -106,6 +106,7 @@ export function taskActivity(task,attempts,events,lifecycle,workerAccess) {
   if (workerAccess==='not_configured' && ['queued','ready'].includes(lifecycle?.state)) {
     return {label:'Waiting for Codex worker access',at:null};
   }
+  if (lifecycle?.state==='ready') return {label:'Awaiting worker claim',at:null};
   const humanize = state => String(state).replaceAll('_', ' ');
   if (lifecycle && (['running','pausing','cancelling','blocked','failed','verifying','completed'].includes(lifecycle.state) ||
       waitingStates.has(lifecycle.state) || inactiveStates.has(lifecycle.state))) {
