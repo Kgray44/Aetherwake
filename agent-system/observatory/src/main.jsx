@@ -105,7 +105,8 @@ const [githubFilters,setGitHubFilters]=useState({
   runs:{query:'',state:'',group:'',oldest:false}
 });
 const page=githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute.id ? 'detail' : 'tasks') : localPage;
-const activeNavigation=githubView?.kind ?? (page==='detail'?'tasks':page);
+const onTaskDetail=page==='detail';
+const activeNavigation=githubView?.kind ?? (onTaskDetail?'tasks':page);
 useEffect(()=>{
   const sync=()=>setRouteHash(window.location.hash);
   window.addEventListener('hashchange',sync);
@@ -145,6 +146,7 @@ const refreshEngine=useCallback(signal=>{
 },[]);
 const refresh=async(mode=demo,{quiet=false,signal}={})=>{
   if(quiet&&foregroundRequest.current)return;
+  const cacheOnly=quiet&&onTaskDetail;
   const id=++refreshId.current;
   foregroundRequest.current=!quiet&&!mode;
   if(mode){setHasLiveFeed(false);setRecords(demoRecords());setError('');setLoading(false);return}
@@ -167,8 +169,8 @@ const refresh=async(mode=demo,{quiet=false,signal}={})=>{
       setError('');
       return true;
     };
-    const feed=await loadFeed(quiet?'/api/overview':'/api/overview?prefer=cached');
-    if(showFeed(feed)&&feed.github_refresh_pending){
+    const feed=await loadFeed(quiet&&!cacheOnly?'/api/overview':'/api/overview?prefer=cached');
+    if(showFeed(feed)&&feed.github_refresh_pending&&!cacheOnly){
       foregroundRequest.current=false;
       setLoading(false);
       try { showFeed(await loadFeed('/api/overview')); }
@@ -220,7 +222,7 @@ useEffect(()=>{
     window.clearInterval(timer);
     document.removeEventListener('visibilitychange',update);
   };
-},[watchingTasks]);
+},[watchingTasks,onTaskDetail]);
 const automaticTelemetry=useAutomaticTelemetry({scope:!demo&&hasLiveFeed?telemetryScope:null,headers:verificationHeaders,refresh:()=>refresh(false)});
 const by=type=>records.filter(r=>r.record_type===type);
 const usingEngineRegistry=!demo&&!hasLiveFeed&&engine.status==='available';

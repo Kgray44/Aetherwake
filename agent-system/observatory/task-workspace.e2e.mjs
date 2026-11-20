@@ -442,7 +442,18 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   });
   assert.equal(received.status(), 200, await received.text());
   const { received_at: traceReceivedAt } = await received.json();
-  await page.reload();
+  const lateRefreshes=[];
+  const rememberRefresh=request=>{
+    const url=new URL(request.url());
+    if(url.pathname==='/api/overview') lateRefreshes.push(url.searchParams.get('prefer'));
+  };
+  const staleGitHub=async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,json:{...await response.json(),github_refresh_pending:true}});
+  };
+  await page.route(overviewRoute,staleGitHub);
+  page.on('request',rememberRefresh);
+  await page.clock.fastForward(31_000);
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
   await jump.getByRole('button',{name:'Timeline',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
@@ -475,6 +486,10 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await receiptDetail.getByText('Observatory first received',{exact:true}).waitFor();
   assert.equal(await receiptDetail.getByText(traceReceivedAt,{exact:true}).count(), 1);
   assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
+  page.off('request',rememberRefresh);
+  await page.unroute(overviewRoute,staleGitHub);
+  assert.ok(lateRefreshes.length>0);
+  assert.ok(lateRefreshes.every(preference=>preference==='cached'));
   await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();
