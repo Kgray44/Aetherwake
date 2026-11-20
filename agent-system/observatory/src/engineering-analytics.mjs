@@ -1,3 +1,4 @@
+import { compareEngineeringExperiments } from './engineering-experiments.mjs';
 import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { activityId } from './github-activity.mjs';
@@ -166,7 +167,7 @@ function summarizeMetrics(records, events) {
 }
 
 /** A summary of the received projection and bounded GitHub collections. */
-export function buildEngineeringAnalytics({records, events, github, now = Date.now()} = {}) {
+export function buildEngineeringAnalytics({records, events, github, experimentPairs = [], now = Date.now()} = {}) {
   const cutoff = new Date(now).getTime();
   if (!Number.isFinite(cutoff)) throw new RangeError('Invalid analytics clock');
 
@@ -204,6 +205,9 @@ export function buildEngineeringAnalytics({records, events, github, now = Date.n
   const timeline = traceTimeline(eventData.items);
   const complete = timeline.spans.filter(span => span.complete);
   const spanCounts = counts(complete, span => span.phase);
+  const sourceConflicts = recordData.conflicts + eventData.conflicts;
+  const tokenAccounting = accountEngineeringTokens({tasks,attempts,events:eventData.items,days,cutoff,sourceConflicts});
+  const telemetry = byType('telemetry');
 
   return {
     days,
@@ -239,9 +243,11 @@ export function buildEngineeringAnalytics({records, events, github, now = Date.n
       events:eventData.items.length, complete:complete.length, incomplete:timeline.incomplete, coveredMs:timeline.coveredMs,
       byPhase:timeline.phases.map(phase => ({...phase, spans:spanCounts[phase.phase]})),
     },
-    tokenAccounting:accountEngineeringTokens({
-      tasks, attempts, events:eventData.items, days, cutoff, sourceConflicts:recordData.conflicts + eventData.conflicts
+    tokenAccounting,
+    experiments:compareEngineeringExperiments({
+      pairs:experimentPairs,tasks,attempts,telemetry,cutoff,accounting:tokenAccounting,
+      conflicted:sourceConflicts > 0 || tokenAccounting.unattributedTurns > 0,
     }),
-    usage:summarizeMetrics(byType('telemetry'), eventData.items),
+    usage:summarizeMetrics(telemetry, eventData.items),
   };
 }
