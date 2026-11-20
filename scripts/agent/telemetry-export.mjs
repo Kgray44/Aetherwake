@@ -1,4 +1,5 @@
-/** Explicit private projection. Never exports prompts, arguments, outputs or file paths. */
+/** Explicit private projection. Never exports prompts, arguments, outputs or machine-local paths. */
+import { validMatchedBenchmark } from '../../agent-system/observatory/matched-benchmark.mjs';
 import { validDevelopmentNote } from '../../agent-system/observatory/development-notes.mjs';
 
 const hash = v => typeof v==='string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(v);
@@ -42,7 +43,17 @@ export function sanitizeExport({ repository, records=[], events=[] }) {
     case 'attempt': return {...base,...pick(r,['attempt_number','state','started_at','finished_at','provider','model','failure_category'])};
     case 'telemetry': return {...base,...pick(r,['phase','observed_at']),measurements:r.measurements.map(sanitizeMeasurement)};
     // Evidence artifacts may contain sensitive local paths. Only hashed identifiers exported.
-    case 'evidence': return {...base,...pick(r,['criterion_id','kind','result','observed_at','synthetic']),artifact:{kind:'artifact',uri:'private-artifact:'+r.id,...hash(r.artifact?.revision)?{revision:r.artifact.revision}:{}}};
+    case 'evidence': {
+      const evidence = {...base,...pick(r,['criterion_id','kind','result','observed_at','synthetic']),
+        artifact:{kind:'artifact',uri:'private-artifact:'+r.id,...hash(r.artifact?.revision)?{revision:r.artifact.revision}:{}}};
+      if(r.matched_benchmark!==undefined) {
+        if(!validMatchedBenchmark(r.matched_benchmark))throw Error('Invalid matched benchmark evidence');
+        // Accept legacy receipt paths on input and omit them from the projection.
+        const {artifact_path,...matched_benchmark}=r.matched_benchmark;
+        evidence.matched_benchmark=matched_benchmark;
+      }
+      return evidence;
+    }
     case 'context_snapshot': return {...base,...pick(r,['generated_at','freshness','task_digest']),requirements:(r.requirements||[]).map(safeRef),components:(r.components||[]).map((c,index)=>({name:'component_'+index,owner_ref:safeRef(c.owner_ref,index)}))};
     case 'verification_profile': return {...base,...pick(r,['profile_id','task_classes','blocking_policy']),checks:r.checks.map(c=>({...pick(c,['id','required','manual_approval']),procedure:'Private procedure withheld'}))};
     default: throw Error('Unsupported export record');
@@ -82,6 +93,8 @@ export function validateExport(e) {
  if(r.task_digest!==undefined&&!/^[a-f0-9]{64}$/.test(r.task_digest))throw Error('Invalid Task digest');
  if(r.attempt_number!==undefined&&(!Number.isInteger(r.attempt_number)||r.attempt_number<1))throw Error('Invalid Attempt number');
  if(r.synthetic!==undefined&&typeof r.synthetic!=='boolean')throw Error('Invalid evidence synthetic flag');
+ if(r.matched_benchmark!==undefined&&(r.record_type!=='evidence'||r.kind!=='benchmark'||
+    r.synthetic!==false||!validMatchedBenchmark(r.matched_benchmark)))throw Error('Invalid matched benchmark evidence');
  if(r.schema_version!==1||r.repository!==e.repository||!token(r.id)||!['task','attempt','telemetry','evidence','context_snapshot','verification_profile'].includes(r.record_type)) throw Error('Invalid record');
  if(r.prerequisites?.task_ids?.some(id=>!token(id))) throw Error('Unsafe dependency identifier');
  const classes=['bug','feature','visual','backend','performance','security','research','documentation','maintenance','integration'];
