@@ -85,7 +85,7 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
     operation_id: action.operation_id, digest, actor: 'authenticated-owner', target_kind: 'proposal', target_id: id,
     expected_version: row.version, version, type: action.type, status: 'applied', at: new Date().toISOString(),
     ...(action.type === 'edit' ? { fields:[
-      ...['title','objective','classification','prerequisites','requirements','acceptance'].filter(key =>
+      ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
         JSON.stringify(task[key]) !== JSON.stringify(updated[key])),
       ...(priority!==row.priority?['priority']:[]),
     ] } : {}),
