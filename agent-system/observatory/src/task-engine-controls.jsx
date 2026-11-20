@@ -6,12 +6,12 @@ import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision, taskTokenRows } from './task-engine-client.mjs';
 
 const actionLabels = {
-  admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
+  configure_execution:'Edit execution settings', admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
   archive:'Archive Task', reopen:'Reopen with feedback', accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
-const actionIcons = { admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
+const actionIcons = { configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
   archive:Archive, reopen:RotateCcw, reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
-const actionHints = { admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
+const actionHints = { configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
   resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
   reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
   archive:'Move the Task out of active views', reopen:'Queue a new attempt with owner feedback', supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
@@ -19,6 +19,12 @@ const featuredActions = ['admit','resume','accept','reopen','retry','pause'];
 
 const humanize = value => String(value ?? 'unavailable').replaceAll('_', ' ');
 const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
+
+function localStart(value) {
+  if(!Number.isFinite(value)) return '';
+  const date=new Date(value);
+  return new Date(value-date.getTimezoneOffset()*60_000).toISOString().slice(0,16);
+}
 
 export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, Status }) {
   const reduce = useReducedMotion();
@@ -81,13 +87,16 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
     const fields = new FormData(event.currentTarget);
     const change = { type: action };
     try {
-      if (action === 'admit') {
-        change.executor = 'codex';
-        change.cancel_with_dependency = fields.has('cancel_with_dependency');
-        change.prerequisites = fields.getAll('verified_capability');
-        if (fields.has('max_attempt_minutes')) change.max_attempt_minutes = Number(fields.get('max_attempt_minutes'));
-        const date = fields.get('start_at');
-        if (date) change.start_at = new Date(date).toISOString();
+      if (['admit','configure_execution'].includes(action)) {
+        const date=fields.get('start_at');
+        const earlier=action==='configure_execution'?localStart(lifecycle.start_at):'';
+        if(date!==earlier) change.start_at=date?new Date(date).toISOString():null;
+        change.cancel_with_dependency=fields.has('cancel_with_dependency');
+        if(fields.has('max_attempt_minutes')) change.max_attempt_minutes=Number(fields.get('max_attempt_minutes'));
+      }
+      if (action==='admit') {
+        change.executor='codex';
+        change.prerequisites=fields.getAll('verified_capability');
       }
       if (action === 'retry') change.changed_assumption = fields.get('reason');
       if (action === 'reopen') change.feedback = fields.get('feedback');
@@ -140,15 +149,21 @@ export function TaskEngineControls({ detail, publishedIntake, onCommand, tasks, 
     {action && <motion.form key={action} aria-label={actionLabels[action] ?? 'Attest capability'}
       className="form task-command-form" onSubmit={submit} initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}>
       <h3 ref={formHeading} tabIndex={-1}>{actionLabels[action] ?? 'Attest capability'}</h3>
-      {action === 'admit' && <>
-        <p>Admission allows a configured Codex worker to claim this Task once its schedule and prerequisites are satisfied.</p>
-        <label>Start at (local time, optional)<input name="start_at" type="datetime-local"/></label>
+      {['admit','configure_execution'].includes(action)&&<>
+        <p>{action==='admit'
+          ? 'A configured Codex worker can claim this Task once its schedule and prerequisites are satisfied.'
+          : 'Changes apply to the next attempt. A paused Task still needs to be resumed.'}</p>
+        <label>Start at (local time, optional)<input name="start_at" type="datetime-local"
+          defaultValue={action==='configure_execution'?localStart(lifecycle.start_at):''}/>
+          <small>Leave blank to make the Task eligible immediately once prerequisites are satisfied.</small>
+        </label>
         {lifecycle.max_attempt_minutes!=null&&<label>Maximum minutes per attempt
           <input name="max_attempt_minutes" type="number" min={1} max={30} step={1} defaultValue={lifecycle.max_attempt_minutes} required/>
           <small>The worker stops at this limit. Time spent in the queue is excluded.</small>
         </label>}
-        <label className="task-check"><input name="cancel_with_dependency" type="checkbox"/> Cancel if a dependency is cancelled</label>
-        {task.prerequisites.capabilities.map(capability => <label className="task-check" key={capability}>
+        <label className="task-check"><input name="cancel_with_dependency" type="checkbox"
+          defaultChecked={action==='configure_execution'&&lifecycle.cancel_with_dependency}/> Cancel if a dependency is cancelled</label>
+        {action==='admit'&&task.prerequisites.capabilities.map(capability => <label className="task-check" key={capability}>
           <input name="verified_capability" type="checkbox" value={capability}/> Verify {capability}
         </label>)}
       </>}

@@ -2,7 +2,7 @@ const humanize = value => String(value ?? '').replaceAll('_', ' ');
 const detail = (label, value) => value === undefined || value === null || value === '' ? [] : [[label, String(value)]];
 const receiptTitles = {
   register:'Task submitted', publish:'Proposal published', edit:'Task edited', transition:'Proposal state changed',
-  admit:'Task admitted to execution', satisfy:'Prerequisite attested', claim:'Executor claimed Task',
+  configure_execution:'Execution settings changed', admit:'Task admitted to execution', satisfy:'Prerequisite attested', claim:'Executor claimed Task',
   accept:'Task marked complete', reject:'Candidate rejected', retry:'Retry queued', pause:'Pause requested',
   resume:'Task resumed', cancel:'Cancellation requested', archive:'Task archived', reopen:'Task reopened with feedback',
   supersede:'Task superseded', associate:'Delivery reference linked', dependency_cancelled:'Cancelled by dependency',
@@ -40,7 +40,8 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
       href:receipt.reference?.uri, reviewedEvidence:receipt.evidence??[], details:[
         ...detail('Recorded by',receipt.actor),...detail('Task version',receipt.version),...detail('Reason',receipt.reason),
         ...detail('Owner feedback',receipt.feedback),...detail('Scheduled start',receipt.start_at),
-        ...detail('Time limit (minutes)',receipt.max_attempt_minutes),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
+        ...detail('Time limit (minutes)',receipt.max_attempt_minutes),
+        ...detail('Cancel with dependency',receipt.cancel_with_dependency===undefined?null:receipt.cancel_with_dependency?'Enabled':'Disabled'),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
         ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),
         ...detail('Reviewed criteria',receipt.evidence?.length),...detail('Reference type',humanize(receipt.reference?.kind)),
         ...detail('Attempt',receipt.attempt_id),...detail('Operation ID',receipt.operation_id),

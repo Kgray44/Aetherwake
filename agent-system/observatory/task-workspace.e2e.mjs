@@ -271,6 +271,13 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
 
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await page.getByText(/Stored state paused/).waitFor();
+  await page.getByRole('button',{name:'Edit execution settings',exact:true}).click();
+  const settings=page.getByRole('form',{name:'Edit execution settings'});
+  assert.equal(await settings.getByLabel('Start at').inputValue(),'2050-01-01T13:00');
+  await settings.getByLabel('Start at').fill('2050-01-02T13:00');
+  await settings.getByLabel('Maximum minutes per attempt').fill('9');
+  await settings.getByRole('button',{name:'Confirm',exact:true}).click();
+  await page.getByText('9 min',{exact:true}).waitFor();
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await page.getByText(/Stored state queued/).waitFor();
   await page.getByRole('button', { name: 'Cancel Task', exact: true }).click();
@@ -279,9 +286,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByText(/Stored state cancelled/).waitFor();
   await page.reload();
   await page.getByText(/Stored state cancelled/).waitFor();
-  await page.getByText('7 min',{exact:true}).waitFor();
+  await page.getByText('9 min',{exact:true}).waitFor();
   detail = await send({ op: 'get', task_id: id });
-  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'resume', 'cancel']);
+  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'configure_execution', 'resume', 'cancel']);
   assert.equal(detail.task.owner_acceptance, 'not_reviewed');
 
   const execution = await send({ op: 'register', operation_id: crypto.randomUUID(), fields: {
