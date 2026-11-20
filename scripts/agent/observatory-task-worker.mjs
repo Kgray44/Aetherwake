@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, open, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readdir, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
-import { readObservatoryConnection } from './observatory-sync.mjs';
+import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory-sync.mjs';
 
 const runFile = promisify(execFile);
 const verificationId = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -48,6 +48,12 @@ async function existingPrivateDirectory(path) {
     if (error.code !== 'ENOENT') throw error;
     return false;
   }
+}
+
+async function workerTelemetryDirectory(root, taskId, workspace) {
+  const current = join(root,'.aads-observatory',taskId);
+  const legacy = join(workspace??join(root,taskId),'.git','agent-harness');
+  return !await existingPrivateDirectory(current) && await existingPrivateDirectory(legacy) ? legacy : current;
 }
 
 function gitProvisioningIdentity(settings) {
@@ -505,6 +511,29 @@ async function main(configPath) {
   }
   const send = request => call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
   const managedConnection = { call:args => call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
+  let recoveryCursor = 0;
+  let nextRecovery = 0;
+  async function recoverIdleTelemetry() {
+    if (active.size || signal.aborted || Date.now()<nextRecovery) return;
+    nextRecovery=Date.now()+60_000;
+    const locations=[root,join(root,'.aads-observatory')];
+    const entries=await Promise.all(locations.map(path=>readdir(path,{withFileTypes:true}).catch(error=>{
+      if (error.code==='ENOENT') return [];
+      throw error;
+    })));
+    const taskIds=[...new Set([...workspaces.keys(),...entries.flat().filter(entry=>entry.isDirectory()&&
+      taskIdPattern.test(entry.name)).map(entry=>entry.name)])].filter(id=>!scope||scope.includes(id)).sort();
+    for (let scanned=0;scanned<Math.min(taskIds.length,4)&&!signal.aborted;scanned++) {
+      const taskId=taskIds[recoveryCursor++%taskIds.length];
+      const telemetryDirectory=await workerTelemetryDirectory(root,taskId,workspaces.get(taskId));
+      try {
+        if (await recoverWorkerTelemetry({taskId,telemetryDirectory,verification,connector:managedConnection})) break;
+      } catch {
+        console.error('A saved Task telemetry delivery is still pending.');
+        break;
+      }
+    }
+  }
   try {
     while (!signal.aborted) {
       if (active.size < 2) {
@@ -518,10 +547,7 @@ async function main(configPath) {
           if (result.claim && !signal.aborted) {
             const workspace = workspaces.get(result.claim.task.id);
             const taskId = result.claim.task.id;
-            const newTelemetry = join(root,'.aads-observatory',taskId);
-            const legacyTelemetry = join(workspace??join(root,taskId),'.git','agent-harness');
-            const telemetryDirectory = !await existingPrivateDirectory(newTelemetry) &&
-              await existingPrivateDirectory(legacyTelemetry) ? legacyTelemetry : newTelemetry;
+            const telemetryDirectory = await workerTelemetryDirectory(root,taskId,workspace);
             const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
               verificationNamespace:verification ?? null,managedConnection,telemetryDirectory,
               ...(config.executor_transport==='app_server' ? {
@@ -540,6 +566,7 @@ async function main(configPath) {
             active.add(job);
             continue;
           }
+          await recoverIdleTelemetry();
         } catch (error) {
           if (error.status === 403 || error.status === 404) throw Error('Hosted Task worker is not configured or authorized');
           if (error.status !== 409) console.error('Worker admission or Task connection unavailable. Waiting.');

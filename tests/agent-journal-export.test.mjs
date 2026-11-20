@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { projectJournal } from '../scripts/agent/export-journal.mjs';
 import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
-import { journalDelivery, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
+import { journalDelivery, recoverWorkerTelemetry, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
 import { applyTelemetryDelta } from '../agent-system/observatory/telemetry-delta.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
 import { recordEngineeringActivity } from '../scripts/agent/record-engineering-activity.mjs';
@@ -262,6 +262,47 @@ test('managed telemetry can deliver for a new checkout using the admitted worker
   assert.equal(receipt?.error,null);
   assert.equal(receipt.events,1);
   assert.deepEqual(baseline?.projection.events.map(item=>item.event_id),[event.event_id]);
+});
+
+test('idle worker replays pending telemetry and flushes later journal entries without another claim',async t=>{
+  const {task,attempt,root:telemetryDirectory}=await fixture(t);
+  const journal=join(telemetryDirectory,'claimed-execution.journal');
+  const directory=join(telemetryDirectory,'observatory-sync');
+  const first=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,first);
+  let online=false, projection=null, receipt=null;
+  const updates=[];
+  const connector={async call({task_id,change,verification}) {
+    assert.equal(task_id,task.id);
+    assert.equal(verification,undefined);
+    if (!change) return {baseline:receipt&&{...receipt,projection}};
+    updates.push(change);
+    if (!online) throw Error('Site unavailable');
+    assert.equal(change.base,receipt?.digest??null);
+    projection=applyTelemetryDelta(projection,change);
+    receipt={digest:createHash('sha256').update(JSON.stringify(projection)).digest('hex'),
+      records:projection.records.length,events:projection.events.length,generated_at:projection.generated_at,
+      received_at:new Date().toISOString()};
+    return receipt;
+  }};
+  const delivery=await startObservatorySync({task,journal,directory,managedConnection:connector});
+  assert.equal((await delivery.finish()).error,'delivery_unavailable');
+  const pending=updates[0];
+  const preserved=updates.length;
+  online=true;
+  const second=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,second);
+  const recover=options=>recoverWorkerTelemetry({taskId:task.id,telemetryDirectory,connector,...options});
+  assert.equal(await recover({verification:'11111111-1111-4111-8111-111111111111'}),null);
+  assert.equal((await recover()).events,2);
+  assert.deepEqual(updates[preserved],pending);
+  assert.deepEqual(updates[preserved+1].events.map(entry=>entry.event_id),[second.event_id]);
+  assert.equal(await recover(),null);
+  assert.equal(updates.length,preserved+2);
+  const third=traceEvent({task,attemptId:attempt.id,kind:'measurement'});
+  await appendEvent(journal,third);
+  assert.equal((await recover()).events,3);
+  assert.deepEqual(updates.at(-1).events.map(entry=>entry.event_id),[third.event_id]);
 });
 
 test('CLI reconstructs latest Attempts and retains incomplete spans across Task revisions', async t => {

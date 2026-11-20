@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -149,7 +149,7 @@ export function journalDelivery({ task, journal, statePath, connector, verificat
       sent_records: change?.records.length ?? 0, sync_ms: Math.round(performance.now() - started), prepare_ms: Math.round(scanMs),
       newest_event_delivery_ms: newestEvent ? Date.parse(baseline.received_at) - Date.parse(newestEvent) : null,
       source_generated_at: baseline?.projection.generated_at ?? null, error: null };
-    await persist({ baseline, status });
+    await persist({ baseline, status, journal_stamp:nextStamp });
     stamp = nextStamp;
     previousScan = now;
     return status;
@@ -163,6 +163,31 @@ export async function readObservatoryConnection(directory) {
     throw Error('Invalid Observatory connection');
   }
   return config;
+}
+
+export async function recoverWorkerTelemetry({taskId, telemetryDirectory, verification, connector}) {
+  if (!identity(taskId) || (verification !== undefined && (typeof verification!=='string'||!uuid.test(verification)))) {
+    throw Error('Invalid recovery Task or namespace');
+  }
+  const journal = resolve(telemetryDirectory,'claimed-execution.journal');
+  const directory = join(telemetryDirectory,'observatory-sync');
+  const queue = join(directory,verification??'live');
+  try {
+    if (await realpath(queue)!==queue || await realpath(journal)!==journal) return null;
+  } catch (error) { if (error.code==='ENOENT') return null; throw error; }
+  const config = await readObservatoryConnection(directory);
+  if (config && config.verification!==verification) return null;
+  const name = key(JSON.stringify([taskId,journal]));
+  const source = await jsonFile(join(queue,name+'.source'));
+  if (source?.task?.id!==taskId || source.task.repository!=='Kgray44/Aetherwake' ||
+      source.journal!==journal || source.activityOnly) return null;
+  const statePath=join(queue,name+'.state');
+  const checkpoint=await jsonFile(statePath);
+  if (!checkpoint?.pending && checkpoint?.journal_stamp===await journalStamp(journal)) return null;
+  const synchronize=journalDelivery({task:source.task,journal,statePath,connector,verification});
+  const status=await synchronize({force:true});
+  await save(join(queue,name+'.status'),status);
+  return status;
 }
 
 export async function startObservatorySync({ task, journal, directory = observatoryDirectory(), verificationNamespace,

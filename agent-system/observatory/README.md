@@ -128,6 +128,8 @@ Use the same workspaces and Codex session storage when restarting a paused execu
 
 Fresh App Server executors publish up to one cumulative usage snapshot every 15 seconds, capped at 16 snapshots per turn. The Task view and PDF show the latest snapshot until a final receipt is available. Task totals use final receipts. The worker leaves resumed-thread attribution unavailable because the provider counter includes earlier turns.
 
+After a restart or a temporary delivery failure, an idle worker revisits journals in its configured Task scope once a minute. It reuses the saved upload and then syncs newer journal entries. It skips unchanged checkpoints and uses the existing authenticated telemetry connection.
+
 The subprocess integration test executes real artifact-producing steps with an explicit test executor. It proves queueing and evidence transitions across separate checkouts. Verify the hosted MCP deployment, owner controls and signed-in Codex provider execution independently before production acceptance.
 
 ### CI controls
