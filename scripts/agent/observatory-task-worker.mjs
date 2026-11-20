@@ -55,7 +55,61 @@ function termination(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
+const trialCatalogMaxAge = 24 * 60 * 60 * 1000;
+
+export function validateVerificationRoute({ config, catalog, version, verification, now = Date.now() }) {
+  if (typeof verification !== 'string' || !verificationId.test(verification)) {
+    throw Error('A pinned model route requires an isolated verification namespace');
+  }
+  const { model, effort } = config ?? {};
+  if (typeof model !== 'string' || !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(model) ||
+      typeof effort !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(effort)) {
+    throw Error('Invalid verification model or effort');
+  }
+  const fetched = Date.parse(catalog?.fetched_at);
+  if (!version || catalog?.client_version !== version || !Number.isFinite(fetched) ||
+      !Number.isFinite(now) || now < fetched || now >= fetched + trialCatalogMaxAge) {
+    throw Error('A fresh catalog for this Codex client is required');
+  }
+  const candidates = Array.isArray(catalog.models) ? catalog.models.filter(item => item?.slug === model) : [];
+  const levels = candidates.length === 1 ? candidates[0].supported_reasoning_levels : null;
+  if (!Array.isArray(levels) || !levels.some(level => level?.effort === effort)) {
+    throw Error('The selected model and effort are not listed together in this catalog');
+  }
+  return { model, effort, clientVersion:version, expiresAt:fetched+trialCatalogMaxAge };
+}
+
+async function loadVerificationRoute(config, executable, verification) {
+  if (!config || typeof config.catalog_path !== 'string' || !isAbsolute(config.catalog_path)) {
+    throw Error('Verification model route requires an absolute catalog_path');
+  }
+  const file = await open(config.catalog_path, 'r');
+  let catalog;
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size > 8 * 1024 * 1024) throw Error('Verification catalog exceeds its file limit');
+    catalog = JSON.parse(await file.readFile('utf8'));
+  } finally {
+    await file.close();
+  }
+  const env = { ...process.env };
+  delete env.AADS_TASK_WORKER_KEY;
+  const { stdout } = await runFile(executable, ['--version'], {
+    env,windowsHide:true,timeout:5000,maxBuffer:4096,
+  });
+  const version = /^codex-cli ([^\s]+)$/.exec(stdout.trim())?.[1];
+  return validateVerificationRoute({config,catalog,version,verification});
+}
+
+export function buildCodexArgs(cwd, attempt, trialRoute) {
+  return [
+    '--ask-for-approval', 'never', 'exec', '--ignore-user-config', '--sandbox', 'workspace-write', '--cd', cwd, '--json',
+    ...(trialRoute ? ['--model', trialRoute.model, '--config', 'model_reasoning_effort=' + JSON.stringify(trialRoute.effort)] : []),
+    ...(attempt.resume_session_id ? ['resume', attempt.resume_session_id] : []), '-',
+  ];
+}
+
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal, trialRoute }) {
   const prompt = [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
@@ -67,10 +121,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   ].join('\n');
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
-  const args = [
-    '--ask-for-approval', 'never', 'exec', '--ignore-user-config', '--sandbox', 'workspace-write', '--cd', cwd, '--json',
-    ...(attempt.resume_session_id ? ['resume', attempt.resume_session_id] : []), '-',
-  ];
+  const args = buildCodexArgs(cwd, attempt, trialRoute);
   if (signal.aborted) return { ok: false, stopped: true };
   const child = spawn(executable, args, {
     cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'ignore'],
@@ -102,7 +153,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
-  verificationNamespace, interval = 12_000 }) {
+  verificationNamespace, trialRoute, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -143,6 +194,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   try {
+    if (trialRoute && (!verificationId.test(verificationNamespace ?? '') || trialRoute.expiresAt <= Date.now())) {
+      throw Error('Claim has no current isolated model route');
+    }
     await admitStorage();
     identity = await identify(workspace, attempt.revision);
     lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
@@ -164,7 +218,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     outcome = await execute({ executable, cwd: workspace, task, attempt,
       onSession: value => { sessionId = value; },
       onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
-      signal: workerSignal });
+      signal: workerSignal, trialRoute });
   } catch {
     outcome = { ok: false };
   } finally {
@@ -233,6 +287,8 @@ async function main(configPath) {
   if (verification !== undefined && (typeof verification !== 'string' || !verificationId.test(verification))) {
     throw Error('Worker verification must be a namespace UUID');
   }
+  const trialRoute = config.verification_route === undefined ? undefined :
+    await loadVerificationRoute(config.verification_route, config.codex_bin, verification);
   const root = await realpath(config.workspace_root);
   const workspaces = new Map();
   for (const [id, path] of Object.entries(config.workspaces)) {
@@ -245,6 +301,7 @@ async function main(configPath) {
     workspaces.set(id, workspace);
   }
   if (!workspaces.size || workspaces.size > 500) throw Error('Worker requires 1 to 500 Task workspace mappings');
+  if (trialRoute) console.info('Configured verification model route ' + JSON.stringify(trialRoute));
 
   const controller = new AbortController();
   for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => controller.abort());
@@ -263,6 +320,11 @@ async function main(configPath) {
   }
   try {
     while (!signal.aborted) {
+      if (trialRoute && trialRoute.expiresAt <= Date.now()) {
+        console.error('Verification model catalog expired; no further claims will start.');
+        await Promise.all(active);
+        break;
+      }
       if (active.size < 2) {
         try {
           await admitStorage();
@@ -274,7 +336,7 @@ async function main(configPath) {
           if (result.claim && !signal.aborted) {
             const workspace = workspaces.get(result.claim.task.id);
             const job = runClaim({ claim: result.claim, send, workspace, executable: config.codex_bin, signal,
-              verificationNamespace: verification ?? null,
+              verificationNamespace: verification ?? null, trialRoute,
               admitStorage: async () => {
                 await admitStorage();
                 await checkWorkspaceTelemetryScope(workspace, verification);
