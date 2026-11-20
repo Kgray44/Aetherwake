@@ -335,6 +335,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.getByText('Task complete',{exact:true}).waitFor();
+  const matrix=page.getByRole('region',{name:'Task acceptance criteria'});
+  await matrix.getByText('owner accepted',{exact:true}).waitFor();
+  assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
   assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
     document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
   const jump=page.getByRole('navigation',{name:'Jump to Task section'});
@@ -435,11 +438,13 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('button',{name:'Archive Task'}).click();
   await page.getByRole('form',{name:'Archive Task'}).getByRole('button',{name:'Confirm'}).click();
   await page.getByText(/Task archived · Owner accepted/).waitFor();
+  await matrix.getByText('owner accepted',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Reopen with feedback'}).click();
   const feedback=page.getByRole('form',{name:'Reopen with feedback'});
   await feedback.getByLabel('Feedback for the next attempt').fill('Include the second verification result.');
   await feedback.getByRole('button',{name:'Confirm'}).click();
   await page.getByText(/Stored state queued/).waitFor();
+  await matrix.getByText('unverified',{exact:true}).waitFor();
   await timeline.getByRole('button',{name:'Audit',exact:true}).click();
   await timeline.getByRole('button',{name:/Task reopened with feedback/}).click();
   await selected.getByText('Include the second verification result.').waitFor();
