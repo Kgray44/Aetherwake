@@ -7,6 +7,7 @@ import { taskReportDefinition } from './src/task-report.mjs';
 import { executionTiming } from './src/execution-timing.mjs';
 import { loadedSessionUsage, taskUsageAccounting } from './src/task-usage-accounting.mjs';
 import { taskDataCoverage } from './src/task-data-coverage.mjs';
+import { taskExecutionDiagnostics } from './src/task-execution-diagnostics.mjs';
 import { traceTimeline } from './src/trace-timeline.mjs';
 
 test('linked work before and after execution is shared by the chronology and report', () => {
