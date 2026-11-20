@@ -413,7 +413,6 @@
       "additionalProperties": false,
       "required": [
         "source_revision",
-        "artifact_path",
         "artifact_sha256",
         "provider",
         "model",

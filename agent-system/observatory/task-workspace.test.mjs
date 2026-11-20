@@ -195,16 +195,28 @@ test('matched receipt evidence yields the same private comparison in diagnostics
   };
   const projection=sanitizeExport({repository:task.repository,records:[record]});
   assert.equal(projection.records[0].artifact.uri,'private-artifact:evidence_pair');
-  assert.deepEqual(projection.records[0].matched_benchmark,record.matched_benchmark);
+  const {artifact_path,...reportedPair}=record.matched_benchmark;
+  assert.deepEqual(projection.records[0].matched_benchmark,reportedPair);
+  assert.deepEqual(sanitizeExport(projection).records,projection.records);
   const diagnostics=records=>taskExecutionDiagnostics({task,attempts:[attempt],trace:{spans:[]},tokens:[],records});
   const [pair]=diagnostics(projection.records).comparisons;
   assert.deepEqual(pair.rows.find(row=>row[0]==='Uncached input tokens'),['Uncached input tokens','80','82','+2']);
   assert.deepEqual(pair.rows.at(-1),['Billing','Unknown','Unknown','Unknown']);
+  assert.match(pair.summary,/reported.*byte identity.*unverified/i);
+  assert.deepEqual(pair.provenance.find(([label])=>label==='Reported evidence result'),['Reported evidence result','Inconclusive']);
   const report=taskReportDefinition({task,attempts:[attempt],records:projection.records});
   assert.ok(report.content.some(block=>block.table?.body.slice(1).some(row=>JSON.stringify(row)===JSON.stringify(pair.rows.at(-1)))));
   const reportText=JSON.stringify(report.content);
   for(const [,value] of pair.provenance) assert.ok(reportText.includes(value));
-  assert.equal(diagnostics([{...record,revision:'c'.repeat(40)}]).comparisons.length,0);
+  assert.doesNotMatch(reportText,/Verified artifact|matched benchmark \/|reports\/result\.md/);
+  const mismatched={...record,id:'evidence_mismatched_pair',revision:'c'.repeat(40),
+    matched_benchmark:{...record.matched_benchmark,artifact_sha256:'d'.repeat(64)}};
+  assert.equal(diagnostics([mismatched]).comparisons.length,0);
+  const rejectedReport=JSON.stringify(taskReportDefinition({task,attempts:[attempt],records:[mismatched]}).content);
+  assert.match(rejectedReport,/evidence_mismatched_pair/);
+  assert.match(rejectedReport,/inconclusive/);
+  for(const omitted of ['Standard vs compact benchmark',mismatched.matched_benchmark.artifact_sha256,
+    mismatched.matched_benchmark.standard.receipt_sha256,artifact_path]) assert.ok(!rejectedReport.includes(omitted),omitted);
   const unsafe={...record,matched_benchmark:{...record.matched_benchmark,artifact_path:'../result.md'}};
   assert.equal(diagnostics([unsafe]).comparisons.length,0);
   assert.throws(()=>sanitizeExport({repository:task.repository,records:[unsafe]}),/Invalid matched benchmark/);
