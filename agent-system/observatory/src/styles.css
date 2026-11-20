@@ -397,6 +397,7 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-kind { color:var(--accent); font-size:.78rem; }
 .task-timeline-measurements { padding-left:1rem; }
 @media(max-width:840px) { .task-timeline-grid { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:800px) { .app-shell { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:460px) {
   .task-timeline-list { --time-col:4.15rem; --node-col:1.8rem; --event-gap:.48rem; }
   .task-timeline-event { grid-template-columns:var(--time-col) var(--node-col) minmax(0,1fr); }

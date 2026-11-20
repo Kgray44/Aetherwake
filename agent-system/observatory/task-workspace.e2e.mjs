@@ -454,6 +454,15 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await timeline.getByRole('button',{name:'Filters (1)',exact:true}).click();
   await timeline.getByRole('button',{name:'Clear filters'}).click();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({width:360,height:820});
+  await filterToggle.click();
+  const inputBounds = await search.boundingBox();
+  const filterBounds = await filterToggle.boundingBox();
+  assert.ok(inputBounds.x>=0 && inputBounds.width>=90 && filterBounds.x+filterBounds.width<=360);
+  assert.ok(await timeline.locator('#timeline-filter-fields').evaluate(element=>element.scrollWidth<=element.clientWidth+1));
+  await filterToggle.click();
+  await page.setViewportSize(originalViewport);
   await search.fill('no such timeline event');
   await timeline.getByText('No events match these filters.').waitFor();
   await search.fill('fixture-receipt-trace');
