@@ -247,6 +247,37 @@ function workerChange(lifecycle, body, now) {
   return failure(409, 'Report conflicts with current Task state');
 }
 
+export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
+  const query = (sql, ...args) => db.prepare(sql).bind(...args);
+  const result = await query('SELECT * FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC',
+    owner, namespace).all();
+  return Promise.all(result.results.map(async row => {
+    if (!row.engine) return row;
+    const lifecycle = details(row);
+    const attempt = lifecycle.attempts.at(-1);
+    if (attempt?.state !== 'running' || attempt.lease_until > now) return row;
+
+    attempt.state = 'orphaned';
+    attempt.failure = 'Executor lease expired. Reconcile possible effects before retrying.';
+    attempt.finished_at = timestamp(now);
+    lifecycle.state = 'failed';
+    const version = row.version + 1;
+    lifecycle.event = {
+      operation_id: crypto.randomUUID(), digest: 'scheduler', kind: 'lease_expired', actor: 'scheduler',
+      version, state: 'failed', at: timestamp(now), attempt_id: attempt.id,
+    };
+    const next = { ...row, record: JSON.stringify({ ...record(row), state: 'failed' }), engine: JSON.stringify(lifecycle), version };
+    const updated = await query(
+      'UPDATE proposals SET record = ?, engine = ?, version = ? WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ?',
+      next.record, next.engine, version, owner, namespace, row.task_id, row.version,
+    ).run();
+    // A late heartbeat or another reader may have advanced the row first.
+    return Number(updated.meta.changes) === 1 ? next : await query(
+      'SELECT * FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?', owner, namespace, row.task_id,
+    ).first();
+  }));
+}
+
 export async function taskOperation({ db, owner, namespace, body, access, validate, revision, now = Date.now() }) {
   if (!body || !['list', 'get', 'register', 'command', 'claim', 'report'].includes(body.op)) return failure(400, 'Invalid Task operation');
   if (['claim', 'report'].includes(body.op) && access !== 'worker') return failure(403, 'Executor authorization required');
@@ -256,8 +287,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   if (['get', 'command', 'report'].includes(body.op) && !taskId(body.task_id)) return failure(400, 'Invalid Task ID');
 
   const query = (sql, ...args) => db.prepare(sql).bind(...args);
-  const rows = new Map((await query('SELECT * FROM proposals WHERE owner_id = ? AND namespace = ?', owner, namespace)
-    .all()).results.map(row => [row.task_id, row]));
+  const rows = new Map((await readTaskRows({ db, owner, namespace, now })).map(row => [row.task_id, row]));
   const currentRow = rows.get(body.task_id);
   const receipts = id => query('SELECT event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND task_id = ? ORDER BY version',
     owner, namespace, id).all();
@@ -354,17 +384,6 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   }
 
   if (body.op === 'claim') {
-    for (const row of rows.values()) {
-      const lifecycle = details(row);
-      const attempt = lifecycle.attempts.at(-1);
-      if (attempt?.state === 'running' && attempt.lease_until <= now) {
-        attempt.state = 'orphaned';
-        attempt.failure = 'Executor lease expired. Reconcile possible effects before retrying.';
-        attempt.finished_at = timestamp(now);
-        lifecycle.state = 'failed';
-        if (!await save(row, record(row), lifecycle, { kind: 'lease_expired', id: crypto.randomUUID(), eventDigest: 'scheduler', attemptId: attempt.id })) return conflict();
-      }
-    }
     const running = [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running');
 
     const admitted = [...rows.values()].filter(row => row.engine && details(row).executor === 'codex' &&
