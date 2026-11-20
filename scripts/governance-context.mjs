@@ -232,9 +232,55 @@ export function formatContext(result) {
     out.push("## REFERENCED NORMATIVE DEPENDENCIES");
     for(const d of result.dependencies)out.push("### "+d.id+" | "+d.path+":"+d.line+" | "+d.authority,d.text,"");
   }
+  appendContextDiagnostics(out, result);
+  return out.join("\n");
+}
+
+function appendContextDiagnostics(out, result) {
   if(result.missing.length)out.push("## UNAVAILABLE CHARTERS",...result.missing.map(x=>x.id+" "+x.path));
   if(result.warnings.length)out.push("## WARNINGS",...result.warnings);
   out.push("The excerpts are scoped context, not a replacement for the canonical governing files. Expand source sections when scope or ambiguity requires it.");
+}
+
+export function formatCompactContext(result) {
+  const sources = new Map();
+  for (const item of [...result.selected, ...result.normative, ...result.dependencies]) {
+    const prior = sources.get(item.path);
+    if (prior) {
+      if (prior.authority !== item.authority || prior.hash !== item.documentSha256) {
+        throw new Error("Inconsistent provenance for " + item.path);
+      }
+    } else {
+      sources.set(item.path, {key:"S" + (sources.size + 1), authority:item.authority, hash:item.documentSha256});
+    }
+  }
+
+  const out = [
+    "# Governance Context Router V2",
+    "Task: " + (result.task || "(requirement/path request)"),
+    "Authority: Constitution binding; other charters retain the registry's published status.",
+    "Estimated tokens (not actual): " + result.metrics.estimatedTokens,
+    "Source fingerprint: " + result.indexFingerprint,
+    "",
+    "## Source documents",
+    "Citations use the source key and one-based line number. SHA-256 pins the full document.",
+  ];
+  for (const [path, {key,authority,hash}] of sources) out.push(key + " " + path + " | " + authority + " | sha256 " + hash);
+  out.push("");
+  for (const entry of result.selected) {
+    const source = sources.get(entry.path).key;
+    out.push("## " + source + ":" + entry.range.join("-") + " | " + entry.mode + " | section sha256 " + entry.sha256,
+      "Reason: " + entry.reason.join("; "), "", entry.text, "");
+  }
+  for (const [title, entries] of [
+    ["REMAINING NORMATIVE REQUIREMENTS FROM SELECTED CHARTERS", result.normative],
+    ["REFERENCED NORMATIVE DEPENDENCIES", result.dependencies],
+  ]) {
+    if (!entries.length) continue;
+    out.push("## " + title, "");
+    for (const entry of entries) out.push("### " + sources.get(entry.path).key + ":" + entry.line + " " + entry.id, entry.text, "");
+  }
+  appendContextDiagnostics(out, result);
   return out.join("\n");
 }
 
@@ -256,6 +302,7 @@ function parseCli(argv) {
       }
     }else if(a==="--full")args.forceFull=true;
     else if(a==="--json")args.json=true;
+    else if(a==="--compact")args.compact=true;
     else if(a==="--index")args.emitIndex=true;
     else if(a==="--help"||a==="-h")args.help=true;
     else throw new Error("Unknown argument: "+a);
@@ -264,7 +311,8 @@ function parseCli(argv) {
 }
 function run(argv) {
   const a=parseCli(argv);
-  if(a.help){console.log("Usage: node scripts/governance-context.mjs --task \"DESCRIPTION\" [--path FILE ...] [--requirement AW-ID ...] [--max-sections N] [--budget-tokens N] [--full] [--json] [--index]\nDefault: full Constitution, selected complete charter sections, one-hop normative ID dependencies. --full loads entire routed documents. --index emits the live source index.");return;}
+  if(a.help){console.log("Usage: node scripts/governance-context.mjs --task \"DESCRIPTION\" [--path FILE ...] [--requirement AW-ID ...] [--max-sections N] [--budget-tokens N] [--full] [--compact | --json] [--index]\nDefault: full Constitution, selected complete charter sections, one-hop normative ID dependencies. --full loads entire routed documents. --index emits the live source index.");return;}
+  if (a.compact && (a.json || a.emitIndex)) throw new Error("--compact is only available for Markdown output");
   const config=JSON.parse(read("config/governance-routes.json")),registry=parseRegistry(read("governance/README.md"));
   const index=buildGovernanceIndex(config,registry);
   if(a.emitIndex){
@@ -273,7 +321,7 @@ function run(argv) {
   }
   const {task,paths,requiredIds,maxSections,budgetTokens,forceFull}=a;
   const result=buildContext({config,registry,index,task,paths,requiredIds,maxSections,budgetTokens,forceFull});
-  console.log(a.json?JSON.stringify(result,null,2):formatContext(result));
+  console.log(a.json ? JSON.stringify(result,null,2) : a.compact ? formatCompactContext(result) : formatContext(result));
   if(result.coverage.missingRequired.length)process.exitCode=3;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
