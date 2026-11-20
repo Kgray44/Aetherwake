@@ -1,4 +1,4 @@
-import { readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
+import { isTaskWorkerKey, readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
@@ -63,11 +63,15 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       let body;
       try { body = JSON.parse(await readBounded(request.body, 64 * 1024)); }
       catch (cause) { return error('Invalid Task request', cause instanceof RangeError ? 413 : 400); }
-      const result = await taskOperation({
-        db: env.DB, owner, namespace, body, validate, revision: () => taskRevision(env),
-        access: owner === env.OBSERVATORY_TASK_ENGINE_OWNER_ID ? 'owner' : 'agent',
+      const access=owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID?'owner':'agent';
+      const result=await taskOperation({
+        db:env.DB,owner,namespace,body,validate,revision:()=>taskRevision(env),access,
       });
-      return json(result.body, result.status);
+      if (body.op==='list'&&result.status===200&&access==='owner') {
+        const codex=isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY)?'configured':'not_configured';
+        return json({...result.body,executor_access:{codex}});
+      }
+      return json(result.body,result.status);
     }
 
     if (ciActions) {

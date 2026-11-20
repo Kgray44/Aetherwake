@@ -149,6 +149,21 @@ test('cached-first overview serves private Tasks without making an upstream requ
   assert.ok(requests.length>before);
 });
 
+test('only the owner sees whether a Codex executor credential is configured',async t=>{
+  const path='/api/task-engine/v1';
+  const headers={...ownerHeader,origin,'content-type':'application/json'};
+  const read=(call,identity={})=>call(path,{method:'POST',headers:{...headers,...identity},body:JSON.stringify({op:'list'})});
+  const key='worker-test-only-credential-value-000000';
+  const enabled=fixture(t,{taskKey:key});
+  const configured=await (await read(enabled.call)).text();
+  assert.deepEqual(JSON.parse(configured).executor_access,{codex:'configured'});
+  assert.equal(configured.includes(key),false);
+  const unauthorized=await (await read(enabled.call,{'oai-authenticated-user-id':'owner-2'})).json();
+  assert.equal(unauthorized.executor_access,undefined);
+  const disabled=fixture(t);
+  assert.deepEqual((await (await read(disabled.call)).json()).executor_access,{codex:'not_configured'});
+});
+
 test('private proposal control applies one versioned edit, fences concurrent writes and isolates owners', async t => {
   const { call, post } = fixture(t);
   const { task } = await (await post()).json();

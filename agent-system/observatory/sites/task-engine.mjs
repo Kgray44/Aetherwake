@@ -3,6 +3,7 @@ import { operationId, priorities, proposalControl } from './proposal-controls.mj
 import { sha256 } from './task-telemetry.mjs';
 
 export const taskEnginePath = '/api/task-engine/v1';
+export const isTaskWorkerKey = value => typeof value==='string' && value.length>=32 && value.length<=256;
 const idPattern = /^task_([a-f0-9-]+)$/;
 const taskId = value => typeof value === 'string' && operationId.test(value.match(idPattern)?.[1] ?? '');
 const scopeLimit = 500;
