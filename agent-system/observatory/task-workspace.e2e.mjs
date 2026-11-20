@@ -195,7 +195,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   } });
   let releaseOverview;
   const overviewGate = new Promise(resolve => { releaseOverview = resolve; });
-  await page.route('**/api/overview', async route => {
+  await page.route(url=>url.pathname==='/api/overview', async route => {
     await overviewGate;
     await route.continue();
   });
@@ -208,6 +208,32 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     releaseOverview();
   }
   await page.getByRole('link', { name: /Canonical prerequisite.*Manage/ }).waitFor();
+  await page.unroute(url=>url.pathname==='/api/overview');
+  let releaseRepository;
+  const repoGate=new Promise(resolve=>{releaseRepository=resolve;});
+  let repositoryWaiting;
+  const repositoryStarted=new Promise(resolve=>{repositoryWaiting=resolve;});
+  await page.route(url=>url.pathname==='/api/overview',async route=>{
+    if(new URL(route.request().url()).searchParams.get('prefer')==='cached'){
+      const reply=await route.fetch();
+      await route.fulfill({response:reply,json:{...await reply.json(),github_refresh_pending:true}});
+    }else{
+      repositoryWaiting();
+      await repoGate;
+      await route.continue();
+    }
+  });
+  try{
+    await page.reload();
+    await repositoryStarted;
+    await page.getByRole('link',{name:/Canonical prerequisite.*Manage/}).click({timeout:8000});
+    await page.getByRole('heading',{name:'Task Timeline',exact:true}).waitFor({timeout:8000});
+    await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.textContent.trim()==='Export PDF'&&!button.disabled),{},{timeout:8000});
+  }finally{
+    releaseRepository();
+    await page.unroute(url=>url.pathname==='/api/overview');
+  }
+  await page.getByRole('button',{name:'Back to Task Control Center',exact:true}).click();
   await page.getByRole('button', { name: 'Create proposal' }).click();
   await page.getByLabel('Task title').fill('Canonical schedule verification');
   await page.getByLabel('Tangible objective').fill('Use the existing engine API to register, schedule and control a genuine isolated Task.');
@@ -280,6 +306,9 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
   await page.getByText('Task complete',{exact:true}).waitFor();
+  const jump=page.getByRole('navigation',{name:'Jump to Task section'});
+  await jump.getByRole('button',{name:'Timeline',exact:true}).click();
+  await page.waitForFunction(()=>document.activeElement?.textContent==='Task Timeline');
   const timeline=page.getByRole('region',{name:'Task timeline'});
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();

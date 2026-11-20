@@ -276,6 +276,11 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-timeline-event.milestone { border-color:#4b876c; background:#172f2a; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; }
 .task-detail-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.65rem; margin-bottom:1rem; }
+.task-section-nav { display:flex; flex-wrap:wrap; gap:.45rem; margin:0 0 1rem; }
+.task-section-nav .quiet-button { font-size:.78rem; padding:.44rem .65rem; }
+.task-section-nav .quiet-button:hover { border-color:#557587; }
+.panel[id^="task-"] { scroll-margin-top:1rem; }
+.panel[id^="task-"] h2:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
 .task-detail-toolbar .back { margin:0; }
 .task-report-export { display:flex; align-items:center; flex-wrap:wrap; gap:.65rem; }
 .task-report-export button { display:inline-flex; gap:.4rem; align-items:center; }
