@@ -2,6 +2,7 @@ import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-statu
 import { buildTaskTimeline } from './task-timeline.mjs';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
+import { executionTiming,timingLegend } from './execution-timing.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 
@@ -40,6 +41,36 @@ const grid = (headers,rows,widths) => rows.length ? {
   ]}, fontSize:8,
 } : none;
 
+function timingChart(timing) {
+  if (!timing.rows.length) return [none];
+  const width=130, colors={attempt:'#456b9d',trace:'#18788b',engineering:'#906327'};
+  const utc=value=>new Date(value).toISOString();
+  return [
+    {text:timingLegend,style:'muted'},
+    {text:utc(timing.start)+' to '+utc(timing.end),style:'muted',margin:[0,4,0,3]},
+    grid(['Trace coverage (ms)','Overlap within trace spans (ms)','Unavailable timings'],
+      [[timing.coveredMs,timing.overlapMs,timing.unavailable]],['*','*','*']),
+    {layout:'lightHorizontalLines',fontSize:8,table:{headerRows:1,widths:['*',155,width],body:[
+      ['Recorded activity','Source time and elapsed duration','Relative clock axis'].map(text=>({text,bold:true})),
+      ...timing.rows.map(row=>{
+        const marker=row.elapsedMs===null||row.elapsedMs===0;
+        const plottedWidth=marker?2:Math.max(.4,row.width*width);
+        const x=Math.min(row.offset*width,width-plottedWidth);
+        return [
+          {stack:[row.label,{text:row.source,style:'muted'}, ...(row.url?[linkedValue(row.url)]:[])]},
+          {stack:[row.startedAt??utc(row.start),
+            ...(row.kind==='engineering'?[]:[row.end===null?'End unavailable':row.finishedAt??utc(row.end),
+              row.elapsedMs===null?'Elapsed unavailable':row.elapsedMs+' ms elapsed'])]},
+          {canvas:[
+            {type:'rect',x:0,y:3,w:width,h:5,color:'#e1eaf0'},
+            {type:'rect',x,y:3,w:plottedWidth,h:5,color:colors[row.kind]},
+          ]},
+        ];
+      }),
+    ]}},
+  ];
+}
+
 function allocationBar(part, total) {
   if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0 || part < 0 || part > total) return [];
   const width = 300, measured = width * part / total;
@@ -70,6 +101,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
     engineeringEvents:activity.events,telemetrySource});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);
   const trace=traceTimeline(taskEvents);
+  const timing=executionTiming({taskId:task.id,attempts:taskAttempts,spans:trace.spans,linkedEvents:activity.events});
   const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents});
   const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
@@ -132,6 +164,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         const duration=Date.parse(item.finished_at)-Date.parse(item.started_at);
         return [...fields(item),['Elapsed milliseconds',Number.isFinite(duration)&&duration>=0?String(duration):'Unavailable']];
       }),
+      section('Execution timing',timing.rows.length),
+      ...timingChart(timing),
       section('Execution trace and phase timing'),
       {text:'Covered trace milliseconds   '+display(trace.coveredMs)},
       grid(['Phase','Covered milliseconds','Intervals'],trace.phases.map(phase=>[

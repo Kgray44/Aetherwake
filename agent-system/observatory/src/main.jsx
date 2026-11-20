@@ -5,6 +5,7 @@ import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,CircleX,Circl
 import {demoRecords} from './demo-data.js';
 import {observedTaskTraceCoverage} from './trace-timeline.mjs';
 import {ExecutionFeed,TraceWaterfall} from './execution-feed.jsx';
+import {TaskExecutionTiming} from './task-execution-timing.jsx';
 import {useAutomaticTelemetry} from './automatic-telemetry.jsx';
 import {ownerReviewByCriterion} from './evidence-status.mjs';
 import {GitHubFeed} from './github-feed.jsx';
@@ -403,8 +404,11 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   <TaskTelemetry key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts} telemetry={related(current.id,'telemetry')}
     events={(demo?[]:execution?.events??[]).filter(event=>event.task_id===current.id)} records={demo?null:records}/>
 </Suspense></Panel></Rise>}
-{page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution trace">
-  <TraceWaterfall events={(execution?.events??[]).filter(event=>event.task_id===current.id)} fixedTask={current.id}/>
+{page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution timing">
+  <TaskExecutionTiming key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts}
+    events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} github={github}
+    onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/>
+  <details><summary>Raw execution trace</summary><TraceWaterfall events={taskEvents} fixedTask={current.id}/></details>
 </Panel></Rise>}
 {page==='detail'&&!demo&&current&&hasLiveFeed&&
   <Suspense fallback={<p role="status">Loading failure investigation…</p>}><TaskFailureInvestigation key={current.id} task={current} records={records}

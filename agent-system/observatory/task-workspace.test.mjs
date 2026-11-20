@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { taskEngineeringActivity } from './src/task-activity.mjs';
 import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
 import { taskReportDefinition } from './src/task-report.mjs';
+import { executionTiming } from './src/execution-timing.mjs';
 import { taskUsageAccounting } from './src/task-usage-accounting.mjs';
 
 test('linked work before and after execution is shared by the chronology and report', () => {
@@ -75,6 +76,31 @@ test('Task chronology keeps late arrivals ordered by occurrence and reports miss
   assert.match(report,/Observatory first received/);
   assert.match(report,/Cross-source order is uncertain/);
   assert.match(report,/2026-01-04T00:00:00.000Z/);
+});
+
+test('execution timing preserves overlapping spans, unknown ends, and source-dated engineering points', () => {
+  const task={id:'task_timing',title:'Overlap fixture',objective:'Compare timing coverage'};
+  const iso=ms=>new Date(ms).toISOString();
+  const attempt={id:'a',task_id:task.id,revision:'a',attempt_number:1,started_at:iso(1000),finished_at:iso(2000)};
+  const open={...attempt,id:'b',attempt_number:2,started_at:iso(2200),finished_at:undefined};
+  const span=(key,start,end,revision='a')=>({key,id:key,complete:true,start,end,revision,task:task.id,
+    attempt:attempt.id,phase:key,events:[]});
+  const linkedEvents=[{id:'pr',at:iso(500),title:'PR opened'}];
+  const timing=executionTiming({taskId:task.id,attempts:[attempt,open],
+    spans:[span('check',1400,2100),span('build',1100,1600),span('wrong',2100,3000,'b')],linkedEvents});
+  assert.equal(timing.coveredMs,1000);
+  assert.equal(timing.overlapMs,200);
+  assert.equal(timing.unavailable,1);
+  assert.deepEqual(timing.rows.map(row=>row.id),['pr','attempt:a','span:build','span:check','attempt:b']);
+  assert.equal(timing.rows[0].elapsedMs,null);
+  assert.equal(timing.rows.at(-1).elapsedMs,null);
+  assert.equal(timing.rows.at(-1).offset,1);
+  assert.equal(timing.rows[1].width,1000/1700);
+  assert.equal(executionTiming({taskId:'empty'}).coveredMs,null);
+  const report=JSON.stringify(taskReportDefinition({task,attempts:[attempt,open]}).content);
+  assert.match(report,/Relative clock axis/);
+  assert.match(report,/1000 ms elapsed/);
+  assert.match(report,/End unavailable/);
 });
 
 test('attempt coverage clips correlated overlapping spans and excludes other revisions', () => {

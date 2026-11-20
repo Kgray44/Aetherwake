@@ -401,11 +401,18 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const telemetryHeaders = { 'x-observatory-verification': namespace };
   const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
   const { telemetry_scope: scope } = await overview.json();
+  const firstAttempt = detail.attempts[0];
+  const timedEvent = (phase, kind, offset) => ({
+    trace_version:1,event_id:phase+'-'+kind,task_id:execution.task.id,attempt_id:firstAttempt.id,
+    trace_id:'timing-window',span_id:phase,repository:execution.task.repository,revision:firstAttempt.revision,
+    occurred_at:new Date(Date.parse(firstAttempt.started_at)+offset).toISOString(),kind,phase,measurements:[],
+  });
   const received = await page.request.post(origin + '/api/task-telemetry/' + execution.task.id, {
     headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
     data: {
       base: null, generated_at: new Date().toISOString(), records: [execution.task],
-      events: [{
+      events: [timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
+        timedEvent('integration','span_end',350),timedEvent('implementation','span_end',300),{
         trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
         trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
         revision: candidate, occurred_at: '2026-01-01T08:00:00.000Z', session_id: sessionId,
@@ -504,6 +511,13 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
   await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
   await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
+  const timing = page.getByRole('region',{name:'Execution timing'});
+  await timing.getByText('Time with overlapping spans').waitFor();
+  await timing.getByText('100 ms',{exact:true}).waitFor();
+  await timing.getByRole('button',{name:/implementation.*Trace span/}).click();
+  const timingDetails = timing.getByRole('region',{name:'Selected timing details'});
+  await timingDetails.getByText('Matched journal span',{exact:true}).waitFor();
+  await timingDetails.getByRole('button',{name:'Open attempt details'}).waitFor();
   await telemetry.getByText('No linked receipts supply total token counts for this Task.').waitFor();
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

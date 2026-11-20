@@ -387,3 +387,17 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
   .task-timeline-event time { font-size:.62rem; }
   .task-timeline-arrow { display:none; }
 }
+
+
+.execution-timing .trace-rows { max-height:24rem; }
+.execution-timing .trace-track { overflow:hidden; }
+.execution-timing .timing-attempt { background:#8baedc; }
+.execution-timing .timing-trace { background:var(--accent); }
+.execution-timing .timing-engineering { background:#edbe7d; }
+.execution-timing .trace-row small { display:block; color:#a6bbca; }
+.execution-timing .trace-row { overflow-wrap:anywhere; }
+.execution-timing .trace-range-label { flex-wrap:wrap; }
+@media (max-width:560px) {
+  .execution-timing .trace-row.quiet-button { grid-template-columns:minmax(0,1fr) auto; }
+  .execution-timing .trace-track { grid-row:2; grid-column:1 / -1; }
+}
