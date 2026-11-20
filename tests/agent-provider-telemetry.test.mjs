@@ -229,3 +229,16 @@ test('default engine hooks use the dedicated checkout journal with no connection
   assert.equal(rows.length, 3);
   assert.equal(rows.find(event => event.kind === 'span_end').state, 'interrupted');
 });
+
+test('claim delivery forwards isolated and explicit live namespace to the existing synchronizer', async t => {
+  const {createClaimTelemetryHooks} = await import('../scripts/agent/claim-telemetry.mjs');
+  const {cwd,task} = await wrapperFixture(t);
+  const calls = [];
+  const verification = '10971a67-3899-4980-8d25-5500a0499fd6';
+  for (const [index,scope] of [verification,null].entries()) {
+    const attempt = {id:'attempt_namespace_'+index,revision:task.revision};
+    const hooks = createClaimTelemetryHooks(cwd, {startDelivery:async request => calls.push(request)});
+    await hooks.onTelemetryStart({task,attempt,verificationNamespace:scope});
+  }
+  assert.deepEqual(calls.map(request => request.verificationNamespace), [verification,null]);
+});

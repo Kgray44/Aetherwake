@@ -12,7 +12,8 @@ const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed
 const streamSource = 'codex_exec_jsonl';
 
 /** Observe a claimed execution without owning its lifecycle or making an executor call. */
-export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory }) {
+export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory, verificationNamespace },
+  { startDelivery = startObservatorySync } = {}) {
   if (!isAbsolute(journal) || (deliveryDirectory !== undefined && !isAbsolute(deliveryDirectory)) ||
       task?.record_type !== 'task' || validateRecord(task).length || !identity.test(task.id) || !identity.test(attempt?.id ?? '') ||
       !revision.test(attempt?.revision ?? '')) throw Error('Invalid claim telemetry configuration');
@@ -40,7 +41,7 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
       // The worker's credential stays with the engine. Only the configured
       // Observatory connection can deliver a projection.
       if (deliveryDirectory) {
-        delivery = await startObservatorySync({task,journal,directory:deliveryDirectory}).catch(() => null);
+        delivery = await startDelivery({task,journal,directory:deliveryDirectory,verificationNamespace}).catch(() => null);
       }
     },
     async onUsage(measurements) {
@@ -72,16 +73,16 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
 }
 
 /** Per-claim worker hooks. The dedicated checkout is already storage-admitted. */
-export function createClaimTelemetryHooks(workspace) {
+export function createClaimTelemetryHooks(workspace, delivery = {}) {
   if (!isAbsolute(workspace)) throw Error('Claim telemetry requires an absolute workspace');
   const directory = join(workspace, '.git', 'agent-harness');
   let observer;
   return {
-    async onTelemetryStart({ task, attempt }) {
+    async onTelemetryStart({ task, attempt, verificationNamespace }) {
       const next = createClaimTelemetry({
         task,attempt,journal:join(directory, 'claimed-execution.journal'),
-        deliveryDirectory:join(directory, 'observatory-sync'),
-      });
+        deliveryDirectory:join(directory, 'observatory-sync'), verificationNamespace,
+      }, delivery);
       await next.start();
       observer = next;
     },
