@@ -1,9 +1,9 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {motion,useReducedMotion} from 'motion/react';
-import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,CircleX,ChevronDown,ChevronRight,CircleAlert,Clock3,Cpu,Database,FileCheck2,Filter,GitBranch,GitPullRequest,Layers3,ListTodo,Plus,Radio,RefreshCw,Search,ShieldCheck,Sparkles,TerminalSquare,Workflow,X} from 'lucide-react';
+import {MotionConfig,motion,useReducedMotion} from 'motion/react';
+import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,CircleX,CircleAlert,Clock3,GitPullRequest,Layers3,ListTodo,Plus,Radio,RefreshCw,ShieldCheck,Workflow} from 'lucide-react';
 import {demoRecords} from './demo-data.js';
-import {ExecutionFeed} from './execution-feed.jsx';
+import {ExecutionFeed,TraceWaterfall} from './execution-feed.jsx';
 import {useAutomaticTelemetry} from './automatic-telemetry.jsx';
 import {criterionEvidenceStatus,evidenceClaimStatus} from './evidence-status.mjs';
 import {GitHubFeed} from './github-feed.jsx';
@@ -13,10 +13,11 @@ import {TaskFailureInvestigation} from './failure-investigation.jsx';
 import {GitHubActivityDetails,GitHubActivityList} from './github-activity-pages.jsx';
 import {activityHref,parseActivityHref} from './github-activity.mjs';
 import {proposalChecks} from '../intake.mjs';
+import {TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,useTaskFilters} from './task-workspace.jsx';
+import {dependencyGraph,parseTaskHref,taskHref} from './task-workspace.mjs';
 import './styles.css';
 
 const types=['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration'];
-const states=['all','proposed','ready','running','verifying','blocked','failed','accepted','cancelled','superseded'];
 const nav=[['overview','Overview',Activity],['tasks','Task Control Center',ListTodo],['analytics','Engineering analytics',BarChart3],['pulls','Pull requests',GitPullRequest],['runs','CI runs',Workflow],['create','New task',Plus]];
 const fmt=v=>v&&!Number.isNaN(Date.parse(v))?new Date(v).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';
 const date=v=>v&&!Number.isNaN(Date.parse(v))?new Date(v).toLocaleDateString(undefined,{month:'short',day:'numeric'}):'Unavailable';
@@ -33,7 +34,6 @@ function Panel({title,kicker,right,children,className=''}){return <section class
 function Empty({title='No records available',body='Create a task or connect a contract-compliant record source.'}){return <div className="empty"><Boxes size={25}/><strong>{title}</strong><p>{body}</p></div>}
 function Metric({name,value,meta,Icon,index}){return <Rise className="metric" delay={index*.055}><div className="metric-top"><span>{name}</span><Icon size={17}/></div><strong>{value}</strong><small>{meta}</small><span className="metric-rule"/></Rise>}
 function Timeline({values}){const max=Math.max(1,...values);const coords=values.map((v,i)=>[i/(Math.max(1,values.length-1))*720,138-v/max*115]);const line=coords.map(([x,y],i)=>(i?'L':'M')+x+' '+y).join(' ');return <div className="timeline-chart"><svg viewBox="0 0 720 155" preserveAspectRatio="none" role="img" aria-label="Engineering tasks created over the last fourteen days"><defs><linearGradient id="graph-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#74d2e6" stopOpacity=".24"/><stop offset="1" stopColor="#74d2e6" stopOpacity="0"/></linearGradient></defs>{[30,65,100,138].map(y=><line key={y} x1="0" x2="720" y1={y} y2={y} stroke="rgba(255,255,255,.07)"/>)}<path d={line+' L720 155 L0 155Z'} fill="url(#graph-fill)"/><motion.path d={line} fill="none" stroke="#84dfea" strokeWidth="2.7" vectorEffect="non-scaling-stroke" initial={{pathLength:0}} animate={{pathLength:1}} transition={{duration:1.3,ease}}/>{coords.map(([x,y],i)=><circle key={i} cx={x} cy={y} r={values[i]?3:1.5} fill="#b4ecf3" opacity={values[i]?1:.2}/>)}</svg></div>}
-function TaskTable({items,onSelect,related,canManage}){return items.length?<div className="table-wrap"><table><thead><tr><th>TASK / OBJECTIVE</th><th>STATE</th><th>CLASS</th><th>ATTEMPTS</th><th>EVIDENCE</th><th>CREATED</th><th/></tr></thead><motion.tbody layout>{items.map(t=><motion.tr layout key={t.id} whileHover={{backgroundColor:'rgba(92,142,159,.1)'}} onClick={()=>onSelect(t.id)} onKeyDown={canManage?undefined:e=>{if(e.key==='Enter'){onSelect(t.id)}}} role={canManage?undefined:'button'} tabIndex={canManage?undefined:0}><td><strong>{t.title}</strong><span className="row-meta">{t.id}</span></td><td><Status value={t.state}/></td><td><span className="mono">{t.classification?.primary||'unknown'}</span></td><td>{related(t.id,'attempt').length}</td><td>{related(t.id,'evidence').length}</td><td className="mono low">{date(t.created_at)}</td><td>{canManage?<button type="button" className="quiet-button" onKeyDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onSelect(t.id)}}>{canManage(t)?'Manage':'Inspect'}</button>:<ChevronRight size={15}/>}</td></motion.tr>)}</motion.tbody></table></div>:<Empty/>}
 function DetailLine({name,value}){return <div className="detail-line"><span>{name}</span><strong>{value??'Unavailable'}</strong></div>}
 const initialDraft = { primary: 'visual', profile_id: 'visual-gpu', visibility: 'private' };
 const githubProposalFolder = 'https://github.com/Kgray44/Aetherwake/tree/observatory-proposed-tasks/Proposed%20Tasks';
@@ -48,7 +48,8 @@ function taskDraft(form) {
   };
 }
 
-function TaskAdmission({checks, publicIntake, publicationConfigured}) {
+function TaskAdmission({checks, draft, tasks, publicIntake, publicationConfigured}) {
+  const dependencies=dependencyGraph({prerequisites:{task_ids:draft.dependencies}},tasks).upstream;
   const steps = [
     ['Explicit outcome', checks.outcome, 'Enter a title (4+ characters) and objective (12+ characters).'],
     ['Task classification', checks.classification, 'Choose a primary category.'],
@@ -60,24 +61,28 @@ function TaskAdmission({checks, publicIntake, publicationConfigured}) {
       <span>{String(index + 1).padStart(2, '0')}</span><strong>{label}{(!valid || index === 2) && <small>{help}</small>}</strong>
       {valid ? <CheckCircle2 size={15} role="img" aria-label="Complete"/> : <CircleX className="admission-missing" size={15} role="img" aria-label="Incomplete"/>}
     </div>)}</div>
+    {dependencies.length>0&&<ul className="dependency-nodes">{dependencies.map(node=><li key={node.id}><span>{node.task?.title??node.id}</span><Status value={node.status}/></li>)}</ul>}
+    {draft.capabilities?.length>0&&<p className="low">Required capabilities are unverified.</p>}
     <div className="hint"><ShieldCheck size={18}/><div>{publicIntake
       ? <>Proposal text is for the public <a href={githubProposalFolder}>Proposed Tasks</a> folder. Submit only information suitable for public GitHub.{!publicationConfigured && ' GitHub publishing is currently unconfigured. This proposal will be queued for an explicit retry after setup.'}</>
       : 'Private proposals stay in the current workspace.'} Human approval and execution are separate.</div></div>
   </Panel>;
 }
 
-function App(){const reduce=useReducedMotion(),[records,setRecords]=useState([]),[demo,setDemo]=useState(false),[localPage,setPage]=useState('overview'),[taskScope,setTaskScope]=useState('all'),[search,setSearch]=useState(''),[state,setState]=useState('all'),[revision,setRevision]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(true),[formError,setFormError]=useState(''),[saving,setSaving]=useState(false);
+function App(){const reduce=useReducedMotion(),[records,setRecords]=useState([]),[demo,setDemo]=useState(false),[localPage,setPage]=useState('overview'),[revision,setRevision]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(true),[formError,setFormError]=useState(''),[saving,setSaving]=useState(false);
+const [filters,setFilters]=useTaskFilters();
+const heading=useRef(null);
 const [execution,setExecution]=useState(null);
 const [telemetryScope,setTelemetryScope]=useState(null);
 const [hasLiveFeed,setHasLiveFeed]=useState(false);
 const [routeHash,setRouteHash]=useState(()=>window.location.hash);
 const githubView=parseActivityHref(routeHash);
-const taskRoute=/^#tasks(?:\/([A-Za-z0-9_.:-]{1,160}))?$/.exec(routeHash);
+const taskRoute=parseTaskHref(routeHash);
 const [githubFilters,setGitHubFilters]=useState({
   pulls:{query:'',state:'',group:'',oldest:false},
   runs:{query:'',state:'',group:'',oldest:false}
 });
-const page=githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute[1] ? 'detail' : 'tasks') : localPage;
+const page=githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute.id ? 'detail' : 'tasks') : localPage;
 const activeNavigation=githubView?.kind ?? (page==='detail'?'tasks':page);
 useEffect(()=>{
   const sync=()=>setRouteHash(window.location.hash);
@@ -90,22 +95,25 @@ useEffect(()=>{
 },[]);
 useEffect(()=>{
   if(githubView||taskRoute) window.scrollTo(0,0);
+  if(taskRoute) heading.current?.focus({preventScroll:true});
 },[routeHash]);
 const [github,setGitHub]=useState(null),[proposals,setProposals]=useState(null);
 const [draft,setDraft]=useState(initialDraft),[publishError,setPublishError]=useState('');
-const refreshId=useRef(0), submitting=useRef(false), proposalRequest=useRef(null);
+const refreshId=useRef(0), foregroundRequest=useRef(false), submitting=useRef(false), proposalRequest=useRef(null);
 const canPublish = Boolean(proposals && !proposals.verification && !demo);
 const publicIntake = canPublish && draft.visibility === 'public';
 const checks = proposalChecks(draft);
-const refresh=async(mode=demo)=>{
+const refresh=async(mode=demo,{quiet=false,signal}={})=>{
+  if(quiet&&foregroundRequest.current)return;
   const id=++refreshId.current;
+  foregroundRequest.current=!quiet&&!mode;
   if(mode){setHasLiveFeed(false);setRecords(demoRecords());setError('');setLoading(false);return}
-  setLoading(true);
+  if(!quiet)setLoading(true);
   try{
-    const r=await fetch('/api/overview',{cache:'no-store',headers:verificationHeaders});
+    const r=await fetch('/api/overview',{cache:'no-store',headers:verificationHeaders,signal});
     if(!r.ok)throw Error('HTTP '+r.status);
     const j=await r.json();
-    if(id!==refreshId.current)return;
+    if(signal?.aborted||id!==refreshId.current)return;
     setHasLiveFeed(true);
     setRecords(Array.isArray(j.records)?j.records:[]);
     setRevision(j.revision);
@@ -113,13 +121,34 @@ const refresh=async(mode=demo)=>{
     setProposals(j.proposals??null);
     setError('');
   }catch(e){
-    if(id===refreshId.current){
-      setHasLiveFeed(false);setRecords([]);setGitHub(null);setProposals(null);setRevision(null);
-      setError('Live record feed unavailable: '+e.message);
+    if(!signal?.aborted&&id===refreshId.current){
+      if(!quiet){setHasLiveFeed(false);setRecords([]);setGitHub(null);setProposals(null);setRevision(null);}
+      setError((quiet?'Refresh failed. Showing last loaded records: ':'Live record feed unavailable: ')+e.message);
     }
-  }finally{if(id===refreshId.current)setLoading(false)}
+  }finally{
+    if(!quiet&&id===refreshId.current){foregroundRequest.current=false;setLoading(false);}
+  }
 };
 useEffect(()=>{refresh(false)},[]);
+const watchingTasks=Boolean(taskRoute)&&!demo;
+useEffect(()=>{
+  if(!watchingTasks)return;
+  const controller=new AbortController();
+  let pending=false;
+  const update=async()=>{
+    if(document.hidden||pending)return;
+    pending=true;
+    try{await refresh(false,{quiet:true,signal:controller.signal});}
+    finally{pending=false;}
+  };
+  const timer=window.setInterval(update,30_000);
+  document.addEventListener('visibilitychange',update);
+  return ()=>{
+    controller.abort();
+    window.clearInterval(timer);
+    document.removeEventListener('visibilitychange',update);
+  };
+},[watchingTasks]);
 const automaticTelemetry=useAutomaticTelemetry({scope:!demo&&hasLiveFeed?telemetryScope:null,headers:verificationHeaders,refresh:()=>refresh(false)});
 const by=type=>records.filter(r=>r.record_type===type);
 const tasks=useMemo(()=>records.filter(r=>r.record_type==='task').sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))),[records]);
@@ -130,14 +159,12 @@ const chart=useMemo(()=>Array.from({length:14},(_,i)=>{const d=new Date();d.setH
 const durations=telemetry.flatMap(r=>r.measurements||[]).filter(m=>m.availability==='observed'&&['duration_seconds','elapsed_seconds'].includes(m.name)&&typeof m.value==='number');
 const duration=durations.length?Math.round(durations.reduce((s,m)=>s+m.value,0)/60).toLocaleString()+' min':'Unavailable';
 const privateControls=!demo ? proposals?.controls ?? {} : {};
-const canManage=task=>Boolean(privateControls[task.id]);
-const shown=tasks.filter(t=>(taskScope!=='private'||canManage(t))&&(state==='all'||t.state===state)&&[t.title,t.objective,t.id,t.classification?.primary].join(' ').toLowerCase().includes(search.toLowerCase()));
-const current=tasks.find(t=>t.id===taskRoute?.[1]);
+const current=tasks.find(t=>t.id===taskRoute?.id);
 const select=id=>{
-  window.location.hash='#tasks/'+id;
+  window.location.hash=taskHref(id);
   setRouteHash(window.location.hash);
 };
-const proposalControls=current&&canManage(current)?privateControls[current.id]:null;
+const proposalControls=current&&Object.hasOwn(privateControls,current.id)?privateControls[current.id]:null;
 const navigate=id=>{
   if(id==='pulls'||id==='runs'){
     window.location.hash=activityHref(id);
@@ -146,7 +173,7 @@ const navigate=id=>{
   if(id==='tasks'){
     setFormError('');setPublishError('');
     setPage('overview');
-    window.location.hash='#tasks';
+    window.location.hash=taskHref();
     setRouteHash(window.location.hash);
     return;
   }
@@ -194,21 +221,14 @@ const retryPublication=async()=>{
     await refresh(false);
   }catch(err){setPublishError(err.message)}finally{setSaving(false)}
 };
-const title=({overview:'Engineering overview',tasks:'Task Control Center',detail:'Task inspection',analytics:'Engineering analytics',create:'Create task',pulls:'Pull requests',runs:'CI runs','github-detail':githubView?.kind==='pulls'?'Pull request':'CI run'})[page],desc=({overview:'Systems intelligence / Engineering operations',tasks:'Create and manage private proposals. Inspect Tasks and their execution records.',detail:'Complete execution trace and acceptance evidence',analytics:'Delivery, verification, and execution observations',create:'Structured engineering task intake',pulls:'Find changes and inspect their GitHub details',runs:'Inspect workflow outcomes, jobs, and steps','github-detail':'Kgray44 / Aetherwake'})[page];
+const title=({overview:'Engineering overview',tasks:'Task Control Center',detail:current?.title??'Task inspection',analytics:'Engineering analytics',create:'Create task',pulls:'Pull requests',runs:'CI runs','github-detail':githubView?.kind==='pulls'?'Pull request':'CI run'})[page],desc=({overview:'Systems intelligence / Engineering operations',tasks:'Create and manage private proposals. Inspect Tasks and their execution records.',detail:'Complete execution trace and acceptance evidence',analytics:'Delivery, verification, and execution observations',create:'Structured engineering task intake',pulls:'Find changes and inspect their GitHub details',runs:'Inspect workflow outcomes, jobs, and steps','github-detail':'Kgray44 / Aetherwake'})[page];
 useEffect(()=>{document.title=title+' · Aetherwake Observatory'},[title]);
 const githubUi={Metric,Panel,Rise,Status};
 const activityGroup=kind=>demo?null:kind==='pulls'?github?.pulls:github?.ci;
-return <div className="app-shell"><Ambient/><aside className="sidebar"><div className="brand"><span className="brand-logo"><Layers3 size={21} strokeWidth={1.6}/></span><div><b>AETHERWAKE</b><small>ENGINEERING SYSTEMS</small></div></div><div className="rail-caption">OPERATIONS</div><nav>{nav.map(([id,label,Icon])=><motion.button key={id} className={'nav-link '+((activeNavigation===id)?'selected':'')} onClick={()=>navigate(id)} whileHover={{x:3}} whileTap={{scale:.98}}><Icon size={17} strokeWidth={1.7}/>{label}{(activeNavigation===id)&&<motion.span className="nav-indicator" layoutId="nav-indicator" transition={{type:'spring',stiffness:350,damping:30}}/>}</motion.button>)}</nav><div className="sidebar-bottom"><div className="connect-label"><span className="live-dot"/> {proposals?'PRIVATE SITES HOST':'LOCAL CONTROL PLANE'}</div><div className="mono">{short(revision)}</div><div>CONTRACT v1.0 · PHASE E</div></div></aside><main className="main"><header className="topbar"><div><div className="overline"><span className="overline-line"/>AETHERWAKE / ENGINEERING OBSERVATORY</div><h1>{title}</h1><p>{desc}</p></div><div className="header-actions">{demo&&<span className="demo-flag">SIMULATED DATA</span>}{page==='analytics'?<span className="connect-label"><span className="live-dot"/> Live sources</span>:<div className="mode-toggle">{['Live','Demo'].map(m=><button key={m} className={(demo===(m==='Demo'))?'on':''} onClick={()=>{const v=m==='Demo';setDemo(v);refresh(v)}}>{m}</button>)}</div>}<motion.button className="icon-button" aria-label="Refresh records" title="Refresh" whileTap={{rotate:160}} onClick={()=>refresh()}><RefreshCw size={17}/></motion.button><motion.button className="primary-button" whileHover={{y:-2}} whileTap={{scale:.97}} onClick={()=>navigate('create')}><Plus size={16}/> New task</motion.button></div></header>{!demo&&proposals?.verification&&<div className="notice"><ShieldCheck size={16}/>Isolated verification proposals</div>}{error&&<div className="notice error"><CircleAlert size={17}/>{error}</div>}{loading&&<div className="notice"><Radio size={16}/>Synchronizing engineering record feed…</div>}<motion.div key={page+(taskRoute?.[1]?'-'+taskRoute[1]:'')+(githubView?.id?'-'+githubView.kind+'-'+githubView.id:'')+(demo?'-demo':'-live')} initial={reduce?false:{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{duration:reduce?.01:.3,ease}} className="view">
-{page==='overview'&&<><div className="metrics"><Metric name="Registered tasks" value={tasks.length} meta="Canonical v1 records" Icon={Boxes} index={0}/><Metric name="Accepted" value={total('accepted')} meta="Explicit task outcomes" Icon={CheckCircle2} index={1}/><Metric name="Executing" value={total('running')+total('verifying')} meta="Running + verifying" Icon={Activity} index={2}/><Metric name="At risk" value={total('blocked')+total('failed')} meta="Blocked + failed" Icon={CircleAlert} index={3}/><Metric name="Observed time" value={duration} meta="No quota inference" Icon={Clock3} index={4}/></div><div className="wide-grid"><Rise delay={.12}><Panel title="Engineering throughput" kicker="01 / ACTIVITY SIGNAL" right={<span className="panel-meta">TASK ARRIVAL · 14D</span>}><Timeline values={chart}/><div className="chart-footer">TASKS CREATED <span>Only observed records shown</span></div></Panel></Rise><Rise delay={.19}><Panel title="Delivery integrity" kicker="02 / ACCEPTANCE" right={<ShieldCheck size={18} className="muted-icon"/>}><div className="accept-head"><strong>{tasks.length?Math.round(100*total('accepted')/tasks.length)+'%':'—'}</strong><small>ACCEPTED TASKS</small></div><div className="track"><motion.span initial={{width:0}} animate={{width:(tasks.length?100*total('accepted')/tasks.length:0)+'%'}} transition={{duration:.9,ease}}/></div><DetailLine name="Execution attempts" value={attempts.length}/><DetailLine name="Failed attempts" value={attempts.filter(a=>a.state==='failed').length}/><DetailLine name="Evidence records" value={evidence.length}/><DetailLine name="Reported passes (unverified)" value={evidence.filter(e=>e.result==='passed').length}/><DetailLine name="Pending acceptance" value={tasks.filter(t=>t.state!=='accepted').length}/></Panel></Rise></div><Rise delay={.24}><Panel title="Recent engineering work" kicker="03 / TASK FEED" right={<button className="text-button" onClick={()=>navigate('tasks')}>Open Task Control Center <ArrowRight size={15}/></button>}><TaskTable items={tasks.slice(0,9)} onSelect={select} related={related}/></Panel></Rise>{!demo&&proposals&&<ExecutionFeed execution={execution} records={records} headers={verificationHeaders} onRefresh={()=>refresh(false)} automatic={telemetryScope?automaticTelemetry:null}/>} {!demo&&github&&<Rise><Panel title="GitHub repository activity" kicker="PUBLIC ENGINEERING SOURCES"><GitHubFeed data={github}/></Panel></Rise>}</>}
-{page==='tasks'&&<Rise><Panel title="Engineering Tasks" right={<button className="primary-button" onClick={()=>navigate('create')}><Plus size={16}/> Create proposal</button>}>
-  <div className="filters">
-    <div className="search"><Search size={16}/><input aria-label="Search engineering tasks" placeholder="Search tasks, objectives, identifiers…" value={search} onChange={e=>setSearch(e.target.value)}/></div>
-    <div className="select"><select aria-label="Task source" value={taskScope} onChange={e=>setTaskScope(e.target.value)}><option value="all">All Tasks</option><option value="private">Private proposals</option></select><ChevronDown size={15}/></div>
-    <div className="select"><Filter size={15}/><select aria-label="Task state" value={state} onChange={e=>setState(e.target.value)}>{states.map(s=><option key={s}>{s}</option>)}</select><ChevronDown size={15}/></div>
-  </div>
-  {!demo&&!loading&&Object.keys(privateControls).length===0&&<p className="low">There are no private proposals to manage yet. Create a proposal here. Synced Task records can be inspected.</p>}
-  <TaskTable items={shown} related={related} onSelect={select} canManage={canManage}/>
-</Panel></Rise>}
+return <div className="app-shell"><Ambient/><aside className="sidebar"><div className="brand"><span className="brand-logo"><Layers3 size={21} strokeWidth={1.6}/></span><div><b>AETHERWAKE</b><small>ENGINEERING SYSTEMS</small></div></div><div className="rail-caption">OPERATIONS</div><nav>{nav.map(([id,label,Icon])=><motion.button key={id} className={'nav-link '+((activeNavigation===id)?'selected':'')} onClick={()=>navigate(id)} whileHover={{x:3}} whileTap={{scale:.98}}><Icon size={17} strokeWidth={1.7}/>{label}{(activeNavigation===id)&&<motion.span className="nav-indicator" layoutId="nav-indicator" transition={{type:'spring',stiffness:350,damping:30}}/>}</motion.button>)}</nav><div className="sidebar-bottom"><div className="connect-label"><span className="live-dot"/> {proposals?'PRIVATE SITES HOST':'LOCAL CONTROL PLANE'}</div><div className="mono">{short(revision)}</div><div>CONTRACT v1.0 · PHASE E</div></div></aside><main className="main"><header className="topbar"><div><div className="overline"><span className="overline-line"/>AETHERWAKE / ENGINEERING OBSERVATORY</div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{desc}</p></div><div className="header-actions">{demo&&<span className="demo-flag">SIMULATED DATA</span>}{page==='analytics'?<span className="connect-label"><span className="live-dot"/> Live sources</span>:<div className="mode-toggle">{['Live','Demo'].map(m=><button key={m} className={(demo===(m==='Demo'))?'on':''} onClick={()=>{const v=m==='Demo';setDemo(v);refresh(v)}}>{m}</button>)}</div>}<motion.button className="icon-button" aria-label="Refresh records" title="Refresh" whileTap={reduce?undefined:{rotate:160}} onClick={()=>refresh()}><RefreshCw size={17}/></motion.button><motion.button className="primary-button" whileHover={{y:-2}} whileTap={{scale:.97}} onClick={()=>navigate('create')}><Plus size={16}/> New task</motion.button></div></header>{!demo&&proposals?.verification&&<div className="notice"><ShieldCheck size={16}/>Isolated verification proposals</div>}{error&&<div className="notice error" role="status"><CircleAlert size={17}/>{error}</div>}{loading&&<div className="notice"><Radio size={16}/>Synchronizing engineering record feed…</div>}<motion.div key={page+(taskRoute?.id?'-'+taskRoute.id:'')+(githubView?.id?'-'+githubView.kind+'-'+githubView.id:'')+(demo?'-demo':'-live')} initial={reduce?false:{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{duration:reduce?.01:.3,ease}} className="view">
+{page==='overview'&&<><div className="metrics"><Metric name="Registered tasks" value={tasks.length} meta="Canonical v1 records" Icon={Boxes} index={0}/><Metric name="Accepted" value={total('accepted')} meta="Explicit task outcomes" Icon={CheckCircle2} index={1}/><Metric name="Executing" value={total('running')+total('verifying')} meta="Running + verifying" Icon={Activity} index={2}/><Metric name="At risk" value={total('blocked')+total('failed')} meta="Blocked + failed" Icon={CircleAlert} index={3}/><Metric name="Observed time" value={duration} meta="No quota inference" Icon={Clock3} index={4}/></div><div className="wide-grid"><Rise delay={.12}><Panel title="Engineering throughput" kicker="01 / ACTIVITY SIGNAL" right={<span className="panel-meta">TASK ARRIVAL · 14D</span>}><Timeline values={chart}/><div className="chart-footer">TASKS CREATED <span>Only observed records shown</span></div></Panel></Rise><Rise delay={.19}><Panel title="Delivery integrity" kicker="02 / ACCEPTANCE" right={<ShieldCheck size={18} className="muted-icon"/>}><div className="accept-head"><strong>{tasks.length?Math.round(100*total('accepted')/tasks.length)+'%':'—'}</strong><small>ACCEPTED TASKS</small></div><div className="track"><motion.span initial={{width:0}} animate={{width:(tasks.length?100*total('accepted')/tasks.length:0)+'%'}} transition={{duration:.9,ease}}/></div><DetailLine name="Execution attempts" value={attempts.length}/><DetailLine name="Failed attempts" value={attempts.filter(a=>a.state==='failed').length}/><DetailLine name="Evidence records" value={evidence.length}/><DetailLine name="Reported passes (unverified)" value={evidence.filter(e=>e.result==='passed').length}/><DetailLine name="Pending acceptance" value={tasks.filter(t=>t.state!=='accepted').length}/></Panel></Rise></div><Rise delay={.24}><Panel title="Recent engineering work" kicker="03 / TASK FEED" right={<button className="text-button" onClick={()=>navigate('tasks')}>Open Task Control Center <ArrowRight size={15}/></button>}><TaskRows tasks={tasks.slice(0,9)} controls={privateControls} related={related} Status={Status}/></Panel></Rise>{!demo&&proposals&&<ExecutionFeed execution={execution} records={records} headers={verificationHeaders} onRefresh={()=>refresh(false)} automatic={telemetryScope?automaticTelemetry:null}/>} {!demo&&github&&<Rise><Panel title="GitHub repository activity" kicker="PUBLIC ENGINEERING SOURCES"><GitHubFeed data={github}/></Panel></Rise>}</>}
+{page==='tasks'&&<Rise><TaskExplorer tasks={tasks} controls={privateControls} related={related}
+  Status={Status} Panel={Panel} loading={loading} filters={filters} setFilters={setFilters} onCreate={()=>navigate('create')}/></Rise>}
 {(page==='pulls'||page==='runs')&&<GitHubActivityList kind={page} group={activityGroup(page)} ui={githubUi}
   ci={{ headers:verificationHeaders, live:!demo&&Boolean(proposals), mainRevision:github?.main?.status==='available'?revision:null }}
   filters={githubFilters[page]} setFilters={next=>setGitHubFilters(previous=>({...previous,[page]:next}))}/>}
@@ -220,15 +240,19 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   records={records} events={execution?.events} github={demo?null:github} execution={demo?null:execution}
   ready={!demo&&hasLiveFeed} ui={githubUi}/>}
 {page==='detail'&&(current?<><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
-{proposalControls&&<Rise><Panel title="Manage private proposal">
-  <ProposalControls key={current.id+'-'+proposalControls.version}
+{proposalControls&&<Rise><Panel title="Task editor">
+  <ProposalControls key={current.id}
     task={current} control={proposalControls} tasks={tasks} classes={types}
-    headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false)}/>
+    headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false,{quiet:true})}
+    manageable={task=>Object.hasOwn(privateControls,task.id)}/>
 </Panel></Rise>}
-<div className="detail-layout"><div className="detail-left"><Rise><Panel title={current.title} kicker={current.id} right={<Status value={current.state}/>}><div className="objective">{current.objective}</div>{!demo&&<DetailLine name="Telemetry last imported" value={execution?.events?.some(event=>event.task_id===current.id)?fmt(execution.generated_at):"No trace in current snapshot"}/>}{!demo&&proposals?.stale_revision_tasks?.includes(current.id)&&<div className="notice"><span>This proposal uses the last observed GitHub main revision. Confirm its source revision before starting work.</span></div>}{!demo&&proposals?.publication?.[current.id]==='published'&&<p><a className="proposal-link" href={githubProposalFolder.replace('/tree/','/blob/')+'/'+current.id+'.json'}>View proposal on GitHub</a></p>}{!demo&&proposals?.publication?.[current.id]==='pending'&&<div className="notice"><span>{publishError||'Saved privately. GitHub publication is pending.'}</span>{proposals.publication_configured&&<button className="quiet-button" disabled={saving} onClick={retryPublication}>Retry publication</button>}</div>}<div className="task-tags"><span>{current.classification?.primary}</span>{(current.classification?.secondary||[]).map(x=><span key={x}>{x}</span>)}</div></Panel></Rise><Rise delay={.08}><Panel title="Acceptance matrix" kicker="REQUIRED OUTCOMES" right={<span className="panel-meta">{current.acceptance?.criteria?.length||0} CRITERIA</span>}>{(current.acceptance?.criteria||[]).map(c=>{let m=related(current.id,'evidence').filter(e=>e.criterion_id===c.id);return <div className="record" key={c.id}><div className="record-title"><strong>{c.id}</strong><Status value={criterionEvidenceStatus(m,current.revision,related(current.id,'attempt'))}/></div><p>{c.description}</p><small>{m.length} reported records · not acceptance receipts</small></div>})}</Panel></Rise><Rise delay={.12}><Panel title="Execution attempts" kicker="AGENT HISTORY" right={<span className="panel-meta">{related(current.id,'attempt').length} ATTEMPTS</span>}>{related(current.id,'attempt').length?related(current.id,'attempt').map(a=><div className="record" key={a.id}><div className="record-title"><strong>Attempt {a.attempt_number}</strong><Status value={a.state}/></div><p>{[a.provider,a.model,a.branch].filter(Boolean).join(' / ')||'Provider unavailable'}</p><small>{fmt(a.started_at)} → {fmt(a.finished_at)}</small>{a.failure_diagnosis&&<p className="warn">{a.failure_diagnosis}</p>}</div>):<Empty title="No attempts recorded"/>}</Panel></Rise><Rise delay={.16}><Panel title="Evidence ledger" kicker="REVISION-PINNED RESULTS">{related(current.id,'evidence').length?related(current.id,'evidence').map(e=><div className="record" key={e.id}><div className="record-title"><strong>{e.criterion_id} / {e.kind}</strong><Status value={evidenceClaimStatus(e,related(current.id,'attempt'))}/></div><p className="mono">{e.artifact?.uri||'No artifact'}</p><small>{short(e.revision)} {e.synthetic?' · SYNTHETIC': ''}</small></div>):<Empty/>}</Panel></Rise></div><div className="detail-right"><Rise delay={.05}><Panel title="Canonical metadata" kicker="TRACEABILITY"><DetailLine name="Revision" value={<code>{short(current.revision)}</code>}/><DetailLine name="Created" value={fmt(current.created_at)}/><DetailLine name="Owner decision" value={current.owner_acceptance||'Unavailable'}/><DetailLine name="Verification" value={current.acceptance?.profile_id}/><DetailLine name="Context snapshots" value={related(current.id,'context_snapshot').length}/><DetailLine name="Artifacts" value={current.artifacts?.length||0}/></Panel></Rise><Rise delay={.1}><Panel title="Prerequisites" kicker="DEPENDENCY GRAPH"><div className="subheading">UPSTREAM TASKS</div>{(current.prerequisites?.task_ids||[]).length?current.prerequisites.task_ids.map(d=><div className="dependency" key={d}><GitBranch size={15}/><span>{d}</span><Status value={tasks.find(t=>t.id===d)?.state||'unavailable'}/></div>):<p className="low">No task dependencies</p>}<div className="subheading">REQUIRED CAPABILITIES</div><p className="low">{(current.prerequisites?.capabilities||[]).join(' / ')||'None declared'}</p></Panel></Rise><Rise delay={.14}><Panel title="Telemetry" kicker="OBSERVED / ESTIMATED / UNAVAILABLE">{related(current.id,'telemetry').length?related(current.id,'telemetry').map(r=><div className="record" key={r.id}><strong>{r.phase}</strong>{(r.measurements||[]).map((m,i)=><DetailLine key={i} name={m.name} value={(m.availability==='unavailable'?'Unavailable':m.value??'Unavailable')+' '+(m.unit||'')+' · '+m.availability}/>)}</div>):<Empty title="No telemetry recorded"/>}</Panel></Rise><Rise delay={.17}><Panel title="Full engineering record" kicker="RAW / CONTRACT V1"><pre className="json">{JSON.stringify({task:current,attempts:related(current.id,'attempt'),evidence:related(current.id,'evidence'),telemetry:related(current.id,'telemetry'),context_snapshots:related(current.id,'context_snapshot'),verification_profiles:profiles.filter(p=>p.profile_id===current.acceptance?.profile_id)},null,2)}</pre></Panel></Rise></div></div></>:<Empty title="Task not found"/>)}
+<div className="detail-layout"><div className="detail-left"><Rise><Panel title={current.title} kicker={current.id} right={<Status value={current.state}/>}><div className="objective">{current.objective}</div>{!demo&&<DetailLine name="Telemetry last imported" value={execution?.events?.some(event=>event.task_id===current.id)?fmt(execution.generated_at):"No trace in current snapshot"}/>}{!demo&&proposals?.stale_revision_tasks?.includes(current.id)&&<div className="notice"><span>This proposal uses the last observed GitHub main revision. Confirm its source revision before starting work.</span></div>}{!demo&&proposals?.publication?.[current.id]==='published'&&<p><a className="proposal-link" href={githubProposalFolder.replace('/tree/','/blob/')+'/'+current.id+'.json'}>View proposal on GitHub</a></p>}{!demo&&proposals?.publication?.[current.id]==='pending'&&<div className="notice"><span>{publishError||'Saved privately. GitHub publication is pending.'}</span>{proposals.publication_configured&&<button className="quiet-button" disabled={saving} onClick={retryPublication}>Retry publication</button>}</div>}<div className="task-tags"><span>{current.classification?.primary}</span>{(current.classification?.secondary||[]).map(x=><span key={x}>{x}</span>)}</div></Panel></Rise><Rise delay={.08}><Panel title="Acceptance matrix" kicker="REQUIRED OUTCOMES" right={<span className="panel-meta">{current.acceptance?.criteria?.length||0} CRITERIA</span>}>{(current.acceptance?.criteria||[]).map(c=>{let m=related(current.id,'evidence').filter(e=>e.criterion_id===c.id);return <div className="record" key={c.id}><div className="record-title"><strong>{c.id}</strong><Status value={criterionEvidenceStatus(m,current.revision,related(current.id,'attempt'))}/></div><p>{c.description}</p><small>{m.length} reported records · not acceptance receipts</small></div>})}</Panel></Rise><Rise delay={.12}><Panel title="Execution attempts" kicker="AGENT HISTORY" right={<span className="panel-meta">{related(current.id,'attempt').length} ATTEMPTS</span>}>{related(current.id,'attempt').length?related(current.id,'attempt').map(a=><div className="record" key={a.id}><div className="record-title"><strong>Attempt {a.attempt_number}</strong><Status value={a.state}/></div><p>{[a.provider,a.model,a.branch].filter(Boolean).join(' / ')||'Provider unavailable'}</p><small>{fmt(a.started_at)} → {fmt(a.finished_at)}</small>{a.failure_diagnosis&&<p className="warn">{a.failure_diagnosis}</p>}</div>):<Empty title="No attempts recorded"/>}</Panel></Rise><Rise delay={.16}><Panel title="Evidence ledger" kicker="REVISION-PINNED RESULTS">{related(current.id,'evidence').length?related(current.id,'evidence').map(e=><div className="record" key={e.id}><div className="record-title"><strong>{e.criterion_id} / {e.kind}</strong><Status value={evidenceClaimStatus(e,related(current.id,'attempt'))}/></div><p className="mono">{e.artifact?.uri||'No artifact'}</p><small>{short(e.revision)} {e.synthetic?' · SYNTHETIC': ''}</small></div>):<Empty/>}</Panel></Rise></div><div className="detail-right"><Rise delay={.05}><Panel title="Task record"><TaskCapabilitySummary manageable={Boolean(proposalControls)}/><DetailLine name="Revision" value={<code>{short(current.revision)}</code>}/><DetailLine name="Created" value={fmt(current.created_at)}/><DetailLine name="Owner decision" value={current.owner_acceptance||'Unavailable'}/><DetailLine name="Verification" value={current.acceptance?.profile_id}/><DetailLine name="Context snapshots" value={related(current.id,'context_snapshot').length}/><DetailLine name="Artifacts" value={current.artifacts?.length||0}/></Panel></Rise><Rise delay={.1}><Panel title="Dependency graph"><TaskDependencies task={current} tasks={tasks} Status={Status}/></Panel></Rise><Rise delay={.14}><Panel title="Telemetry" kicker="OBSERVED / ESTIMATED / UNAVAILABLE">{related(current.id,'telemetry').length?related(current.id,'telemetry').map(r=><div className="record" key={r.id}><strong>{r.phase}</strong>{(r.measurements||[]).map((m,i)=><DetailLine key={i} name={m.name} value={(m.availability==='unavailable'?'Unavailable':m.value??'Unavailable')+' '+(m.unit||'')+' · '+m.availability}/>)}</div>):<Empty title="No telemetry recorded"/>}</Panel></Rise><Rise delay={.17}><Panel title="Full engineering record" kicker="RAW / CONTRACT V1"><pre className="json">{JSON.stringify({task:current,attempts:related(current.id,'attempt'),evidence:related(current.id,'evidence'),telemetry:related(current.id,'telemetry'),context_snapshots:related(current.id,'context_snapshot'),verification_profiles:profiles.filter(p=>p.profile_id===current.acceptance?.profile_id)},null,2)}</pre></Panel></Rise></div></div></>:loading?<p role="status">Loading Task…</p>:<Empty title="Task not found" body="This Task is unavailable in the current feed."/>)}
+{page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution timeline">
+  <TraceWaterfall events={(execution?.events??[]).filter(event=>event.task_id===current.id)} fixedTask={current.id}/>
+</Panel></Rise>}
 {page==='detail'&&!demo&&current&&hasLiveFeed&&
   <TaskFailureInvestigation key={current.id} task={current} records={records}
     events={execution?.events ?? []} github={github} ui={githubUi}/>}
-{page==='create'&&<div className="detail-layout"><Rise><Panel title="Define engineering task" kicker="CONTROL PLANE / INTAKE"><form className="form" onSubmit={create} onChange={e=>setDraft(taskDraft(e.currentTarget))}><label>Task title <input name="title" placeholder="Vela intelligence state transitions" required minLength={4} maxLength={160}/></label><label>Tangible objective <textarea name="objective" placeholder="Define exactly what behavior must exist, with clear scope…" required minLength={12}/></label><div className="form-grid"><label>Primary category <select name="primary">{types.map(c=><option key={c}>{c}</option>)}</select></label><label>Verification profile <input name="profile_id" defaultValue="visual-gpu" required/></label></div><label>Prerequisite task IDs <input name="dependencies" placeholder="task_001, task_002"/></label><label>Required capabilities <input name="capabilities" placeholder="GPU renderer, visual test harness"/></label><label>Acceptance criteria <textarea name="criteria" required placeholder={'Transitions match approved reference\nPerformance target is met\nOwner visual approval recorded'}/></label>{canPublish&&<label>Visibility <select name="visibility" defaultValue="private"><option value="private">Private Observatory</option><option value="public">Public GitHub proposal</option></select></label>}{formError&&<div className="notice error"><CircleAlert size={16}/>{formError}</div>}<div className="form-actions"><motion.button type="submit" className="primary-button" disabled={saving||!Object.values(checks).every(Boolean)} whileTap={{scale:.97}}><Plus size={16}/>{saving?'Saving…':publicIntake?(proposals.publication_configured?'Create and publish proposal':'Queue public proposal'):'Create proposed task'}</motion.button><button type="button" className="quiet-button" onClick={()=>navigate('tasks')}>Cancel</button></div></form></Panel></Rise><Rise delay={.08}><TaskAdmission checks={checks} publicIntake={publicIntake} publicationConfigured={proposals?.publication_configured}/></Rise></div>}
+{page==='create'&&<div className="detail-layout"><Rise><Panel title="Define engineering task" kicker="CONTROL PLANE / INTAKE"><form className="form" onSubmit={create} onChange={e=>setDraft(taskDraft(e.currentTarget))}><label>Task title <input name="title" placeholder="Vela intelligence state transitions" required minLength={4} maxLength={160}/></label><label>Tangible objective <textarea name="objective" placeholder="Define exactly what behavior must exist, with clear scope…" required minLength={12}/></label><div className="form-grid"><label>Primary category <select name="primary">{types.map(c=><option key={c}>{c}</option>)}</select></label><label>Verification profile <input name="profile_id" defaultValue="visual-gpu" required/></label></div><label>Prerequisite task IDs <input name="dependencies" placeholder="task_001, task_002"/></label><label>Required capabilities <input name="capabilities" placeholder="GPU renderer, visual test harness"/></label><label>Acceptance criteria <textarea name="criteria" required placeholder={'Transitions match approved reference\nPerformance target is met\nOwner visual approval recorded'}/></label>{canPublish&&<label>Visibility <select name="visibility" defaultValue="private"><option value="private">Private Observatory</option><option value="public">Public GitHub proposal</option></select></label>}{formError&&<div className="notice error"><CircleAlert size={16}/>{formError}</div>}<div className="form-actions"><motion.button type="submit" className="primary-button" disabled={saving||!Object.values(checks).every(Boolean)} whileTap={{scale:.97}}><Plus size={16}/>{saving?'Saving…':publicIntake?(proposals.publication_configured?'Create and publish proposal':'Queue public proposal'):'Create proposed task'}</motion.button><button type="button" className="quiet-button" onClick={()=>navigate('tasks')}>Cancel</button></div></form></Panel></Rise><Rise delay={.08}><TaskAdmission checks={checks} tasks={tasks} draft={draft} publicIntake={publicIntake} publicationConfigured={proposals?.publication_configured}/></Rise></div>}
 </motion.div><footer><span>ENGINEERING RECORDS ARE NOT AGENT INTENT · EVIDENCE IS NOT APPROVAL</span><span>CONTROL SURFACE / V1</span></footer></main></div>}
-createRoot(document.getElementById('root')).render(<App/>);
+createRoot(document.getElementById('root')).render(<MotionConfig reducedMotion="user"><App/></MotionConfig>);

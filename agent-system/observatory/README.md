@@ -2,6 +2,27 @@
 
 A deliberately custom, dark engineering-control interface for **engineering Tasks**, not the one-time set of eleven implementation missions. This is an isolated observability and task intake surface; it never overrides Vela MissionService, governance, agent scheduling, review approval, or PR merge authority.
 
+## Task Control Center
+
+Open #tasks to search, filter, sort, and group the Task feed. Task links
+preserve their IDs through reload. An actionable private proposal opens its
+editor and change history. Imported and local execution records display the
+authority available from their source.
+
+The inspector shows direct prerequisites and dependents, recorded attempts,
+evidence, and the Task execution timeline. Missing prerequisites are unverified.
+An accepted upstream Task satisfies the displayed dependency check. Execution
+admission remains with the source owner. Versioned editing preserves a draft
+through an incoming update and requires loading the latest version before saving.
+
+Visible Task routes refresh through the existing overview feed every 30 seconds.
+The Worker’s GitHub cache and rate-limit backoff govern upstream reads.
+
+From this directory, run npm run test:workspace:e2e after installing a
+Playwright Chromium browser. Set OBSERVATORY_BROWSER_EXECUTABLE to use an
+existing Chromium executable. The test uses built assets, real Worker handlers,
+an isolated SQLite database, and fixture GitHub responses.
+
 ## Run
 
 From a checked-out repository with Node.js 20.19+ or 22.12+:
