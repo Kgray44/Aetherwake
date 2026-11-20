@@ -641,10 +641,14 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByText('Task report saved.',{exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>[window.savedReportName,window.savedReportSignature,window.savedReportClosed]),
     [execution.task.id+'-report.pdf','%PDF-',true]);
-  await page.evaluate(()=>Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
+  await page.evaluate(()=>Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>{
+    throw new DOMException('Save cancelled','AbortError');
+  }}));
+  await page.getByRole('button',{name:'Export PDF'}).click();
+  await page.getByText('Save As closed. Use Download PDF to save through your browser.').waitFor();
   const [download]=await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button',{name:'Export PDF'}).click(),
+    page.getByRole('button',{name:'Download PDF',exact:true}).click(),
   ]);
   assert.equal(download.suggestedFilename(),execution.task.id+'-report.pdf');
   if (process.env.OBSERVATORY_REPORT_RECEIPT) await download.saveAs(process.env.OBSERVATORY_REPORT_RECEIPT);
