@@ -80,14 +80,15 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   try {
     const [result, measurements] = await Promise.all([exited, observed]);
     const completed = measurements.find(item => item.name === 'provider_turn_completed_event_count');
-    return { ...result, ok: result.ok && Boolean(session) && completed?.value > 0 };
+    return { ...result, measurements, ok: result.ok && Boolean(session) && completed?.value > 0 };
   } finally {
     signal.removeEventListener('abort', abort);
   }
 }
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
-  identify = checkoutIdentity, execute = executeCodex, onUsage, interval = 12_000 }) {
+  identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
+  interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -121,6 +122,12 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let monitoring;
   let lock;
   let outcome;
+  let telemetryStarted = false;
+  let executionState = 'failed';
+  const telemetry = async (callback, payload) => {
+    try { await callback?.({ task, attempt, ...payload }); }
+    catch { console.error('Task execution telemetry could not be recorded.'); }
+  };
   try {
     await admitStorage();
     identity = await identify(workspace, attempt.revision);
@@ -138,6 +145,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         catch { leaseLost = true; controller.abort(); }
       }
     })();
+    telemetryStarted = true;
+    await telemetry(onTelemetryStart);
     outcome = await execute({ executable, cwd: workspace, task, attempt,
       onSession: value => { sessionId = value; },
       onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
@@ -149,26 +158,33 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     await monitoring;
   }
   try {
-    if (leaseLost) return;
+    if (leaseLost) {
+      executionState = 'interrupted';
+      return;
+    }
     if (!desired && outcome?.ok) await confirmControl();
     if (desired && (outcome?.stopped || outcome?.ok)) {
       const checkpoint = desired === 'pausing' ? await identify(workspace, attempt.revision).catch(() => null) : null;
       await report('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
+      executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
       try { result = await identify(workspace, attempt.revision); }
       catch { /* Record a structured failure when candidate readback is unavailable. */ }
       if (result && !result.dirty && result.branch === identity.branch) {
         await report('finished', { result: 'candidate', revision: result.revision });
+        executionState = 'completed';
       } else {
         await report('failed', { failure: 'Candidate workspace did not yield a clean, pinned revision.' });
       }
     } else {
+      if (workerSignal.aborted) executionState = 'interrupted';
       await report('failed', { failure: workerSignal.aborted
         ? 'Executor interrupted before producing a candidate.'
         : 'Executor or workspace failed before producing a candidate.' });
     }
   } finally {
+    if (telemetryStarted) await telemetry(onTelemetryEnd, { measurements: outcome?.measurements ?? [], state: executionState });
     if (lock) {
       await lock.close();
       await unlink(join(workspace, '.git', 'aads-task-worker.lock'));
