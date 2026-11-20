@@ -70,3 +70,32 @@ export function taskActivity(task, attempts, events, lifecycle) {
   if (event) return { label: 'Execution event reported', at: event.occurred_at ?? null };
   return { label: 'No execution reported', at: null };
 }
+
+export function workspaceCounts(tasks, attempts, summaries) {
+  const latest = new Map();
+  const stamp = attempt => attempt.finished_at ?? attempt.started_at ?? attempt.created_at ?? '';
+  for (const attempt of attempts) {
+    const previous = latest.get(attempt.task_id);
+    if (!previous || stamp(attempt) > stamp(previous)) latest.set(attempt.task_id, attempt);
+  }
+  const counts = { active: 0, accepted: 0, succeeded: 0, review: 0, waiting: 0, issues: 0, unlinked: 0, reportedRunning: 0 };
+  for (const task of tasks) {
+    const engine = summaries.get(task.id)?.lifecycle;
+    const state = engine?.state ?? task.state;
+    const report = latest.get(task.id);
+    if (task.owner_acceptance === 'accepted' && ['completed', 'accepted'].includes(state)) counts.accepted++;
+    else if (engine && ['running','pausing','cancelling'].includes(state)) counts.active++;
+    else if (['failed','blocked'].includes(state) || report?.state === 'failed') counts.issues++;
+    else if (state === 'verifying') counts.review++;
+    else if (report?.state === 'succeeded') counts.succeeded++;
+    else if (engine && ['ready','queued','admitted','scheduled','paused'].includes(state)) counts.waiting++;
+    else if (report?.state === 'running') counts.reportedRunning++;
+    else if (!report && !engine?.executor) counts.unlinked++;
+  }
+  return counts;
+}
+
+export function attemptEvents(attempt, events) {
+  return events.filter(event => event.task_id === attempt.task_id && event.attempt_id === attempt.id && event.revision === attempt.revision)
+    .sort((a,b) => String(a.occurred_at).localeCompare(String(b.occurred_at)));
+}
