@@ -1,7 +1,7 @@
 import { linkedCodexSessionId } from './task-activity.mjs';
 import { accountEngineeringTokens } from './engineering-token-accounting.mjs';
 import { uniqueEngineeringEvents } from './engineering-analytics.mjs';
-import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
+import { desktopSessionTokens, taskTokenProgress, taskTokenRows } from './task-engine-client.mjs';
 
 export const usageFields = [
   ['totalTokens', 'Observed tokens'], ['cachedInputTokens', 'Cached input'],
@@ -141,7 +141,8 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
     sessionTotals:sessionRows.filter(row=>row.observed.totalTokens!==null).length, sessions:sessionRows.length,
     conflicts:eventData.conflicts+sessionRows.filter(row=>row.basis==='Conflicting cumulative receipts').length,
   };
-  return {rows,sessionRows,coverage,billing:'Unknown',observed:addObserved([
+  return {rows,sessionRows,coverage,billing:'Unknown',
+    progressRows:taskTokenProgress(task,taskAttempts,eventData.items,rows),observed:addObserved([
     ...usable.filter(row=>!attemptSessions.has(row.attemptId)).map(row=>row.observed),
     ...sessionRows.map(row=>row.observed),
   ]),desktop:desktopSessionTokens(task.id,eventData.items.filter(event=>!event.session_id)),

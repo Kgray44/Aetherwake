@@ -196,6 +196,11 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         ...(row.receiptId?[['Source event',row.receiptId],['Observed at',row.observedAt]]:[]),
       ]),
       ...blocks(tokens,item=>'Attempt '+(item.attemptNumber??item.attemptId)),
+      ...blocks(usage.progressRows,item=>'In-progress Codex usage · attempt '+item.attemptNumber,item=>[
+        ['Coverage','Observed during the turn. Task totals use final usage receipts.'],
+        ['Observed at',item.observedAt],['Source event',item.receiptId],
+        ...usageFields.map(([key,label])=>[label,display(item.observed[key])]),
+      ]),
       ...blocks(desktop,item=>words(item.name)),
       section('Recorded telemetry and measurement samples',measurements.length),
       ...blocks(measurements,item=>words(item.name??'Measurement')),

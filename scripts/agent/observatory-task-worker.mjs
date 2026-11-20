@@ -210,23 +210,26 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 }
 
 async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,signal}) {
-  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
-    resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished});
-  if (result.usage&&onUsage) {
+  async function recordUsage(usage,method,scope) {
+    if (!usage||!onUsage) return;
     const fields={total:'totalTokens',input:'inputTokens',cached_input:'cachedInputTokens',
       cache_write_input:'cacheWriteInputTokens',output:'outputTokens',reasoning_output:'reasoningOutputTokens'};
     const metrics=Object.entries(fields).flatMap(([name,key])=>{
-      const value=result.usage[key];
+      const value=usage[key];
       return Number.isSafeInteger(value)&&value>=0 ? [{
         name:'provider_'+name+'_tokens',unit:'tokens',value,availability:'observed',
-        source:'codex_app_server_token_usage_updated',method:'fresh_thread_total',
+        source:'codex_app_server_token_usage_updated',method,
       }] : [];
     });
     if (metrics.length) {
-      try { await onUsage(metrics); }
+      try { await onUsage(metrics,scope); }
       catch { console.error('App Server token telemetry could not be recorded.'); }
     }
   }
+  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
+    resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
+    onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
+  if (result.status==='completed') await recordUsage(result.usage,'fresh_thread_total',{sessionId:result.sessionId});
   return {ok:result.status==='completed',stopped:signal.aborted};
 }
 
@@ -355,7 +358,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           throw error;
         }
       },
-      onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
+      onUsage: onUsage && ((measurements,scope) => onUsage({ task, attempt, measurements,...scope })),
       onDevelopmentNote:async (itemId,note,occurredAt=new Date().toISOString())=>{
         if (!sessionId||noteItems.has(itemId)) return;
         noteItems.add(itemId);

@@ -86,6 +86,14 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       {desktop.length>0&&<MeasurementChart title="Desktop-session token counters" rows={desktop.map(metric=>({label:words(metric.name.replace(/^desktop_/,'')),value:metric.value,display:format.format(metric.value)+' tokens'}))}/>}
       {[...resourceGroups].map(([unit, rows]) => <MeasurementChart key={unit} title={'Latest resource readings ('+unit+')'} rows={rows}/>)}
     </div>
+    {usage.progressRows.length>0&&<section aria-label="Codex usage snapshots">
+      <h3>Codex usage snapshots</h3>
+      {usage.progressRows.map(row=><p key={row.receiptId}>
+        Attempt {row.attemptNumber} · <strong>{format.format(row.observed.totalTokens)} tokens observed during the turn</strong>
+        {' · '}<time dateTime={row.observedAt}>{new Date(row.observedAt).toLocaleString()}</time>
+      </p>)}
+      <p className="low">Task totals use final usage receipts.</p>
+    </section>}
     {diagnostics.findings.length>0&&<section aria-label="Execution diagnostics">
       <h3>Execution diagnostics</h3>
       <ul>{diagnostics.findings.map(({title,detail,key})=><li key={key??title}><strong>{title}</strong><p>{detail}</p></li>)}</ul>

@@ -61,11 +61,11 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
       // Observatory connection can deliver a projection.
       await beginDelivery();
     },
-    async onUsage(measurements) {
+    async onUsage(measurements, {sessionId,occurredAt} = {}) {
       if (startedAt === undefined || closing) throw Error('Claim telemetry is not recording');
       if (!Array.isArray(measurements) || measurements.length > 64 ||
           measurements.some(row => !codexTurnSources.has(row?.source))) throw Error('Invalid Codex turn measurements');
-      await appendEvent(journal,event('measurement',measurements));
+      await appendEvent(journal,event('measurement',measurements,{sessionId,occurredAt}));
     },
     async onDevelopmentNote({itemId,sessionId,note,occurredAt}) {
       if (startedAt===undefined||closing) return;
@@ -124,9 +124,9 @@ export function createClaimTelemetryHooks(workspace, delivery = {}, telemetryDir
     onTelemetryStart(input) {
       return observe(input).start();
     },
-    async onUsage({ measurements }) {
+    async onUsage({ measurements,sessionId,occurredAt }) {
       if (!observer) throw Error('Claim telemetry did not start');
-      await observer.onUsage(measurements);
+      await observer.onUsage(measurements,{sessionId,occurredAt});
     },
     onDevelopmentNote(input) {
       return observer?.onDevelopmentNote(input);

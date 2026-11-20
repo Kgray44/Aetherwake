@@ -78,7 +78,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
   async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession,
-    onDevelopmentNote,onTurnStarted,onTurnFinished}) {
+    onDevelopmentNote,onTurnStarted,onTurnFinished,onUsageSnapshot}) {
     runSignal.throwIfAborted();
     await initialized;
     const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
@@ -93,8 +93,24 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
     await onSession(id,identity);
     runSignal.throwIfAborted();
-    let turnId, usage, finish;
+    let turnId, usage, finish, pendingUsage, usageWrite;
+    let lastSampleAt = -Infinity, samples = 0;
     let noteWrites=Promise.resolve();
+    function observeUsage(params) {
+      if (params.turnId!==turnId) return;
+      const total=params.tokenUsage?.total;
+      if (!Number.isSafeInteger(total?.totalTokens)||total.totalTokens<0||
+          total.totalTokens<(usage?.totalTokens??0)) return;
+      const changed=total.totalTokens!==usage?.totalTokens;
+      usage=total;
+      const now=performance.now();
+      if (!onUsageSnapshot||!changed||usageWrite||samples>=16||now-lastSampleAt<15_000) return;
+      lastSampleAt=now;
+      samples++;
+      const occurredAt=new Date().toISOString();
+      usageWrite=Promise.resolve().then(()=>onUsageSnapshot(total,{sessionId:id,occurredAt}))
+        .catch(()=>{}).finally(()=>{usageWrite=undefined;});
+    }
     const completion=new Promise(resolve=>{finish=resolve;});
     const abort=()=>{
       if (turnId) {
@@ -104,7 +120,10 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       }
     };
     threadListeners.set(id,(method,params)=>{
-      if (method==='thread/tokenUsage/updated'&&!resumeSessionId) usage=params.tokenUsage?.total;
+      if (method==='thread/tokenUsage/updated'&&!resumeSessionId) {
+        if (turnId) observeUsage(params);
+        else pendingUsage=params;
+      }
       if (onDevelopmentNote&&method==='item/completed'&&params.item?.type==='agentMessage'&&
           turnId&&params.turnId===turnId&&typeof params.item.id==='string') {
         const note=parseDevelopmentNote(params.item.text);
@@ -123,11 +142,13 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       const turn=await rpc('turn/start',{threadId:id,input:[{type:'text',text:prompt}]},startupTimeoutMs);
       turnId=turn.turn.id;
       await onTurnStarted?.();
+      if (pendingUsage) observeUsage(pendingUsage);
       if (runSignal.aborted) abort();
       const status=await completion;
       await onTurnFinished?.(status);
       await noteWrites;
-      return {status,usage};
+      await usageWrite;
+      return {status,usage,sessionId:id};
     } finally {
       runSignal.removeEventListener('abort',abort);
       threadListeners.delete(id);

@@ -13,10 +13,49 @@ import { readJournal } from '../scripts/agent/journal.mjs';
 import { reconstructAttempts } from '../scripts/agent/record-journal.mjs';
 import { sanitizeExport } from '../scripts/agent/telemetry-export.mjs';
 import { observeCodexStream } from '../scripts/agent/provider-events.mjs';
+import { openObservatoryConnector } from '../scripts/agent/observatory-connector.mjs';
 
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
 const stream = chunks => Readable.from(chunks.map(chunk => Buffer.from(chunk)));
 const line = event => JSON.stringify(event) + '\n';
+
+test('App Server delivers a scoped live sample before the turn ends and preserves the newest cumulative total',async t=>{
+  const cwd=await mkdtemp(join(tmpdir(),'aads-app-server-usage-'));
+  t.after(()=>rm(cwd,{recursive:true,force:true,maxRetries:10,retryDelay:50}));
+  const session='11111111-1111-4111-8111-111111111111';
+  await writeFile(join(cwd,'app-server'),`
+    const {createInterface}=require('node:readline');
+    const threadId=${JSON.stringify(session)}, turnId='current';
+    const send=value=>console.log(JSON.stringify(value));
+    const notice=(method,params)=>send({method,params:{threadId,...params}});
+    const usage=(totalTokens,id=turnId)=>notice('thread/tokenUsage/updated',{turnId:id,tokenUsage:{total:{totalTokens}}});
+    createInterface({input:process.stdin}).on('line',line=>{
+      const {method,id,params}=JSON.parse(line);
+      if (method==='initialize') send({id,result:{}});
+      if (method==='thread/start') send({id,result:{thread:{id:threadId},sandbox:{type:'workspaceWrite',
+        networkAccess:false,writableRoots:[params.cwd]}}});
+      if (method==='turn/start') {
+        usage(100);
+        send({id,result:{turn:{id:turnId}}});
+        setTimeout(()=>{
+          usage(400,'unrelated'); usage(200); usage(125);
+          notice('turn/completed',{turn:{id:turnId,status:'completed'}});
+        },30);
+      }
+    });
+  `);
+  const connector=openObservatoryConnector({executable:process.execPath,cwd});
+  const observations=[];
+  try {
+    const result=await connector.runWorkspaceTurn({cwd,prompt:'Fixture',signal:AbortSignal.timeout(5000),onSession:()=>{},
+      onUsageSnapshot:(usage,{sessionId,occurredAt})=>observations.push([usage.totalTokens,sessionId,Date.parse(occurredAt)]),
+      onTurnFinished:()=>observations.push('finished')});
+    assert.deepEqual(observations.map(value=>Array.isArray(value)?value.slice(0,2):value),[[100,session],'finished']);
+    assert.ok(Number.isFinite(observations[0][2]));
+    assert.equal(result.usage.totalTokens,200);
+    assert.equal(result.sessionId,session);
+  } finally {connector.close();}
+});
 
 test('only explicit concise Codex messages become development notes',async()=>{
   const messages=[

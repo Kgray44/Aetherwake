@@ -472,6 +472,31 @@ test('App Server totals populate the same attempt token rows without adding to C
   assert.deepEqual(build(empty,[{...receipt,revision:'different'}]),[empty]);
 });
 
+test('live App Server usage is scoped, separately reported and superseded by the final receipt',()=>{
+  const task={id:'task_live_tokens',repository:'Kgray44/Aetherwake',title:'Live tokens',objective:'Verify usage snapshots'};
+  const attempt={task_id:task.id,id:'a1',revision:'a'.repeat(40),attempt_number:1,executor:'codex',state:'running',
+    session_id:'10000000-0000-4000-8000-000000000001'};
+  const event=(id,second,total,method='fresh_thread_progress',sessionId=attempt.session_id)=>({
+    event_id:id,task_id:task.id,attempt_id:attempt.id,revision:attempt.revision,repository:task.repository,session_id:sessionId,
+    occurred_at:'2026-01-01T00:00:'+second+'.000Z',kind:'measurement',phase:'implementation',trace_id:'trace',span_id:'span',
+    measurements:[{name:'provider_total_tokens',source:'codex_app_server_token_usage_updated',method,
+      unit:'tokens',availability:'observed',value:total}],
+  });
+  const latest=event('latest','10',700);
+  const events=[latest,event('first','01',300),latest,event('unlinked','11',900,'fresh_thread_progress','different')];
+  const input={task,attempts:[attempt],events};
+  const live=taskUsageAccounting(input);
+  assert.equal(live.observed.totalTokens,null);
+  assert.equal(live.coverage.attemptTotals,0);
+  assert.deepEqual(live.progressRows.map(row=>[row.receiptId,row.observed.totalTokens]),[['latest',700]]);
+  assert.deepEqual(buildTaskTimeline(input).filter(row=>row.id.startsWith('trace:')),[]);
+  assert.match(JSON.stringify(taskReportDefinition(input).content),/In-progress Codex usage/);
+  const finished=taskUsageAccounting({...input,events:[...events,event('final','18',1000,'fresh_thread_total')]});
+  assert.equal(finished.observed.totalTokens,1000);
+  assert.equal(finished.progressRows.length,0);
+  assert.equal(taskUsageAccounting({...input,attempts:[{...attempt,resume_session_id:attempt.session_id}]}).progressRows.length,0);
+});
+
 test('Task usage deduplicates attempt and session scopes and keeps unknown billing', () => {
   const task = {id:'task_usage',repository:'Kgray44/Aetherwake',title:'Usage fixture',objective:'Compare scopes'};
   const revision = 'a'.repeat(40);

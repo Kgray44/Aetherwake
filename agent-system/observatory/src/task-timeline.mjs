@@ -1,3 +1,5 @@
+import { isAppServerUsageProgress } from './task-engine-client.mjs';
+
 const humanize = value => String(value ?? '').replaceAll('_', ' ');
 const detail = (label, value) => value === undefined || value === null || value === '' ? [] : [[label, String(value)]];
 const receiptTitles = {
@@ -120,7 +122,8 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
   }
   const source = telemetrySource?.task_id === task.id ? telemetrySource : null;
   for (const event of events) {
-    if (event.task_id !== task.id || event.kind === 'engineering_activity' || event.kind === 'development_note') continue;
+    if (event.task_id !== task.id || event.kind === 'engineering_activity' || event.kind === 'development_note' ||
+        isAppServerUsageProgress(event)) continue;
     const attempt=attemptById.get(event.attempt_id);
     const actualAttempt=attempt?.revision===event.revision?attempt:null;
     const receipts = source?.event_receipts;

@@ -55,17 +55,27 @@ export function reviewRevision(attempt) {
 
 const appServerSource = 'codex_app_server_token_usage_updated';
 const appServerMethods = new Set(['single_ephemeral_thread_total','fresh_thread_total']);
+const progressMethods = new Set(['fresh_thread_progress']);
 
-function appServerTokenRow(taskId, repository, attempt, events) {
+export function isAppServerUsageProgress(event) {
+  return event.kind==='measurement'&&(event.measurements??[]).some(metric=>
+    metric.source===appServerSource&&progressMethods.has(metric.method));
+}
+
+function appServerTokenRow(taskId, repository, attempt, events, progress = false) {
   if (attempt.resume_session_id) return null;
+  const methods = progress ? progressMethods : appServerMethods;
   const receipts = events.filter(event => event.kind === 'measurement' && event.task_id === taskId &&
     event.attempt_id === attempt.id && event.revision === attempt.revision && event.repository === repository &&
-    (!event.session_id || event.session_id === attempt.session_id) &&
-    (event.measurements ?? []).some(metric => metric.source === appServerSource && appServerMethods.has(metric.method)));
-  if (receipts.length !== 1) return null;
+    (event.session_id ? event.session_id === attempt.session_id : !progress) &&
+    (event.measurements ?? []).some(metric => metric.source === appServerSource && methods.has(metric.method)));
+  if (!receipts.length || (!progress && receipts.length!==1)) return null;
+  if (progress) receipts.sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at)||
+    a.event_id.localeCompare(b.event_id));
+  const receipt=receipts[0];
   const tokens = name => {
-    const samples = receipts[0].measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
-      metric.source === appServerSource && appServerMethods.has(metric.method));
+    const samples = receipt.measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
+      metric.source === appServerSource && methods.has(metric.method));
     const metric = samples.length === 1 ? samples[0] : null;
     return metric?.availability === 'observed' && metric.unit === 'tokens' &&
       Number.isSafeInteger(metric.value) && metric.value >= 0 ? metric.value : null;
@@ -79,11 +89,21 @@ function appServerTokenRow(taskId, repository, attempt, events) {
     taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
     provider:attempt.execution_identity?.provider ?? attempt.provider ?? attempt.executor ?? 'codex',
     model:attempt.execution_identity?.model ?? attempt.model, identitySource:attempt.execution_identity?.source, state:attempt.state,
-    coverage:'observed', source:'Codex App Server', receiptId:receipts[0].event_id,
+    coverage:progress?'in-progress':'observed', source:'Codex App Server', receiptId:receipt.event_id,
+    ...(progress?{observedAt:receipt.occurred_at}:{}),
     observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
       cacheWriteInputTokens:tokens('cache_write_input'),
-      uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:1 },
+      uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:progress?null:1 },
   };
+}
+
+export function taskTokenProgress(task, attempts, events, finalRows) {
+  const finalized = new Set(finalRows.filter(row=>row.observed.totalTokens!=null).map(row=>row.attemptId));
+  return attempts.flatMap(attempt=>{
+    if (finalized.has(attempt.id)) return [];
+    const row=appServerTokenRow(task.id,task.repository,attempt,events,true);
+    return row?[row]:[];
+  });
 }
 
 export function taskTokenRows(accounting, id, attempts = [], events = [], repository) {
