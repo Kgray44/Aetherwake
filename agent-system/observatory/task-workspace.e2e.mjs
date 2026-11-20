@@ -409,7 +409,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
       {...execution.task,state:'proposed',owner_acceptance:'not_reviewed'},benchmarkRecord,mismatchedBenchmark,
     ]}),
   });
-  assert.ok(synced.ok,await synced.text());
+  assert.ok(synced.ok,synced.ok?'':await synced.text());
   const evidence = page.getByRole('region', { name: 'Execution and delivery evidence' });
   const attemptPanel=page.locator('#task-attempts');
   await attemptPanel.getByText('Candidate revision',{exact:true}).waitFor();
@@ -437,6 +437,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const telemetryHeaders = { 'x-observatory-verification': namespace };
   const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
   const { telemetry_scope: scope } = await overview.json();
+  const {digest:telemetryBaseline} = await synced.json();
   const firstAttempt = detail.attempts[0];
   const operationId = 'e'.repeat(64);
   const timedEvent = (phase, kind, offset) => ({
@@ -447,7 +448,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const received = await page.request.post(origin + '/api/task-telemetry/' + execution.task.id, {
     headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
     data: {
-      base: null, generated_at: new Date().toISOString(), records: [execution.task],
+      base: telemetryBaseline, generated_at: new Date().toISOString(), records: [],
       events: [{
         trace_version:1,event_id:'activity_'+operationId+'_result',task_id:execution.task.id,
         trace_id:operationId,span_id:operationId,repository:execution.task.repository,revision:candidate,
@@ -485,6 +486,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
   await search.clear();
   await timeline.getByRole('button',{name:/Task marked complete/}).waitFor();
+  const earlier = timeline.getByRole('button',{name:'Show earlier events'});
+  if (await earlier.count()) await earlier.click();
   await timeline.getByRole('button',{name:/Task created/}).waitFor();
   await timeline.getByRole('button',{name:/Task submitted/}).waitFor();
   await timeline.getByRole('button',{name:'Attempt',exact:true}).click();
@@ -567,8 +570,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
   await telemetry.getByRole('heading',{name:'Observed Task token usage'}).waitFor();
-  await telemetry.getByText('Billing',{exact:true}).waitFor();
-  await telemetry.getByText('Unknown',{exact:true}).waitFor();
+  const billing = telemetry.locator('dl').filter({has:page.getByText('Billing',{exact:true})});
+  await billing.getByText('Unknown',{exact:true}).waitFor();
   const usageTable = telemetry.getByRole('table',{name:'Token usage by executor session'});
   await usageTable.getByRole('cell',{name:'137',exact:true}).waitFor();
   await usageTable.getByText('Source event fixture-delayed-trace').waitFor();
