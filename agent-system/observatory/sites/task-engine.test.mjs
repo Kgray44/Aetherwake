@@ -328,6 +328,41 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
   }), /Invalid Task checkout identity/);
 });
 
+test('a checkout failure exposes live and terminal telemetry before any Codex thread exists',async t=>{
+  const {call,register,command,get}=setup(t);
+  const root=await mkdtemp(join(tmpdir(),'aads-provision-telemetry-'));
+  t.after(()=>rm(root,{force:true,recursive:true}));
+  const task=await register('Unavailable checkout');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const send=async request=>(await call(request,'worker')).body;
+  const {claim}=await send({op:'claim',operation_id:crypto.randomUUID()});
+  const journal=join(root,'claimed-execution.journal');
+  let checkoutStarted=false;
+  const {applyTelemetryDelta}=await import('../telemetry-delta.mjs');
+  let projection;
+  await runClaim({
+    claim,send,signal:AbortSignal.timeout(10_000),admitStorage:async()=>{},
+    telemetryDirectory:root,
+    managedConnection:{async call({change}){
+      if (!change) return {baseline:null};
+      projection=applyTelemetryDelta(projection,change);
+      return {digest:'a'.repeat(64),generated_at:projection.generated_at,received_at:new Date().toISOString(),
+        events:projection.events.length,records:projection.records.length};
+    }},
+    prepareWorkspace:async ({observe})=>observe('checkout_fetch',async()=>{
+      checkoutStarted=(await readJournal(journal)).some(event=>event.kind==='span_start'&&event.span_id.endsWith('-checkout_fetch'));
+      throw Error('Pinned checkout unavailable');
+    }),
+    execute:async()=>assert.fail('Codex must not start without a verified checkout'),
+  });
+  assert.equal(checkoutStarted,true);
+  const result=await get(task);
+  assert.equal(result.lifecycle.state,'failed');
+  assert.equal(result.attempts[0].session_id,undefined);
+  assert.ok(projection?.events.some(event=>event.kind==='span_end'&&event.span_id.endsWith('-checkout_fetch')&&event.state==='failed'));
+  assert.ok(!projection.events.some(event=>event.phase==='implementation'));
+});
+
 test('real subprocess demo persists two artifacts before verified A admits B', async t => {
   const { call, register, command, get, pin } = setup(t);
   const parent = await mkdtemp(join(tmpdir(), 'aads-task-engine-'));

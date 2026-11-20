@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { taskEngineeringActivity } from './src/task-activity.mjs';
-import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
+import { buildTaskTimeline, executorHeartbeat, taskExecutionStatus } from './src/task-timeline.mjs';
+import { developmentNoteBytes, taskDevelopmentNotes } from './development-notes.mjs';
 import { taskReportDefinition } from './src/task-report.mjs';
 import { executionTiming } from './src/execution-timing.mjs';
 import { loadedSessionUsage, taskUsageAccounting } from './src/task-usage-accounting.mjs';
@@ -50,6 +51,31 @@ const blocked = { id: 'blocked', title: 'Build runtime', state: 'blocked', class
 const current = { id: 'task_a', title: 'Build editor', objective: 'Landing workspace', state: 'proposed',
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
+
+test('Task status and Development Notes use exact attempt and session evidence in Workspace and PDF',()=>{
+  const task={id:'task-notes',title:'Notes fixture',objective:'Verify development observations'};
+  const attempt={id:'attempt',task_id:task.id,attempt_number:1,revision:'a'.repeat(40),
+    session_id:'11111111-1111-4111-8111-111111111111',state:'running'};
+  const at='2026-01-04T00:00:00.000Z';
+  const scope={task_id:task.id,attempt_id:attempt.id,revision:attempt.revision,session_id:attempt.session_id};
+  const note={...scope,kind:'development_note',event_id:'note_a',occurred_at:at,
+    development_note:{category:'finding',text:'Fixture caught a stale cache.'}};
+  const other={...note,event_id:'note_b',session_id:'11111111-1111-4111-8111-111111111112',
+    development_note:{category:'warning',text:'Unrelated conversation note.'}};
+  assert.deepEqual(taskDevelopmentNotes(task.id,[other,note],[attempt]),[note]);
+  assert.equal(developmentNoteBytes([note]),29);
+  const report=JSON.stringify(taskReportDefinition({task,attempts:[attempt],events:[note,other]}).content);
+  assert.match(report,/Fixture caught a stale cache/);
+  assert.doesNotMatch(report,/Unrelated conversation note/);
+  assert.match(report,/provider reports turn-level usage only/);
+  const started={...scope,kind:'span_start',span_id:'codex-attempt-codex_turn',occurred_at:at};
+  const status={taskId:task.id,attempt,state:'running'};
+  assert.equal(taskExecutionStatus(status).title,'Codex conversation connected');
+  assert.equal(taskExecutionStatus({...status,events:[started]}).title,'Codex started working');
+  assert.equal(taskExecutionStatus({...status,events:[{...started,kind:'span_end'}]}).title,'Codex stopped working');
+  assert.equal(taskExecutionStatus({...status,state:'failed',attempt:{...attempt,state:'failed',failure:'Pinned checkout failed.'}}).description,
+    'Pinned checkout failed.');
+});
 
 test('linked PRs expose only confirmed GitHub merge commits and keep existing explicit links unique',()=>{
   const task={id:'task-merge',title:'Merge activity',objective:'Inspect the linked merge'};

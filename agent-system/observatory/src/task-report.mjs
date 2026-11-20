@@ -5,6 +5,7 @@ import { traceTimeline } from './trace-timeline.mjs';
 import { executionTiming,timingLegend } from './execution-timing.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
+import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 
 const words = value => value.replaceAll('_',' ');
 const display = value => value == null ? 'Unavailable' : String(value);
@@ -85,6 +86,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const taskEvents=events.filter(event=>event.task_id===task.id);
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
   const taskAttempts=attempts.filter(attempt=>attempt.task_id===task.id);
+  const notes=taskDevelopmentNotes(task.id,taskEvents,taskAttempts);
+  const noteIds=new Set(notes.map(note=>note.event_id));
   const evidence=taskRecords.filter(record=>record.record_type==='evidence');
   const reviewed=ownerReviewByCriterion(task,canonical);
   const reviewRevision=canonical?.attempts?.at(-1)?.candidate_revision??task.revision;
@@ -159,6 +162,13 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         ['Category',item.type], ...(item.description?[['Summary',item.description]]:[]), ...item.details,
         ...(item.href?[['Reference',item.href]]:[]),
       ]),
+      section('Development Notes',notes.length),
+      ...(notes.length ? [
+        {text:developmentNoteBytes(notes)+' bytes of note text. The provider reports turn-level usage only.',style:'muted'},
+        ...blocks(notes,item=>notesCategory(item.development_note.category)+'  ·  '+item.occurred_at,item=>[
+          ['Note',item.development_note.text],['Attempt',item.attempt_id],['Codex session',item.session_id],
+        ]),
+      ] : [none]),
       section('Execution attempts',taskAttempts.length),
       ...blocks(taskAttempts,item=>'Attempt '+item.attempt_number,item=>{
         const duration=Date.parse(item.finished_at)-Date.parse(item.started_at);
@@ -201,7 +211,10 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       section('Appendix · Heartbeat receipts'),
       ...blocks(taskAudits.filter(item=>item.kind==='heartbeat'),item=>(item.at??'Time unavailable')+'  ·  Heartbeat'),
       section('Appendix · Raw trace and contract records'),
-      ...blocks(taskEvents,item=>(item.occurred_at??'Time unavailable')+'  ·  '+words(item.kind??'Execution event')),
+      ...blocks(taskEvents,item=>(item.occurred_at??'Time unavailable')+'  ·  '+words(item.kind??'Execution event'),item=>{
+        const {development_note,...record}=item;
+        return fields(noteIds.has(item.event_id)?item:record);
+      }),
       ...blocks(taskRecords.filter(item=>item.record_type!=='evidence'),item=>words(item.record_type)+'  ·  '+item.id),
     ],
   };

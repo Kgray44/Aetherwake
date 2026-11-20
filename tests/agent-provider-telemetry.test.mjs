@@ -18,6 +18,26 @@ const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
 const stream = chunks => Readable.from(chunks.map(chunk => Buffer.from(chunk)));
 const line = event => JSON.stringify(event) + '\n';
 
+test('only explicit concise Codex messages become development notes',async()=>{
+  const messages=[
+    {id:'note',type:'agent_message',text:'Development note [warning]: Cache warmup masks the first-run regression.'},
+    {id:'plain',type:'agent_message',text:'Normal progress message'},
+    {id:'long',type:'agent_message',text:'Development note [finding]: '+'too long '.repeat(22)},
+    {id:'path',type:'agent_message',text:'Development note [decision]: Use C:/private/file'},
+    {id:'fake',type:'command_execution',aggregated_output:'Development note [finding]: raw process output'},
+  ];
+  const observed=[];
+  await observeCodexStream(stream([
+    line({type:'turn.started'}),...messages.map(item=>line({type:'item.completed',item})),
+    line({type:'turn.completed',usage:{input_tokens:20,output_tokens:10}}),
+  ]),{
+    onTurnStarted:()=>observed.push('started'),
+    onDevelopmentNote:(id,note)=>observed.push([id,note]),
+    onTurnFinished:state=>observed.push(state),
+  });
+  assert.deepEqual(observed,['started',['note',{category:'warning',text:'Cache warmup masks the first-run regression.'}],'completed']);
+});
+
 test('observes Codex token usage incrementally and forwards stdout unchanged', async () => {
   const frames = [
     line({type:'thread.started',thread_id:'private-thread'}),

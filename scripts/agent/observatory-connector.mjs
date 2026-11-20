@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { relative } from 'node:path';
+import { parseDevelopmentNote } from '../../agent-system/observatory/development-notes.mjs';
 
 const server = 'codex_apps';
 const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
@@ -76,7 +77,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     return started.thread.id;
   }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
-  async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession}) {
+  async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession,
+    onDevelopmentNote,onTurnStarted,onTurnFinished}) {
     runSignal.throwIfAborted();
     await initialized;
     const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
@@ -92,6 +94,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     await onSession(id,identity);
     runSignal.throwIfAborted();
     let turnId, usage, finish;
+    let noteWrites=Promise.resolve();
     const completion=new Promise(resolve=>{finish=resolve;});
     const abort=()=>{
       if (turnId) {
@@ -102,6 +105,15 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     };
     threadListeners.set(id,(method,params)=>{
       if (method==='thread/tokenUsage/updated'&&!resumeSessionId) usage=params.tokenUsage?.total;
+      if (onDevelopmentNote&&method==='item/completed'&&params.item?.type==='agentMessage'&&
+          turnId&&params.turnId===turnId&&typeof params.item.id==='string') {
+        const note=parseDevelopmentNote(params.item.text);
+        if (note) {
+          const observedAt=new Date().toISOString();
+          const itemId=params.item.id;
+          noteWrites=noteWrites.then(()=>onDevelopmentNote(itemId,note,observedAt)).catch(()=>{});
+        }
+      }
       if (method==='turn/completed') finish(params.turn?.status);
       if (method==='disconnected') finish('disconnected');
     });
@@ -110,8 +122,12 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       runSignal.throwIfAborted();
       const turn=await rpc('turn/start',{threadId:id,input:[{type:'text',text:prompt}]},startupTimeoutMs);
       turnId=turn.turn.id;
+      await onTurnStarted?.();
       if (runSignal.aborted) abort();
-      return {status:await completion,usage};
+      const status=await completion;
+      await onTurnFinished?.(status);
+      await noteWrites;
+      return {status,usage};
     } finally {
       runSignal.removeEventListener('abort',abort);
       threadListeners.delete(id);

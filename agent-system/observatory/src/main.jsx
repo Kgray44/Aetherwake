@@ -16,6 +16,8 @@ import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
 import {codexThreadHref,hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
+import { taskExecutionStatus } from './task-timeline.mjs';
+import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 import {useCardMotion} from './card-motion.jsx';
 import {TaskTimeline} from './task-timeline.jsx';
 import {StickySectionAside} from './sticky-section-aside.jsx';
@@ -271,6 +273,9 @@ const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyH
 const taskTelemetrySource=demo||!current?null:execution?.sources?.find(source=>source.task_id===current.id);
 const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attempt));
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
+const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
+const executionStatus=canonical?taskExecutionStatus({taskId:canonical.task.id,state:detailState,
+  attempt:canonical.attempts.at(-1),events:taskEvents,audits:taskAudits}):null;
 const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
 const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
 const select=id=>{
@@ -376,12 +381,19 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-timeline')}>Timeline</button>
+  <button className="quiet-button" onClick={()=>jumpToTaskSection('task-development-notes')}>Development notes</button>
   {(proposalControls||canonical&&hasLiveFeed&&!publishedIntake)&&<button className="quiet-button" onClick={()=>jumpToTaskSection('task-editor')}>Task editor</button>}
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-attempts')}>Attempts</button>
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-evidence')}>Evidence</button>
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-telemetry')}>Telemetry</button>
 </nav>
 {detailState==='completed'&&<div className="task-completion" role="status"><CheckCircle2 size={24} aria-hidden="true"/><div><strong>Task complete</strong><small>Owner accepted the verified result.</small></div></div>}
+{executionStatus&&<div className={'task-completion task-execution-banner '+executionStatus.tone} role="status">
+  {executionStatus.tone==='error'?<CircleAlert size={24} aria-hidden="true"/>:<Activity size={24} aria-hidden="true"/>}
+  <div><strong>{executionStatus.title}</strong>{executionStatus.description&&<small>{executionStatus.description}</small>}
+    {executionStatus.at&&<small><time dateTime={executionStatus.at}>{fmt(executionStatus.at)}</time></small>}</div>
+  <button className="quiet-button" onClick={()=>jumpToTaskSection('task-attempts')}>View attempts</button>
+</div>}
 {detailState==='archived'&&<p className="notice" role="status">Task archived{(canonical?.task??current).owner_acceptance==='accepted'?' · Owner accepted the final result.':''}</p>}
 {engineSummary&&hasLiveFeed&&<Rise><Panel id="task-controls" title="Execution controls">
   {engineTask.error&&<p role="alert">{engineTask.error}</p>}
@@ -390,6 +402,15 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 <Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} canonical={canonical} github={demo?null:github} telemetrySource={taskTelemetrySource} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
   executorAttempt={canonical?.attempts.at(-1)} executorState={canonical?.lifecycle.state}
   evidence={related(current.id,'evidence')} records={records} onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/></Panel></Rise>
+<Rise><Panel id="task-development-notes" title="Development Notes"
+  right={developmentNotes.length>0&&<small className="panel-meta" title="The provider includes these messages in turn-level usage. Separate note token counts are unavailable.">
+    {developmentNotes.length} notes · {developmentNoteBytes(developmentNotes)} text bytes
+  </small>}>
+  {developmentNotes.length?<ul className="task-development-notes">{developmentNotes.map(note=><li key={note.event_id}>
+    <strong>{notesCategory(note.development_note.category)}</strong><span>{note.development_note.text}</span>
+    <time dateTime={note.occurred_at}>{fmt(note.occurred_at)}</time>
+  </li>)}</ul>:<p className="muted">No notes recorded.</p>}
+</Panel></Rise>
 {canonical&&hasLiveFeed&&!publishedIntake&&<Rise><Panel id="task-editor" title="Task editor">
   <ProposalControls key={current.id} task={canonical.task} control={canonical} tasks={canonicalTasks} summaries={summaries} Status={Status} classes={types}
     headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false,{quiet:true})}

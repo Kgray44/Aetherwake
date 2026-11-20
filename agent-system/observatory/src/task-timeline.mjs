@@ -11,6 +11,13 @@ const receiptTitles = {
 };
 
 const activeExecution = new Set(['running','pausing','cancelling']);
+const workerStages = {
+  worker_initialization:'Worker initialization', checkout_provisioning:'Checkout preparation',
+  checkout_fetch:'Fetch pinned revision', checkout_materialization:'Materialize checkout',
+  checkout_validation:'Validate checkout', candidate_git_verification:'Verify candidate revision',
+  codex_turn:'Codex work',
+  candidate_submission:'Submit candidate', checkout_lock_release:'Release checkout lock',
+};
 
 export function executorHeartbeat({ taskId, attempt, state, audits = [], now = Date.now() }) {
   if (!attempt?.id) return null;
@@ -26,6 +33,32 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
   const status = !active ? 'ended' : leaseUntil != null && now >= leaseUntil ? 'overdue'
     : lastAt ? 'receiving' : 'awaiting';
   return {status,lastAt,leaseUntil};
+}
+
+export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) {
+  if (!attempt) return null;
+  if (attempt.state==='failed'||attempt.state==='blocked') return {
+    title:'Attempt '+attempt.attempt_number+' failed',tone:'error',at:attempt.finished_at,
+    description:attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.',
+  };
+  if (!activeExecution.has(state)) {
+    if (!attempt.finished_at||state==='completed'||state==='archived') return null;
+    return {title:attempt.session_id?'Codex stopped working':'Execution attempt ended',tone:'neutral',
+      at:attempt.finished_at,description:state==='verifying'?'Candidate awaits owner review.':null};
+  }
+  const prefix='codex-'+attempt.id+'-';
+  const latest=events.filter(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&event.revision===attempt.revision&&
+    (event.kind==='span_start'||event.kind==='span_end')&&event.span_id?.startsWith(prefix))
+    .sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at))
+    .find(event=>Object.hasOwn(workerStages,event.span_id.slice(prefix.length)));
+  const heartbeat=executorHeartbeat({taskId,attempt,state,audits});
+  const stage=latest?.span_id.slice(prefix.length);
+  const title=stage==='codex_turn'?(latest.kind==='span_start'?'Codex started working':'Codex stopped working')
+    : stage ? workerStages[stage] : attempt.session_id?'Codex conversation connected':'Worker preparing execution';
+  return {title,tone:heartbeat?.status==='overdue'?'error':'neutral',at:latest?.occurred_at??attempt.started_at,
+    description:heartbeat?.status==='overdue'?'Worker heartbeat overdue. Check the attempt for updates.'
+      : stage==='codex_turn'&&latest.state==='failed'?'The Codex turn reported a failure.'
+      : !stage&&attempt.session_id?'Waiting for a Codex work event.':null};
 }
 
 export function journalReceiptSummary(timeline) {
@@ -87,14 +120,19 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
   }
   const source = telemetrySource?.task_id === task.id ? telemetrySource : null;
   for (const event of events) {
-    if (event.task_id !== task.id || event.kind === 'engineering_activity') continue;
+    if (event.task_id !== task.id || event.kind === 'engineering_activity' || event.kind === 'development_note') continue;
     const attempt=attemptById.get(event.attempt_id);
     const actualAttempt=attempt?.revision===event.revision?attempt:null;
     const receipts = source?.event_receipts;
     const receivedAt = receipts && Object.hasOwn(receipts,event.event_id) ? receipts[event.event_id] : null;
     const clockConflict = receivedAt && Date.parse(receivedAt) < Date.parse(event.occurred_at);
+    const stagePrefix = 'codex-'+event.attempt_id+'-';
+    const stage = actualAttempt && event.span_id?.startsWith(stagePrefix)
+      ? event.span_id.slice(stagePrefix.length) : null;
+    const stageName = Object.hasOwn(workerStages,stage) ? workerStages[stage] : null;
     add({id:'trace:'+event.event_id,at:event.occurred_at,type:'Trace',journalReceipt:receivedAt,
-      title:[humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),attemptId:actualAttempt?.id,
+      title:stageName ? stageName+' · '+humanize(event.state??event.kind)
+        : [humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),attemptId:actualAttempt?.id,
       activityType:event.kind,outcome:event.state,executor:actualAttempt?.executor??actualAttempt?.provider,
       description:[actualAttempt?'Attempt '+actualAttempt.attempt_number:'',humanize(event.state)].filter(Boolean).join(' · '),
       details:[...detail('Attempt ID',event.attempt_id),...detail('Revision',event.revision),...detail('Trace ID',event.trace_id),

@@ -352,6 +352,19 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-completion { display:flex; align-items:center; gap:.8rem; padding:.8rem 1rem; margin-bottom:1rem; border:1px solid #365f50; border-radius:.6rem; color:#abebc9; background:#162e28; }
 .task-completion div { display:grid; gap:.25rem; }
 .task-completion small { color:#a6c3b5; }
+.task-execution-banner { background:var(--panel2); border-color:var(--border); color:var(--accent); }
+.task-execution-banner small { color:var(--muted); }
+.task-execution-banner.error { background:#311e25; border-color:#754554; color:#ffd0d4; }
+.task-execution-banner.error small { color:#e4b8c0; }
+.task-execution-banner svg { flex:none; }
+.task-execution-banner button { margin-inline-start:auto; }
+.task-development-notes { list-style:none; margin:0; padding:0; }
+.task-development-notes li { display:grid; grid-template-columns:minmax(5.5rem,auto) 1fr auto; align-items:baseline; gap:.75rem;
+  padding:.65rem 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.task-development-notes li:last-child { border-bottom:0; }
+.task-development-notes strong { color:var(--accent); font-size:.8rem; }
+.task-development-notes time { color:var(--muted); font-size:.75rem; }
+@media(max-width:650px) { .task-development-notes li { grid-template-columns:1fr; gap:.25rem; } }
 .status-completed { color:#98debe; border-color:#365f50; background:#18352b; }
 .task-timeline-event.milestone .task-timeline-label strong { color:#b6f2ca; }
 .task-timeline-event.milestone .task-timeline-node { color:#b6f2ca; background:#254c3e; border-color:#4b876c; }
