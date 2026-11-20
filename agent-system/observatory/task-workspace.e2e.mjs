@@ -516,9 +516,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const association=page.getByRole('form',{name:'Attach evidence link'});
   const observedAt = new Date().toISOString();
   const mergeCommit = 'c'.repeat(40);
+  const pullCommit = 'd'.repeat(40);
   await seedGithubDetail('pulls:319',{
     kind:'pull',number:319,title:'Review fixture',state:'closed',created_at:observedAt,
     merged_at:observedAt,merge_commit_sha:mergeCommit,
+    head:{sha:pullCommit},commit_items:[{revision:pullCommit,committed_at:observedAt}],
+    commits_observed_at:observedAt,commits_status:'available',
     reviews:[{id:81,state:'APPROVED',submitted_at:observedAt}],reviews_observed_at:observedAt,reviews_status:'available',
   },observedAt);
   await association.getByLabel('Reference type').selectOption('pull_request');
@@ -546,6 +549,10 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await timeline.getByRole('button',{name:/Pull request #319 merged/}).click();
   assert.equal(await selected.getByRole('link',{name:mergeCommit,exact:true}).getAttribute('href'),
     'https://github.com/Kgray44/Aetherwake/commit/'+mergeCommit);
+  await timeline.getByRole('button',{name:new RegExp('Commit '+pullCommit.slice(0,10))}).click();
+  await selected.getByText('Git commit committer time',{exact:true}).waitFor();
+  assert.equal(await selected.getByRole('link',{name:'Open linked activity'}).getAttribute('href'),
+    'https://github.com/Kgray44/Aetherwake/commit/'+pullCommit);
   await timeline.getByRole('button',{name:/Reported deployment validation · succeeded/}).click();
   await timeline.getByText('Reported by the source journal',{exact:true}).waitFor();
   await timeline.getByRole('button',{name:/CI job finished.*Observatory browser tests/}).click();

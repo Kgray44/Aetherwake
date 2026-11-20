@@ -57,7 +57,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
   });
   const event=visible.find(item=>item.id===selected)??visible[0];
   const activeId=event?.id;
-  const activity=taskActivityHref(event?.href);
+  const activity=taskLinkedHref(event?.href);
   function updateCriterion(field,value){setCriteria(previous=>({...previous,[field]:value}));setLimit(14);}
   function focusEventDetails(){
     const title=heading.current;
@@ -144,7 +144,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
           <h3 ref={heading} tabIndex={-1}>{event.title}</h3>
           <p>Recorded occurrence <time dateTime={event.at} title={event.at}>{new Date(event.at).toLocaleString()}</time></p>
           {event.description&&<p>{event.description}</p>}
-          {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label}>
+          {event.details.length>0&&<dl className="github-facts">{event.details.map(([label,value])=><div key={label+':'+value}>
             <dt>{label}</dt><dd>{label==='Merge commit'&&value===event.mergeCommitHref
               ?<a href={event.mergeCommitHref}>{value.slice(-40)}</a>:value}</dd>
           </div>)}</dl>}
@@ -164,7 +164,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
       <summary>Linked engineering references ({known.references.length})</summary>
       <ul>{known.references.map(ref=><li key={ref.id}>
         <a href={taskLinkedHref(ref.url)}>{ref.label}</a>{' · '}{ref.revisions.map(revision=>revision.slice(0,10)).join(', ')}
-        {ref.provenance&&<small className="row-meta">{ref.provenance}</small>}
+        {ref.provenance&&<small className="row-meta">{ref.provenance}{ref.source_status?' · '+ref.source_status+' snapshot':''}</small>}
       </li>)}</ul>
     </details>}
   </section>;

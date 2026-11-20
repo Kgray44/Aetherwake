@@ -99,11 +99,19 @@ function pullReview(review) {
   return { id: review.id, author: logins(review.user), state: text(review.state, 48), submitted_at: time(review.submitted_at) };
 }
 
+function pullCommit(commit) {
+  if (!isRevision(commit?.sha)) throw new Error('Invalid pull request commit');
+  return { revision:commit.sha, committed_at:time(commit.commit?.committer?.date) };
+}
+
 async function pullSections(reader, path, detail, previous, validators, next, now) {
   const output = {};
   const sameSource = previous?.head.sha === detail.head.sha && previous?.base.sha === detail.base.sha;
   const reasons = [];
-  for (const [kind, convert] of [['files', pullFile], ['reviews', pullReview]]) {
+  const sections = [['files', pullFile, detail.changed_files ?? 0], ['reviews', pullReview, null]];
+  if (detail.commits > 0) sections.push(['commits', pullCommit, detail.commits]);
+  for (const [kind, convert, total] of sections) {
+    const field = kind === 'commits' ? 'commit_items' : kind;
     // These are observations of GitHub's live PR subcollections. The source
     // SHAs come from the core PR read and do not attest a submitted evidence set.
     const retained = (kind === 'reviews' || sameSource) && previous?.[kind + '_observed_at'] ? previous : null;
@@ -113,21 +121,28 @@ async function pullSections(reader, path, detail, previous, validators, next, no
       if (!response.unchanged && (!Array.isArray(response.data) || response.data.length > PULL_SECTION_LIMIT)) {
         throw new Error('Invalid pull request section');
       }
-      const items = response.unchanged ? retained[kind] : response.data.map(convert);
+      const items = response.unchanged ? retained[field] : response.data.map(convert);
       const truncated = response.unchanged ? retained[kind + '_truncated']
-        : response.hasNext || (kind === 'files' ? items.length < (detail.changed_files ?? 0) : items.length === PULL_SECTION_LIMIT);
+        : response.hasNext || (total === null ? items.length === PULL_SECTION_LIMIT : items.length < total);
+      if (kind === 'commits' && (items.length !== Math.min(total, PULL_SECTION_LIMIT) ||
+          new Set(items.map(item=>item.revision)).size !== items.length ||
+          (!truncated && !items.some(item=>item.revision===detail.head.sha)))) {
+        throw new Error('Pull request commits did not match the observed revision and count');
+      }
       next[kind] = response.etag;
       return { items, truncated };
     });
-    output[kind] = outcome.status === 'available' ? outcome.items : retained?.[kind] ?? [];
+    output[field] = outcome.status === 'available' ? outcome.items : retained?.[field] ?? [];
     output[kind + '_status'] = outcome.status === 'available'
       ? (outcome.truncated ? 'partial' : 'available') : retained ? 'stale' : 'unavailable';
     output[kind + '_truncated'] = outcome.truncated ?? retained?.[kind + '_truncated'] ?? false;
     output[kind + '_observed_at'] = outcome.status === 'available'
       ? new Date(now()).toISOString() : retained?.[kind + '_observed_at'] ?? null;
     output[kind + '_reason'] = outcome.reason ?? (outcome.truncated ? 'GitHub section exceeded the display limit' : null);
-    if (outcome.reason) reasons.push(outcome.reason);
-    else if (outcome.truncated) reasons.push('GitHub pull files or reviews exceeded the display limit');
+    if (kind !== 'commits') {
+      if (outcome.reason) reasons.push(outcome.reason);
+      else if (outcome.truncated) reasons.push('GitHub pull ' + kind + ' exceeded the display limit');
+    }
     if (outcome.status !== 'available' && retained) next[kind] = validators[kind];
   }
   return { output, reason: reasons.find(value => !value.includes('exceeded the display limit')) ?? reasons[0] ?? null };

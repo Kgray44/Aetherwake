@@ -68,6 +68,7 @@ function githubEvents(references, github, snapshots) {
   }
   const events = new Map();
   const mergeCommits = new Map();
+  const pullCommits = new Map();
   const add = (id,at,fields) => {
     if (Number.isFinite(Date.parse(at))) events.set(id,{id,at,type:'Engineering',...fields});
   };
@@ -87,8 +88,10 @@ function githubEvents(references, github, snapshots) {
       if (!pull && !detail) continue;
       const prefix = 'github:pull:'+id+':';
       const source = pull?github?.pulls?.observed_at:detail?.observed_at;
+      const commitCoverage = !detail?.commits_status ? 'Unavailable until PR details are observed' : detail.commits_status;
       const common = {activityType:'pull_request',href,description:pull?.title??detail?.title,
-        details:[['Source','GitHub pull request snapshot'],explicit,...(source?[['Snapshot observed',source]]:[])]};
+        details:[['Source','GitHub pull request snapshot'],explicit,...(source?[['Snapshot observed',source]]:[]),
+          ['Commit list coverage',commitCoverage]]};
       const opened = pull?.created_at??detail?.created_at;
       const merged = pull?.merged_at??detail?.merged_at;
       const closed = !merged&&detail?.state==='closed'?detail.closed_at:null;
@@ -110,6 +113,28 @@ function githubEvents(references, github, snapshots) {
       if (linkedPull) add(prefix+'closed',closed,{...common,title:'Pull request #'+id+' closed',outcome:'closed'});
       if (linkedPull && latest && ![opened,merged,closed].some(at=>Date.parse(at)===Date.parse(latest))) {
         add(prefix+'latest-update',latest,{...common,title:'Pull request #'+id+' last update',outcome:'updated'});
+      }
+      if (linkedPull && detail?.number===id && /^[a-f0-9]{40}$/.test(detail.commit_head??'') &&
+          Number.isFinite(Date.parse(detail.commits_observed_at)) &&
+          ['available','partial','stale'].includes(detail.commits_status)) {
+        for (const {revision,committed_at:committedAt} of detail.commit_items??[]) {
+          if (!/^[a-f0-9]{40}$/.test(revision??'')) continue;
+          const url = 'https://github.com/Kgray44/Aetherwake/commit/'+revision;
+          const provenance = 'GitHub commit list of linked pull request #'+id;
+          if (!pullCommits.has(revision)) {
+            pullCommits.set(revision,{id:'pull-commit:'+revision,kind:'commit',label:'PR commit',url,
+              revisions:[revision],provenance,source_status:detail.commits_status});
+          }
+          const eventId = 'github:commit:'+revision;
+          const association = ['Association',provenance];
+          const observation = ['Commit list observed',detail.commits_observed_at+' · '+detail.commits_status+' · PR head '+detail.commit_head];
+          if (events.has(eventId)) {
+            events.get(eventId).details.push(association,observation);
+            continue;
+          }
+          add(eventId,committedAt,{activityType:'commit',title:'Commit '+revision.slice(0,10),href:url,
+            details:[['Revision',revision],['Clock','Git commit committer time'],association,observation]});
+        }
       }
       for (const review of detail?.reviews??[]) {
         if (!linkedPull&&!refs.some(ref=>ref.kind==='review'&&new URL(ref.url).hash==='#pullrequestreview-'+review.id)) continue;
@@ -158,7 +183,8 @@ function githubEvents(references, github, snapshots) {
       details:[['Source','GitHub workflow snapshot'],['Association','GitHub-linked pull request #'+pullNumber+' at the Task-linked revision'],
         ['Run revision',run.revision],...(github?.ci?.observed_at?[['Snapshot observed',github.ci.observed_at]]:[])]});
   }
-  return {events:[...events.values()],mergeCommits:[...mergeCommits.values()]};
+  return {events:[...events.values()],commits:[...mergeCommits.values(),
+    ...[...pullCommits].filter(([revision])=>!mergeCommits.has(revision)).map(([,item])=>item)]};
 }
 
 function reportedEvents(task, events, attempts, telemetrySource) {
@@ -189,7 +215,7 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
   const explicitReferences=linkedReferences(task,authoritative,audits,evidence);
   const githubActivity=githubEvents(explicitReferences,github,authoritative?.engineering_snapshots??[]);
   const explicitCommits=new Set(explicitReferences.filter(ref=>ref.kind==='commit').map(ref=>ref.url.toLowerCase().replace(/\/$/,'')));
-  const references=[...explicitReferences,...githubActivity.mergeCommits.filter(ref=>!explicitCommits.has(ref.url.toLowerCase()))];
+  const references=[...explicitReferences,...githubActivity.commits.filter(ref=>!explicitCommits.has(ref.url.toLowerCase()))];
   const operations=references.filter(ref=>!['executor_session','artifact','branch'].includes(ref.kind));
   const sessions=new Set(references.filter(ref=>ref.kind==='executor_session').map(ref=>sessionKey(ref.url)));
   for (const attempt of authoritative?.attempts??[]) {

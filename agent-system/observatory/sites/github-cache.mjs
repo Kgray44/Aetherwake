@@ -155,6 +155,8 @@ export async function peekTaskGitHubDetails(db, token, references, now = Date.no
     if (detail.kind==='pull') return [{...common,number:detail.number,title:detail.title,state:detail.state,
       created_at:detail.created_at,updated_at:detail.updated_at,closed_at:detail.closed_at,merged_at:detail.merged_at,
       merge_commit_sha:detail.merge_commit_sha,
+      commit_items:detail.commit_items,commit_head:detail.head?.sha,
+      commits_observed_at:detail.commits_observed_at,commits_status:status==='stale'&&detail.commits_observed_at?'stale':detail.commits_status,
       reviews:detail.reviews?.map(({id,state,submitted_at})=>({id,state,submitted_at})),
       reviews_observed_at:detail.reviews_observed_at,reviews_status:status==='stale'?'stale':detail.reviews_status}];
     if (detail.kind!=='run') return [];

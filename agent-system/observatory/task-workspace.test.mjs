@@ -72,6 +72,34 @@ test('linked PRs expose only confirmed GitHub merge commits and keep existing ex
     .references.filter(ref=>ref.kind==='commit').length,1);
 });
 
+test('linked PR commit snapshots share exact links and clock provenance across Workspace and PDF',()=>{
+  const task={id:'task-pr-commits',title:'Commit activity',objective:'Inspect linked engineering work'};
+  const repo='https://github.com/Kgray44/Aetherwake';
+  const sha='a'.repeat(40), undated='b'.repeat(40), unrelated='c'.repeat(40);
+  const commitAt='2026-01-02T00:00:00Z', observedAt='2026-01-04T00:00:00Z';
+  const snapshot={cache_key:'pulls:12',number:12,commit_head:undated,
+    commits_status:'partial',commits_observed_at:observedAt,commit_items:[
+      {revision:sha,committed_at:commitAt},{revision:undated,committed_at:null},
+    ]};
+  const canonical={task,lifecycle:{state:'verifying',links:[
+    {kind:'pull_request',uri:repo+'/pull/12'}, {kind:'pull_request',uri:repo+'/pull/13'},
+  ]},engineering_snapshots:[snapshot,{...snapshot,cache_key:'pulls:13',number:13},
+    {...snapshot,cache_key:'pulls:14',number:14,commit_items:[{revision:unrelated,committed_at:commitAt}]}]};
+  const activity=taskEngineeringActivity({task,canonical});
+  const commits=activity.references.filter(ref=>ref.kind==='commit');
+  assert.deepEqual(commits.map(ref=>ref.revisions[0]),[sha,undated]);
+  assert.equal(activity.events.length,1);
+  assert.equal(activity.events[0].at,commitAt);
+  assert.equal(activity.events[0].href,repo+'/commit/'+sha);
+  assert.ok(activity.events[0].details.some(([,value])=>value.includes(observedAt)));
+  assert.ok(activity.events[0].details.some(([,value])=>value.includes('#13')));
+  const pdf=JSON.stringify(taskReportDefinition({task,canonical}).content);
+  assert.ok(pdf.includes(repo+'/commit/'+sha));
+  assert.ok(pdf.includes('Git commit committer time'));
+  assert.ok(pdf.includes('partial'));
+  assert.ok(!pdf.includes(unrelated));
+});
+
 test('cached review and CI detail stay revision bound across Workspace and PDF',()=>{
   const task={id:'t',title:'Activity fixture',objective:'Link source activity'};
   const revision='a'.repeat(40);
