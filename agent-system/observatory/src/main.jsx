@@ -18,6 +18,7 @@ import {dependencyGraph,parseTaskHref,taskActivity,taskHref,workspaceCounts} fro
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
 import {taskEngineRequest} from './task-engine-client.mjs';
 import {buildEngineeringAnalytics} from './engineering-analytics.mjs';
+import {useCardMotion} from './card-motion.jsx';
 import './styles.css';
 
 const TaskEngineControls=lazy(()=>import('./task-engine-controls.jsx').then(module=>({default:module.TaskEngineControls})));
@@ -38,7 +39,7 @@ function Rise({children,delay=0,className='',...rest}){const reduce=useReducedMo
 function Status({value='unavailable'}){return <span className={'status status-'+value}><span className="status-light"/>{String(value).replaceAll('_',' ')}</span>}
 function Panel({title,kicker,right,children,className=''}){return <section className={'panel '+className}><div className="panel-heading"><div>{kicker&&<div className="kicker">{kicker}</div>}<h2>{title}</h2></div>{right}</div>{children}</section>}
 function Empty({title='No records available',body='Create a task or connect a contract-compliant record source.'}){return <div className="empty"><Boxes size={25}/><strong>{title}</strong><p>{body}</p></div>}
-function Metric({name,value,meta,Icon,index}){return <Rise className="metric" delay={index*.055}><div className="metric-top"><span>{name}</span><Icon size={17}/></div><strong>{value}</strong><small>{meta}</small><span className="metric-rule"/></Rise>}
+function Metric({name,value,meta,Icon,index}){const interaction=useCardMotion();return <Rise className="metric" delay={index*.055} {...interaction}><div className="metric-top"><span>{name}</span><Icon size={17}/></div><strong>{value}</strong><small>{meta}</small><span className="metric-rule"/></Rise>}
 function Timeline({values}){const max=Math.max(1,...values);const coords=values.map((v,i)=>[i/(Math.max(1,values.length-1))*720,138-v/max*115]);const line=coords.map(([x,y],i)=>(i?'L':'M')+x+' '+y).join(' ');return <div className="timeline-chart"><svg viewBox="0 0 720 155" preserveAspectRatio="none" role="img" aria-label="Engineering tasks created over the last fourteen days"><defs><linearGradient id="graph-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#74d2e6" stopOpacity=".24"/><stop offset="1" stopColor="#74d2e6" stopOpacity="0"/></linearGradient></defs>{[30,65,100,138].map(y=><line key={y} x1="0" x2="720" y1={y} y2={y} stroke="rgba(255,255,255,.07)"/>)}<path d={line+' L720 155 L0 155Z'} fill="url(#graph-fill)"/><motion.path d={line} fill="none" stroke="#84dfea" strokeWidth="2.7" vectorEffect="non-scaling-stroke" initial={{pathLength:0}} animate={{pathLength:1}} transition={{duration:1.3,ease}}/>{coords.map(([x,y],i)=><circle key={i} cx={x} cy={y} r={values[i]?3:1.5} fill="#b4ecf3" opacity={values[i]?1:.2}/>)}</svg></div>}
 function DetailLine({name,value}){return <div className="detail-line"><span>{name}</span><strong>{value??'Unavailable'}</strong></div>}
 const initialDraft = { primary: 'visual', profile_id: 'visual-gpu', visibility: 'private' };

@@ -247,6 +247,17 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
   assert.equal(await evidence.getByText(candidate, { exact: true }).count(), 2);
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
+  const actionCard = page.getByRole('button',{name:'Attach evidence link'});
+  await actionCard.hover();
+  assert.equal(await actionCard.evaluate(el => getComputedStyle(el).transform), 'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.reload();
+  await page.getByRole('heading',{name:'Execution controls',exact:true}).hover();
+  await actionCard.hover();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.task-command-button:hover');
+    return node && Math.abs(new DOMMatrix(getComputedStyle(node).transform).m42 + 1) < .05;
+  });
   await page.setViewportSize({width:820,height:620});
   const telemetry = page.getByRole('region',{name:'Task telemetry'});
   await telemetry.getByRole('heading',{name:'Time by phase'}).waitFor();
@@ -254,4 +265,11 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.locator('footer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await page.locator('footer').evaluate(footer => footer.getBoundingClientRect().bottom <= innerHeight + 2), true);
+  await page.getByRole('button',{name:'Overview',exact:true}).click();
+  const overviewCard = page.locator('.metric').filter({hasText:'Registered tasks'});
+  await overviewCard.hover();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.metric:hover');
+    return node && Math.abs(new DOMMatrix(getComputedStyle(node).transform).m42 + 1) < .05;
+  });
 });

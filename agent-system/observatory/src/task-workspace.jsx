@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
+import { useCardMotion } from './card-motion.jsx';
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { attemptEvents, dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
 
@@ -10,6 +11,7 @@ const date = value => value ? new Date(value).toLocaleDateString() : 'Unavailabl
 
 export function TaskRows({ tasks, controls, related, activityFor, Status }) {
   const reduce = useReducedMotion();
+  const interaction = useCardMotion(true);
   return <ul className="task-rows">
     <AnimatePresence initial={false}>
       {tasks.map(task => {
@@ -17,7 +19,7 @@ export function TaskRows({ tasks, controls, related, activityFor, Status }) {
         return <motion.li key={task.id} layout={reduce ? false : 'position'}
           initial={reduce ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0 }} transition={{ duration: reduce ? 0 : .18 }}>
-          <a className="task-row" href={taskHref(task.id)}>
+          <motion.a className="task-row" href={taskHref(task.id)} {...interaction}>
             <span className="task-row-title">
               <strong>{task.title}</strong>
               <small>{task.classification?.primary ?? 'Class unavailable'} · {date(task.created_at)}</small>
@@ -26,7 +28,7 @@ export function TaskRows({ tasks, controls, related, activityFor, Status }) {
             <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
             <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{related(task.id, 'attempt').length} attempts · {related(task.id, 'evidence').length} evidence</small></span>
             <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
-          </a>
+          </motion.a>
         </motion.li>;
       })}
     </AnimatePresence>
