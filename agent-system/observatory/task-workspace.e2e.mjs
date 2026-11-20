@@ -13,12 +13,14 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { chromium } from 'playwright';
 import { createWorker } from './sites/worker.mjs';
+import { sha256 } from './sites/task-telemetry.mjs';
 
 const read = (path, type = 'utf8') => readFileSync(new URL(path, import.meta.url), type);
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const taskTitle = 'Worker-backed workspace verification';
 const editTitle = 'Worker-backed editor verification';
 const owner = 'isolated-browser-test';
+const githubToken = 'isolated-github-fixture';
 
 async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
   const sql = new DatabaseSync(':memory:');
@@ -64,7 +66,7 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     });
     const response = !canonical && new URL(request.url).pathname === '/api/task-engine/v1'
       ? new Response(null, { status: 404 })
-      : await worker.fetch(request, { DB, OBSERVATORY_TASK_ENGINE_OWNER_ID: owner });
+      : await worker.fetch(request, { DB, OBSERVATORY_TASK_ENGINE_OWNER_ID: owner, ...(canonical?{GITHUB_READ_TOKEN:githubToken}:{}) });
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
   });
@@ -81,7 +83,12 @@ async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
     assert.equal(result.status, 200, JSON.stringify(result.body));
     return result.body;
   }
-  return { origin, executor };
+  async function seedGithubDetail(key, detail, observed_at) {
+    const credential = await sha256(githubToken);
+    sql.prepare("INSERT INTO github_details(cache_key,credential_key,retry_at,stored_at,payload,validators) VALUES(?,?,?,?,?,'{}')")
+      .run(key,credential,Date.now()+600_000,Date.now(),JSON.stringify({detail,observed_at,status:'available'}));
+  }
+  return { origin, executor, seedGithubDetail };
 }
 
 test('keyboard, reduced motion, versioned edits, dependency admission and reload in the real workspace', { timeout: 120_000 }, async t => {
@@ -194,7 +201,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await git('config', 'user.email', 'workspace@example.test');
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Verification baseline');
   const baseline = await git('rev-parse', 'HEAD');
-  const { origin, executor } = await start(t, { canonical: true, revision: baseline });
+  const { origin, executor, seedGithubDetail } = await start(t, { canonical: true, revision: baseline });
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
@@ -454,6 +461,11 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.waitForFunction(()=>document.activeElement?.textContent==='Attempt 1');
   await page.getByRole('button',{name:'Attach evidence link'}).click();
   const association=page.getByRole('form',{name:'Attach evidence link'});
+  const observedAt = new Date().toISOString();
+  await seedGithubDetail('pulls:319',{
+    kind:'pull',number:319,title:'Review fixture',state:'open',created_at:observedAt,
+    reviews:[{id:81,state:'APPROVED',submitted_at:observedAt}],reviews_observed_at:observedAt,reviews_status:'available',
+  },observedAt);
   await association.getByLabel('Reference type').selectOption('pull_request');
   await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/pull/319');
   await association.getByRole('button',{name:'Confirm'}).click();
@@ -462,12 +474,23 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await pull.getAttribute('href'),'#pull-requests/319');
   assert.equal(await pull.getAttribute('target'),null);
   await page.getByRole('button',{name:'Attach evidence link'}).click();
+  await seedGithubDetail('runs:5321',{
+    kind:'run',id:5321,title:'Engineering validation',head:{sha:candidate},attempt:2,
+    created_at:observedAt,started_at:observedAt,status:'completed',conclusion:'success',
+    jobs:[{id:91,name:'Observatory browser tests',status:'completed',conclusion:'success',completed_at:observedAt}],
+    jobs_observed_at:observedAt,
+  },observedAt);
   await association.getByLabel('Reference type').selectOption('ci_run');
   await association.getByLabel('Evidence URL').fill('https://github.com/Kgray44/Aetherwake/actions/runs/5321');
   await association.getByRole('button',{name:'Confirm'}).click();
   const run=evidence.getByRole('link',{name:'ci run',exact:true});
   await run.waitFor();
   assert.equal(await run.getAttribute('href'),'#ci-runs/5321');
+  await timeline.getByRole('button',{name:'Engineering',exact:true}).click();
+  await timeline.getByRole('button',{name:/Review submitted on pull request #319/}).waitFor();
+  await timeline.getByRole('button',{name:/CI job finished.*Observatory browser tests/}).click();
+  await timeline.getByText('Job ID',{exact:true}).waitFor();
+  await timeline.getByRole('button',{name:'All',exact:true}).click();
   const actionCard = page.getByRole('button',{name:'Attach evidence link'});
   await actionCard.hover();
   assert.equal(await actionCard.evaluate(el => getComputedStyle(el).transform), 'none');
@@ -481,6 +504,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   });
   await page.setViewportSize({width:1440,height:660});
   const hoverRow=timeline.getByRole('button',{name:/Task created/});
+  if (!(await hoverRow.count())) await timeline.getByRole('button',{name:'Show earlier events'}).click();
   await hoverRow.hover();
   await page.waitForFunction(()=>{
     const label=document.querySelector('.task-timeline-event:hover .task-timeline-label');

@@ -1,4 +1,4 @@
-import { activityId, taskActivityHref } from './github-activity.mjs';
+import { activityId,githubItemHref,parseActivityHref,taskActivityHref } from './github-activity.mjs';
 
 const labels = {
   branch:'Branch', commit:'Commit', pull_request:'Pull request', review:'Review',
@@ -56,34 +56,97 @@ function linkedReferences(task, canonical, audits, evidence) {
   return [...refs.values()].map(ref=>({...ref,revisions:[...ref.revisions].sort()}));
 }
 
-function githubEvents(references, github) {
-  const links=(kind,id)=>references.filter(ref=>ref.kind===(kind==='pulls'?'pull_request':'ci_run')&&
-    taskActivityHref(ref.url)==='#'+(kind==='pulls'?'pull-requests':'ci-runs')+'/'+id);
-  const events=[];
-  for (const pull of github?.pulls?.items??[]) {
-    const id=activityId('pulls',pull);
-    if (id==null||!links('pulls',id).length) continue;
-    for (const [event,at] of [['opened',pull.created_at],['merged',pull.merged_at]]) {
-      if (!Number.isFinite(Date.parse(at))) continue;
-      events.push({id:'github:pull:'+id+':'+event,type:'Engineering',at,title:'Pull request #'+id+' '+event,
-        activityType:'pull_request',outcome:event,description:pull.title,href:pull.url,
-        details:[['Source','GitHub pull request snapshot'],['Association','Explicit Task link'],
-          ...github.pulls.observed_at?[['Snapshot observed',github.pulls.observed_at]]:[]]});
+function githubEvents(references, github, snapshots) {
+  const links = new Map();
+  for (const ref of references) {
+    const route = taskActivityHref(ref.url);
+    if (!route) continue;
+    const list = links.get(route)??[];
+    list.push(ref);
+    links.set(route,list);
+  }
+  const events = new Map();
+  const add = (id,at,fields) => {
+    if (Number.isFinite(Date.parse(at))) events.set(id,{id,at,type:'Engineering',...fields});
+  };
+  const byKey = new Map(snapshots.map(snapshot=>[snapshot.cache_key,snapshot]));
+  const listById = (kind,items) => new Map((items??[]).map(item=>[activityId(kind,item),item]));
+  const pulls = listById('pulls',github?.pulls?.items);
+  const runs = listById('runs',github?.ci?.items);
+  for (const [route,refs] of links) {
+    const parsed = parseActivityHref(route);
+    if (!parsed?.id) continue;
+    const {id,kind} = parsed;
+    const detail = byKey.get(kind+':'+id);
+    const href = githubItemHref(kind,id);
+    const explicit = ['Association','Explicit Task link'];
+    if (kind==='pulls' && refs.some(ref=>ref.kind==='pull_request'||ref.kind==='review')) {
+      const pull = pulls.get(id);
+      if (!pull && !detail) continue;
+      const prefix = 'github:pull:'+id+':';
+      const source = pull?github?.pulls?.observed_at:detail?.observed_at;
+      const common = {activityType:'pull_request',href,description:pull?.title??detail?.title,
+        details:[['Source','GitHub pull request snapshot'],explicit,...(source?[['Snapshot observed',source]]:[])]};
+      const opened = pull?.created_at??detail?.created_at;
+      const merged = pull?.merged_at??detail?.merged_at;
+      const closed = !merged&&detail?.state==='closed'?detail.closed_at:null;
+      const latest = [pull?.updated_at,detail?.updated_at].filter(Boolean).sort().at(-1);
+      const linkedPull = refs.some(ref=>ref.kind==='pull_request');
+      if (linkedPull) add(prefix+'opened',opened,{...common,title:'Pull request #'+id+' opened',outcome:'opened'});
+      if (linkedPull) add(prefix+'merged',merged,{...common,title:'Pull request #'+id+' merged',outcome:'merged',
+        details:[...common.details,...(detail?.merge_commit_sha?[['Merge commit',detail.merge_commit_sha]]:[])]});
+      if (linkedPull) add(prefix+'closed',closed,{...common,title:'Pull request #'+id+' closed',outcome:'closed'});
+      if (linkedPull && latest && ![opened,merged,closed].some(at=>Date.parse(at)===Date.parse(latest))) {
+        add(prefix+'latest-update',latest,{...common,title:'Pull request #'+id+' last update',outcome:'updated'});
+      }
+      for (const review of detail?.reviews??[]) {
+        if (!linkedPull&&!refs.some(ref=>ref.kind==='review'&&new URL(ref.url).hash==='#pullrequestreview-'+review.id)) continue;
+        add(prefix+'review:'+review.id,review.submitted_at,{activityType:'review',
+          title:'Review submitted on pull request #'+id,outcome:review.state,href,
+          details:[['Source','Cached GitHub review'],explicit,['Review ID',String(review.id)],
+            ...(detail.reviews_observed_at?[['Reviews observed',detail.reviews_observed_at]]:[]),
+            ...(detail.reviews_status?[['Review collection',detail.reviews_status]]:[])]});
+      }
+      continue;
+    }
+    if (kind!=='runs') continue;
+    const run = runs.get(id);
+    const matching = (item,ref) => item && ref.kind==='ci_run' && (!ref.revisions.length||ref.revisions.includes(item.revision));
+    const suffix = ref => new URL(ref.url).pathname.toLowerCase().replace(/\/$/,'').split('/runs/'+id)[1];
+    const rootLink = item => refs.some(ref=>matching(item,ref)&&suffix(ref)==='');
+    const attemptLink = item => refs.some(ref=>matching(item,ref)&&suffix(ref)==='/attempts/'+item.attempt);
+    const common = (item,source) => ({
+      activityType:'ci_run',href,description:item.workflow??item.title,
+      details:[['Source','GitHub workflow snapshot'],explicit,['Run revision',item.revision],
+        ...(source?[['Snapshot observed',source]]:[])],
+    });
+    const visibleRun = rootLink(run)?run:rootLink(detail)?detail:null;
+    if (visibleRun) add('github:ci:'+id+':created',visibleRun.created_at,{...common(visibleRun,
+      visibleRun===run?github?.ci?.observed_at:detail?.observed_at),title:'CI run created',
+      outcome:visibleRun.conclusion??visibleRun.status??visibleRun.run_status});
+    if (rootLink(detail)||attemptLink(detail)) {
+      add('github:ci:'+id+':attempt:'+detail.attempt+':started',detail.started_at,{...common(detail,detail.observed_at),
+        title:'CI attempt '+detail.attempt+' started',outcome:detail.conclusion??detail.run_status});
+    }
+    for (const job of detail?.jobs??[]) {
+      if (!rootLink(detail)&&!attemptLink(detail)&&!refs.some(ref=>matching(detail,ref)&&suffix(ref)==='/job/'+job.id)) continue;
+      add('github:ci:'+id+':job:'+job.id+':finished',job.completed_at,{...common(detail,detail.jobs_observed_at),
+        title:'CI job finished',description:job.name,outcome:job.conclusion??job.status,href:href+'/job/'+job.id,
+        details:[...common(detail,detail.jobs_observed_at).details,['Job ID',String(job.id)],
+          ['Run attempt',String(detail.attempt)],...(detail.jobs_stale?[['Job collection','stale']]:[])]});
     }
   }
-  for (const run of github?.ci?.items??[]) {
-    const id=activityId('runs',run);
-    const matching=links('runs',id).some(ref=>new URL(ref.url).pathname.replace(/\/$/,'').endsWith('/runs/'+id)&&
-      (!ref.revisions.length||ref.revisions.includes(run.revision)));
-    if (id==null||!matching||!Number.isFinite(Date.parse(run.created_at))) continue;
-    events.push({id:'github:ci:'+id+':created',type:'Engineering',at:run.created_at,title:'CI run created',
-      activityType:'ci_run',outcome:run.conclusion??run.status,description:run.workflow??run.title,
-      href:run.url,details:[['Source','GitHub workflow snapshot'],['Association','Explicit Task link'],
-        ...run.revision?[['Run revision',run.revision]]:[],
-        ...run.updated_at?[['Last GitHub update',run.updated_at]]:[],
-        ...github.ci.observed_at?[['Snapshot observed',github.ci.observed_at]]:[]]});
+  for (const [id,run] of runs) {
+    if (!id||!run.revision||events.has('github:ci:'+id+':created')) continue;
+    const pullNumber = run.pull_requests?.find(number=>links.get('#pull-requests/'+number)
+      ?.some(ref=>ref.kind==='pull_request'&&ref.revisions.includes(run.revision)));
+    if (pullNumber==null) continue;
+    add('github:ci:'+id+':created',run.created_at,{activityType:'ci_run',title:'CI run created',
+      outcome:run.conclusion??run.status,description:run.workflow??run.title,href:githubItemHref('runs',id),
+      details:[['Source','GitHub workflow snapshot'],['Association','GitHub-linked pull request #'+pullNumber+' at the Task-linked revision'],
+        ['Run revision',run.revision],...(github?.ci?.observed_at?[['Snapshot observed',github.ci.observed_at]]:[])]});
   }
-  return events;
+  return [...events.values()];
 }
 
 export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],evidence=[],github}) {
@@ -96,18 +159,20 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
   }
   const formalIds=new Set((authoritative?.attempts??[]).map(attempt=>attempt.id));
   const verification=evidence.filter(record=>record.task_id===task.id);
+  const events=githubEvents(references,github,authoritative?.engineering_snapshots??[]);
   return {
-    references, events:githubEvents(references,github),
+    references, events,
     counts:[
       ['Formal Task Engine attempts',authoritative?formalIds.size:null],
       ['Other reported attempts',new Set(attempts.filter(a=>a.task_id===task.id&&!formalIds.has(a.id)).map(a=>a.id)).size],
       ['Known executor sessions',sessions.size],
       ['Linked engineering operations',operations.length],
+      ['Dated engineering events',events.length],
       ['Linked commits',operations.filter(ref=>ref.kind==='commit').length],
       ['Linked pull requests',operations.filter(ref=>ref.kind==='pull_request').length],
       ['Reported verification records',new Set(verification.map(record=>record.id)).size],
       ['Reported benchmarks',new Set(verification.filter(record=>record.kind==='benchmark').map(record=>record.id)).size],
     ],
-    coverage:'Activity counts reflect explicit links and available records. Categories can overlap. Work outside these sources and its resource use may be unknown.',
+    coverage:'Activity counts reflect explicit links and available records. Dated events can include GitHub-linked CI at the Task-linked revision. Categories can overlap and coverage may be partial.',
   };
 }

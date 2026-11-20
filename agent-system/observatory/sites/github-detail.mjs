@@ -1,4 +1,4 @@
-import { capture, githubReader, isRevision, REPO, runItems } from './github.mjs';
+import { capture, githubReader, isRevision, linkedPullNumbers, REPO, runItems } from './github.mjs';
 
 const WEB = 'https://github.com/' + REPO;
 const JOB_LIMIT = 25;
@@ -55,9 +55,7 @@ function run(data, id) {
     path: text(data.path),
     head_repository_id: positive(data.head_repository?.id) ? data.head_repository.id : null,
     repository_owned_head: data.head_repository?.full_name === REPO,
-    pull_requests: Array.isArray(data.pull_requests)
-      ? [...new Set(data.pull_requests.filter(pr => positive(pr?.number) && positive(data.repository?.id) &&
-        pr.base?.repo?.id === data.repository.id && pr.head?.sha === data.head_sha).map(pr => pr.number))].slice(0, 20) : null,
+    pull_requests: linkedPullNumbers(data),
     head: ref(data.head_branch, data.head_sha), created_at: time(data.created_at),
     started_at: time(data.run_started_at), updated_at: time(data.updated_at),
     url: WEB + '/actions/runs/' + id,

@@ -1,5 +1,6 @@
 import { AUTH_REASON, githubSnapshot, RATE_REASON, unavailablePullTotals } from './github.mjs';
 import { fetchGitHubDetail } from './github-detail.mjs';
+import { parseActivityHref,taskActivityHref } from '../src/github-activity.mjs';
 
 const GROUPS = ['main', 'records', 'issues', 'pulls', 'ci'];
 const REFRESH_MS = 15 * 60 * 1000;
@@ -131,6 +132,38 @@ function detailFallback(old, reason) {
   return old?.detail
     ? { ...old, status: 'stale', reason }
     : { detail: null, status: 'unavailable', observed_at: null, reason };
+}
+
+export async function peekTaskGitHubDetails(db, token, references, now = Date.now()) {
+  if (!token) return [];
+  const keys = [...new Set(references.flatMap(({uri})=>{
+    const route = parseActivityHref(taskActivityHref(uri)??'');
+    return route?.id ? [route.kind+':'+route.id] : [];
+  }))].slice(0,32);
+  if (!keys.length) return [];
+  const key = await credentialKey(token);
+  const placeholders = keys.map(()=>'?').join(',');
+  const {results} = await db.prepare(
+    'SELECT cache_key, retry_at, payload FROM github_details WHERE credential_key = ? AND cache_key IN ('+placeholders+')'
+  ).bind(key,...keys).all();
+  return results.flatMap(row=>{
+    const snapshot = JSON.parse(row.payload);
+    const detail = snapshot.detail;
+    if (!detail || !snapshot.observed_at) return [];
+    const status = row.retry_at <= now ? 'stale' : snapshot.status;
+    const common = {cache_key:row.cache_key,status,observed_at:snapshot.observed_at};
+    if (detail.kind==='pull') return [{...common,number:detail.number,title:detail.title,state:detail.state,
+      created_at:detail.created_at,updated_at:detail.updated_at,closed_at:detail.closed_at,merged_at:detail.merged_at,
+      merge_commit_sha:detail.merge_commit_sha,
+      reviews:detail.reviews?.map(({id,state,submitted_at})=>({id,state,submitted_at})),
+      reviews_observed_at:detail.reviews_observed_at,reviews_status:status==='stale'?'stale':detail.reviews_status}];
+    if (detail.kind!=='run') return [];
+    return [{...common,id:detail.id,title:detail.title,revision:detail.head?.sha,attempt:detail.attempt,
+      created_at:detail.created_at,started_at:detail.started_at,updated_at:detail.updated_at,
+      run_status:detail.status,conclusion:detail.conclusion,
+      jobs_observed_at:detail.jobs_observed_at,jobs_stale:status==='stale'||detail.jobs_stale,
+      jobs:detail.jobs?.map(({id,name,status,conclusion,started_at,completed_at})=>({id,name,status,conclusion,started_at,completed_at}))}];
+  });
 }
 
 export async function cachedGitHubDetail(db, fetcher, token, kind, id, now = Date.now()) {

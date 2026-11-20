@@ -3,7 +3,7 @@ import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
-import { cachedGitHub, cachedGitHubDetail, peekGitHub } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail, peekGitHub, peekTaskGitHubDetails } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
@@ -72,6 +72,12 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       if (body.op==='list'&&result.status===200&&access==='owner') {
         const codex=isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY)?'configured':'not_configured';
         return json({...result.body,executor_access:{codex}});
+      }
+      if (result.status===200&&['get','command'].includes(body.op)&&result.body.lifecycle) {
+        const {links=[],evidence=[]}=result.body.lifecycle;
+        const snapshots=await peekTaskGitHubDetails(env.DB,env.GITHUB_READ_TOKEN||env.GITHUB_PROPOSAL_TOKEN,[...links,...evidence])
+          .catch(()=>[]);
+        return json({...result.body,engineering_snapshots:snapshots});
       }
       return json(result.body,result.status);
     }

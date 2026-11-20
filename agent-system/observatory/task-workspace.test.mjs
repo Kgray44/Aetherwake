@@ -51,6 +51,42 @@ const current = { id: 'task_a', title: 'Build editor', objective: 'Landing works
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
 
+test('cached review and CI detail stay revision bound across Workspace and PDF',()=>{
+  const task={id:'t',title:'Activity fixture',objective:'Link source activity'};
+  const revision='a'.repeat(40);
+  const repo='https://github.com/Kgray44/Aetherwake';
+  const at='2026-01-02T00:00:00Z';
+  const canonical={task,lifecycle:{state:'verifying',links:[
+    {kind:'pull_request',uri:repo+'/pull/12',revision},
+    {kind:'ci_run',uri:repo+'/actions/runs/23/job/51',revision},
+    {kind:'ci_run',uri:repo+'/actions/runs/24',revision},
+  ]},engineering_snapshots:[
+    {cache_key:'pulls:12',reviews:[{id:42,submitted_at:at,state:'APPROVED'}],reviews_status:'partial'},
+    {cache_key:'pulls:13',reviews:[{id:40,submitted_at:at,state:'APPROVED'}]},
+    {cache_key:'runs:23',revision,attempt:2,started_at:at,jobs:[
+      {id:51,name:'Browser checks',completed_at:at,conclusion:'success'},
+      {id:52,name:'Unlinked job',completed_at:at,conclusion:'failure'},
+    ]},
+    {cache_key:'runs:24',revision:'b'.repeat(40),attempt:1,jobs:[{id:53,completed_at:at}]},
+  ]};
+  const github={ci:{items:[
+    {id:25,revision,created_at:at,pull_requests:[12]},
+    {id:26,revision:'b'.repeat(40),created_at:at,pull_requests:[12]},
+    {id:27,revision,created_at:at,pull_requests:[13]},
+    {id:28,revision,created_at:at},
+  ]}};
+  const activity=taskEngineeringActivity({task,canonical,github});
+  assert.deepEqual(activity.events.map(event=>event.id),[
+    'github:pull:12:review:42','github:ci:23:job:51:finished','github:ci:25:created',
+  ]);
+  assert.equal(Object.fromEntries(activity.counts)['Dated engineering events'],3);
+  const report=JSON.stringify(taskReportDefinition({task,canonical,github}).content);
+  assert.match(report,/Review submitted on pull request #12/);
+  assert.match(report,/Browser checks/);
+  assert.match(report,/GitHub-linked pull request #12 at the Task-linked revision/);
+  assert.doesNotMatch(report,/Unlinked job/);
+});
+
 test('Task chronology keeps late arrivals ordered by occurrence and reports missing or discrepant receipt clocks', () => {
   const task={id:'task_clock',title:'Inspect clock',objective:'Inspect independent clocks'};
   const makeEvent=(event_id,occurred_at)=>({task_id:task.id,event_id,occurred_at,kind:'measurement',phase:'testing'});
