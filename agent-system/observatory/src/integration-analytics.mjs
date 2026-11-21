@@ -5,6 +5,13 @@ function elapsed(from, to) {
   return Number.isFinite(duration) && duration >= 0 ? duration : null;
 }
 
+export function integrationLogFact(fact) {
+  if (fact.kind === 'source_location') return [fact.path,fact.line,fact.column].filter(Boolean).join(':');
+  if (fact.kind === 'exit_code') return 'Exit code ' + fact.code;
+  if (fact.kind === 'test_ordinal') return 'Failing TAP test ' + fact.code;
+  return fact.code;
+}
+
 export function integrationWorkflowTiming(run) {
   const revisions = new Set([run.head_sha, ...(run.source_repairs ?? []).map(repair=>repair.head_sha)]);
   return (run.workflow_history ?? run.evidence?.workflows ?? [])
@@ -48,6 +55,8 @@ export function integrationAnalytics(runs) {
     blocked: runs.filter(run => run.state === 'blocked').length,
     ciAttempts: workflows.size,
     reruns: new Set(runs.flatMap(run => (run.repair_attempts ?? []).map(attempt => attempt.id))).size,
+    automaticReruns: new Set(runs.flatMap(run => (run.repair_attempts ?? [])
+      .filter(attempt=>attempt.authorization_id).map(attempt=>attempt.id))).size,
     sourceRepairs: repairs.size,
     repairUsage: usage.length ? {
       uncached: usage.reduce((sum, row) => sum + row.input_tokens - row.cached_input_tokens, 0),

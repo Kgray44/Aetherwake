@@ -6,6 +6,7 @@ import { telemetryTaskId } from '../telemetry-delta.mjs';
 import { mcpOwnerCommands,taskEngineToolSchema } from './task-engine-tool-schema.mjs';
 import { integrationAccess, integrationOperation, integrationWorkerOps } from './integration-runs.mjs';
 import { githubIntegration } from './github-integration.mjs';
+import { integrationCIRerunner } from './ci-controls.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const tools=[
  {name:'task_engine_v1',description:'List, inspect, register and edit canonical engineering Tasks. The authenticated owner can amend admitted Tasks, append exact-attempt addenda, schedule, dispatch, pause, resume, retry and cancel. Executor claim and reporting require a worker credential.',
@@ -64,9 +65,12 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision,fetch
     }
     access = 'worker';
    }
+   const rerunJob = args.request?.op === 'ci_tick' && access === 'worker'
+     ? integrationCIRerunner({env,owner,verification:args.verification ?? null,fetcher}) : undefined;
    const response = integrationWorkerOps.has(args.request?.op)
      ? await integrationOperation({ db: env.DB, owner, namespace, body: args.request, worker: access === 'worker',
-       access: integrationAccess(env, owner, namespace), github: githubIntegration(fetcher, env.GITHUB_READ_TOKEN) })
+       access:{...integrationAccess(env,owner,namespace),ci_enabled:Boolean(rerunJob)},rerunJob,
+       github:githubIntegration(fetcher,env.GITHUB_READ_TOKEN) })
      : await taskOperation({ db: env.DB, owner, namespace, body: args.request, validate, access, revision: taskRevision });
    return result({status:response.status,...response.body},response.status>=400);
   }

@@ -212,7 +212,8 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         integration.error ? <p>Integration evidence unavailable.</p> : <MetricRows fields={[
           ['Recent integration runs', count(merge.runs)], ['Verified on main', count(merge.merged)],
           ['Blocked integrations', count(merge.blocked)], ['Exact-head CI attempts', count(merge.ciAttempts)],
-          ['CI rerun receipts', count(merge.reruns)], ['Codex source repairs', count(merge.sourceRepairs)],
+          ['CI rerun receipts', count(merge.reruns)], ['Automatic CI rerun receipts',count(merge.automaticReruns)],
+          ['Codex source repairs', count(merge.sourceRepairs)],
           ['Observed repair uncached input tokens', count(merge.repairUsage?.uncached)],
           ['Observed repair cached input tokens', count(merge.repairUsage?.cached)],
           ['Observed repair output tokens', count(merge.repairUsage?.output)],

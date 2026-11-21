@@ -6,7 +6,7 @@ import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub, cachedGitHubDetail, peekGitHub, peekTaskGitHubDetails } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
-import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
+import { ciAccess, ciStatus, integrationCIRerunner, submitCI } from './ci-controls.mjs';
 import { integrationAccess, integrationOperation, integrationPath } from './integration-runs.mjs';
 import { githubIntegration } from './github-integration.mjs';
 import { combinedTelemetry, ingestTaskTelemetry, sha256, telemetryBaseline } from './task-telemetry.mjs';
@@ -83,9 +83,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       } catch (cause) { return error('Invalid integration request', cause instanceof RangeError ? 413 : 400); }
       const github = githubIntegration(fetcher, env.GITHUB_READ_TOKEN, access.merge_enabled ? env.GITHUB_INTEGRATION_MERGE_TOKEN : null,
         access.publish_enabled ? env.GITHUB_INTEGRATION_PUBLISH_TOKEN : null);
-      const rerunJob = (job, id) => submitCI({ db: env.DB, owner, fetcher, token: env.GITHUB_ACTIONS_TOKEN,
-        body: { type: 'rerun_job', operation_id: id, expected_revision: job.head_sha, run_id: job.run_id,
-          workflow_id: job.workflow_id, attempt: job.attempt, job_id: job.job_id } });
+      const rerunJob = integrationCIRerunner({env,owner,verification,fetcher});
       const result = await integrationOperation({ db: env.DB, owner, namespace, github, access, body, rerunJob });
       return json(result.body, result.status);
     }

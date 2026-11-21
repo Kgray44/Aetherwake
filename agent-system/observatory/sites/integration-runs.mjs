@@ -18,11 +18,15 @@ const repairBackoff = 30_000;
 const maxEvents = 100;
 const transferLeaseMs = 3 * 60_000;
 const repairWorkerOps = new Set(['repair_tick', 'repair_claim', 'repair_begin', 'repair_status', 'repair_report']);
-export const integrationWorkerOps = new Set(['integration_claim', 'integration_begin', 'integration_report', ...repairWorkerOps]);
+export const integrationWorkerOps = new Set(['integration_claim', 'integration_begin', 'integration_report', 'ci_tick', ...repairWorkerOps]);
 const sourceFor = run => run.reviewed_source ?? run.task;
 const branchFor = run => 'aads/integration/' + (run.reviewed_source?.repair_id ?? run.id);
 const repairsUsed = run => (run.source_repairs?.length ?? 0) + (run.repair_attempts?.length ?? 0);
 const modelIdentity = /^[a-zA-Z0-9_.:-]{1,100}$/;
+const unresolvedCI = new Set(['reserved','unknown','submitted']);
+const stopAutomation = new Set(['policy','identity','permission','repository_or_credential','head_drift','base_drift','merge_conflict','pr_state']);
+const repairFingerprint = diagnosis => sha256(JSON.stringify([diagnosis.head_sha, diagnosis.base_sha, diagnosis.pr_number,
+  diagnosis.jobs.map(job=>({...job,steps:job.steps.map(({log,...step})=>step)}))]));
 
 function applyEvidence(run, evidence) {
   const workflows = new Map((run.workflow_history ?? []).map(item => [item.run_id + ':' + item.attempt, item]));
@@ -78,7 +82,7 @@ function actionFor(body) {
   }
   if (!uuid(body.id) || !positive(body.expected_version)) return null;
   const action = { op, operation_id, id: body.id, expected_version: body.expected_version };
-  if (['repair_claim','repair_tick'].includes(op) && uuid(body.worker_id)) return { ...action, worker_id: body.worker_id };
+  if (['repair_claim','repair_tick','ci_tick'].includes(op) && uuid(body.worker_id)) return { ...action, worker_id: body.worker_id };
   if (['repair_begin','repair_report'].includes(op) && uuid(body.worker_id) && uuid(body.claim_id) && uuid(body.repair_id)) {
     const details = { ...action, worker_id: body.worker_id, claim_id: body.claim_id, repair_id: body.repair_id };
     if (op === 'repair_begin') return details;
@@ -117,7 +121,10 @@ function actionFor(body) {
   }
   if (op === 'attach' && positive(body.pr_number)) return { ...action, pr_number: body.pr_number };
   if (op === 'publish' && isRevision(body.head_sha)) return { ...action, head_sha: body.head_sha };
-  if (op === 'refresh' || op === 'stop') return action;
+  if (['refresh','stop','inspect_logs','disarm_ci_reruns'].includes(op)) return action;
+  if (op === 'arm_ci_reruns' && isRevision(body.head_sha) && isRevision(body.base_sha)) {
+    return { ...action, head_sha:body.head_sha, base_sha:body.base_sha };
+  }
   if (op === 'retry' && (body.feedback === undefined || (typeof body.feedback === 'string' && body.feedback.length <= 1000))) {
     return { ...action, feedback: body.feedback?.trim() || null };
   }
@@ -147,7 +154,10 @@ export async function integrationOperation({ db, owner, namespace, github, acces
   if (integrationWorkerOps.has(body?.op) && !worker) return errors(403, 'Executor authorization required');
   if (worker && !integrationWorkerOps.has(body?.op)) return errors(403, 'Executor scope does not allow this operation');
   const repairing = repairWorkerOps.has(body?.op);
-  if (worker && !(repairing ? access.repair_enabled : access.transfer_enabled)) return errors(403, 'Integration work authorization is unavailable');
+  const ciTick = body?.op === 'ci_tick';
+  if (worker && !(ciTick ? access.ci_enabled && rerunJob : repairing ? access.repair_enabled : access.transfer_enabled)) {
+    return errors(403, 'Integration work authorization is unavailable');
+  }
   if (body?.op === 'repair_status') {
     if (!uuid(body.id) || !uuid(body.repair_id) || !uuid(body.worker_id) || !uuid(body.claim_id)) return errors(400, 'Invalid repair claim');
     const run = await get(body.id);
@@ -157,8 +167,8 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       (!run.task || acceptedCandidate(await candidateRow(run.task.id))?.attempt_id === run.task.attempt_id);
     return success({ active: Boolean(current), ...(repair ? { version:run.version } : {}) });
   }
-  const tick = body?.op === 'repair_tick';
-  const claimOperation = ['integration_claim','repair_claim','repair_tick'].includes(body?.op);
+  const tick = body?.op === 'repair_tick' || ciTick;
+  const claimOperation = ['integration_claim','repair_claim'].includes(body?.op) || tick;
   const asJob = (run, job) => ({ ...job, ...(job.kind === 'source_repair' ? { task_id: run.task?.id ?? null } :
     { task: sourceFor(run), ref_id: run.reviewed_source?.repair_id ?? run.id }),
     integration_id: run.id, version: run.version });
@@ -178,11 +188,13 @@ export async function integrationOperation({ db, owner, namespace, github, acces
         ? success({ job: asJob(run, job) })
         : success({ job: null });
     }
+    const tickPolicy = ciTick ? '$.policy.auto_ci_reruns' : '$.policy.auto_source_repair';
     const pending = await query(`SELECT record FROM integration_runs WHERE owner_id = ? AND namespace = ?
-      AND json_extract(record, ?) = ? AND (? = 0 OR json_extract(record, '$.policy.auto_source_repair.next_poll_at') <= ?)
+      AND state NOT IN ('merged','deployed')
+      AND json_extract(record, ?) = ? AND (? = 0 OR json_extract(record, ?) <= ?)
       ORDER BY updated_at LIMIT 100`, ...scope,
-    tick ? '$.policy.auto_source_repair.status' : repairing ? '$.source_repairs[#-1].status' : '$.transfer.status',
-    tick ? 'armed' : 'queued', Number(tick), now).all();
+    tick ? tickPolicy+'.status' : repairing ? '$.source_repairs[#-1].status' : '$.transfer.status',
+    tick ? 'armed' : 'queued', Number(tick), tickPolicy+'.next_poll_at', now).all();
     const run = pending.results.map(decode).find(item => !body.task_ids || body.task_ids.includes(item.task?.id));
     if (!run) return success({ job: null });
     body = { ...body, id: run.id, expected_version: run.version };
@@ -208,6 +220,7 @@ export async function integrationOperation({ db, owner, namespace, github, acces
   if (action.op === 'publish' && !access.publish_enabled) return errors(403, 'Pull request publication authorization is unavailable');
   if (['repair_source','arm_repair'].includes(action.op) && !access.repair_enabled) return errors(403, 'Codex source repair authorization is unavailable');
   if (action.op === 'rerun_job' && (!access.ci_enabled || !rerunJob)) return errors(403, 'CI rerun authorization is unavailable');
+  if (action.op === 'arm_ci_reruns' && (!access.ci_enabled || !rerunJob)) return errors(403, 'CI rerun authorization is unavailable');
   const digest = await sha256(JSON.stringify(action));
   const replay = async () => {
     const previous = await receipt(action.operation_id);
@@ -227,6 +240,9 @@ export async function integrationOperation({ db, owner, namespace, github, acces
     ...(kind.startsWith('transfer_') ? { transfer_status: run.transfer?.status } : {}),
     ...(kind.startsWith('source_repair_') ? { source_repair: run.source_repairs?.at(-1) } : {}),
     ...(kind.startsWith('source_repair_') && run.policy.auto_source_repair ? { automatic_policy:run.policy.auto_source_repair } : {}),
+    ...(kind.startsWith('ci_auto_') ? { automatic_policy:run.policy.auto_ci_reruns } : {}),
+    ...(kind === 'ci_logs_observed' ? { log_diagnostics:run.log_diagnostics } : {}),
+    ...(['repair_reserved','repair_response'].includes(kind) ? { ci_repair:run.repair_attempts?.at(-1) } : {}),
     ...(['retry', 'rerun_job'].includes(action.op) ? { feedback: action.feedback } : {}),
     ...(kind.startsWith('repair_') ? { repair_attempt: run.repair_attempts?.at(-1) } : {}),
   });
@@ -273,11 +289,25 @@ export async function integrationOperation({ db, owner, namespace, github, acces
   if (merged(current)) return errors(409, 'The integration already has verified merge evidence');
   const sameCandidate = async () => !current.task ||
     acceptedCandidate(await candidateRow(current.task.id))?.attempt_id === current.task.attempt_id;
-  if (!await sameCandidate() && !['stop', 'refresh','repair_tick','repair_claim','integration_claim'].includes(action.op)) {
+  if (!await sameCandidate() && !['stop', 'refresh','repair_tick','ci_tick','disarm_ci_reruns','repair_claim','integration_claim'].includes(action.op)) {
     return errors(409, 'Task acceptance changed. A new review and integration run are required');
   }
   const next = { ...current, version: current.version + 1 };
   const repair = activeRepair(current);
+  const ciPolicy = current.policy.auto_ci_reruns;
+  const ciRepair = current.repair_attempts?.at(-1);
+  const setCIPolicy = (status, reason, nextPoll = now+60_000) => {
+    if (ciPolicy) next.policy = { ...current.policy, auto_ci_reruns:{ ...ciPolicy, status, reason,
+      next_poll_at:nextPoll } };
+  };
+  const reconcileCI = () => {
+    if (ciRepair && unresolvedCI.has(ciRepair.status) && next.evidence?.workflows?.some(run =>
+      run.run_id === ciRepair.run_id && run.workflow_id === ciRepair.workflow_id && run.head_sha === ciRepair.head_sha &&
+      run.attempt > ciRepair.run_attempt)) {
+      next.repair_attempts = [...current.repair_attempts.slice(0,-1), {...ciRepair,status:'observed'}];
+    }
+    return unresolvedCI.has(next.repair_attempts?.at(-1)?.status);
+  };
   const stoppedRepair = action.op === 'repair_report' && current.source_repairs?.find(item =>
     item.status === 'stopped' && item.id === action.repair_id && item.worker_id === action.worker_id &&
     item.claim_id === action.claim_id && item.started_at && !item.usage);
@@ -287,6 +317,7 @@ export async function integrationOperation({ db, owner, namespace, github, acces
   };
   async function planRepair(paths, feedback, auto, inspected = current) {
     if (repair || current.stopped || inspected.state !== 'blocked' || !current.pr_number || !canSubmit(current) ||
+        unresolvedCI.has(ciRepair?.status) ||
         inspected.evidence?.reason !== 'ci_failure') return errors(409, 'A confirmed source failure and an idle integration are required');
     const attempts = current.source_repairs ?? [];
     if (repairsUsed(current) >= current.policy.repair_limit) return errors(409, 'Integration repair limit reached');
@@ -296,11 +327,11 @@ export async function integrationOperation({ db, owner, namespace, github, acces
     const tokens = attempts.reduce((sum,item)=>sum+(item.usage?.total_tokens ?? 0),0);
     const tokenBudget = Math.min(sourceBudget.tokens, current.policy.repair_limit * sourceBudget.tokens - tokens);
     if (tokenBudget < 10_000) return errors(409, 'The integration source repair token budget is exhausted');
-    const diagnostics = await github.repairSource(inspected);
+    const diagnostics = await github.repairSource(inspected,{includeLogs:true,allowedPaths:paths});
     if (!diagnostics || !paths.every(path => diagnostics.paths.includes(path)) || !await sameCandidate()) {
       return errors(409, 'Source diagnostics or the approved paths no longer match the exact GitHub head');
     }
-    const fingerprint = await sha256(JSON.stringify([diagnostics.head_sha, diagnostics.base_sha, diagnostics.pr_number, diagnostics.jobs]));
+    const fingerprint = await repairFingerprint(diagnostics);
     if (attempts.some(item => item.fingerprint === fingerprint && item.feedback === feedback)) {
       return errors(409, 'This source failure already has a repair with the same owner feedback');
     }
@@ -311,6 +342,42 @@ export async function integrationOperation({ db, owner, namespace, github, acces
     next.state = 'repairing';
     return null;
   }
+  function eligibleCIJobs(evidence) {
+    return (evidence.jobs ?? []).filter(job => job.infrastructure && job.head_sha === current.head_sha &&
+      !(current.repair_attempts ?? []).some(item => item.job_id === job.job_id && item.run_id === job.run_id &&
+        item.run_attempt === job.attempt && item.head_sha === job.head_sha));
+  }
+  function withinBackoff() {
+    const attempts = current.repair_attempts ?? [];
+    return attempts.length && now - Date.parse(attempts.at(-1).at) < repairBackoff * 2 ** (attempts.length - 1);
+  }
+  async function submitIntegrationRerun(job, evidence, authorization) {
+    const receipt = { id:action.operation_id, kind:'ci_job_rerun', status:'reserved', at,
+      head_sha:job.head_sha, base_sha:evidence.base_sha, run_id:job.run_id, workflow_id:job.workflow_id,
+      job_id:job.job_id, run_attempt:job.attempt, ...(authorization ? {authorization_id:authorization.id} : {}) };
+    const prior = next.repair_attempts ?? [];
+    applyEvidence(next, evidence);
+    next.state = 'repairing';
+    next.repair_attempts = [...prior, receipt];
+    if (!await update(next,current.version,action.operation_id,'repair_reserved')) return conflict();
+    let status = 'unknown';
+    try {
+      if (!await sameCandidate() || (github.rerunTarget && !await github.rerunTarget(next))) status = 'rejected';
+      else {
+        const result = await rerunJob(job,receipt.id);
+        if (['accepted','observed'].includes(result.body?.operation?.state)) status = 'submitted';
+        if (result.body?.operation?.state === 'rejected' || [400,401,403,404,422].includes(result.status)) status = 'rejected';
+      }
+    } catch { /* An uncertain write remains fenced until a new exact workflow attempt is observed. */ }
+    next.repair_attempts = [...prior, {...receipt,status}];
+    if (status === 'rejected') {
+      next.state = 'blocked';
+      if (ciPolicy?.status === 'armed') setCIPolicy('disarmed','rerun_rejected');
+    }
+    next.version += 1;
+    return await update(next,next.version-1,crypto.randomUUID(),'repair_response','ci-operation-receipt')
+      ? success({access,run:next}) : success({access,run:await get(current.id)});
+  }
 
   try {
     if (stoppedRepair && action.status === 'failed' && action.usage && action.session_id && action.turn_id) {
@@ -318,6 +385,69 @@ export async function integrationOperation({ db, owner, namespace, github, acces
         session_id:action.session_id, turn_id:action.turn_id, usage:action.usage, execution_identity:action.execution_identity } : item);
       return await update(next, current.version, action.operation_id, 'source_repair_usage_reconciled')
         ? success({ access, run: next }) : conflict();
+    }
+    if (action.op === 'arm_ci_reruns') {
+      if (repair || current.stopped || !current.pr_number || !['checking','blocked'].includes(current.state) ||
+          !canSubmit(current) || unresolvedCI.has(ciRepair?.status) || repairsUsed(current) >= current.policy.repair_limit ||
+          current.head_sha !== action.head_sha || current.evidence?.base_sha !== action.base_sha ||
+          stopAutomation.has(current.evidence?.reason) || current.evidence?.reason === 'ci_failure') {
+        return errors(409,'Confirm an eligible head and base before authorizing automatic infrastructure reruns');
+      }
+      next.policy = {...current.policy, auto_ci_reruns:{id:action.operation_id,status:'armed',armed_at:at,
+        expires_at:now+30*60_000,next_poll_at:now,head_sha:action.head_sha,base_sha:action.base_sha}};
+      return await update(next,current.version,action.operation_id,'ci_auto_armed') ? success({access,run:next}) : conflict();
+    }
+    if (action.op === 'disarm_ci_reruns') {
+      if (ciPolicy?.status !== 'armed') return conflict();
+      if (ciRepair?.status === 'reserved' && now - Date.parse(ciRepair.at) < 45_000) {
+        return errors(409,'The reserved rerun is being submitted. Disarm after submission returns.');
+      }
+      setCIPolicy('disarmed','owner_disarmed');
+      return await update(next,current.version,action.operation_id,'ci_auto_disarmed') ? success({access,run:next}) : conflict();
+    }
+    if (action.op === 'ci_tick') {
+      if (ciPolicy?.status !== 'armed') return conflict();
+      if (ciPolicy.expires_at <= now || ciPolicy.head_sha !== current.head_sha || current.stopped || repair ||
+          !canSubmit(current) || !await sameCandidate()) setCIPolicy('disarmed','scope_ended');
+      else if (ciRepair?.status === 'reserved' && now - Date.parse(ciRepair.at) < 45_000) {
+        return success({run:current});
+      } else {
+        const evidence = await github.inspect({...current,expected_base:ciPolicy.base_sha});
+        applyEvidence(next,evidence);
+        const unresolved = reconcileCI();
+        if (unresolved && evidence.state==='merge_ready') next.state = 'repairing';
+        if (stopAutomation.has(evidence.reason) || evidence.reason === 'ci_failure' ||
+            ['merge_ready','merged'].includes(evidence.state)) setCIPolicy('disarmed',evidence.reason ?? evidence.state);
+        else if (evidence.reason==='rate_limited') {
+          if (unresolved) next.state='repairing';
+          const retryAt = Number.isSafeInteger(evidence.retry_at) && evidence.retry_at>now ? evidence.retry_at : now+5*60_000;
+          setCIPolicy('armed','rate_limited',Math.min(ciPolicy.expires_at,Math.max(now+60_000,retryAt)));
+        }
+        else if (unresolved) {
+          next.state = 'repairing';
+          setCIPolicy('armed','awaiting_rerun_readback');
+        } else if (repairsUsed(current) >= current.policy.repair_limit) setCIPolicy('exhausted','repair_limit');
+        else if (evidence.reason === 'ci_infrastructure' && evidence.base_sha !== ciPolicy.base_sha) {
+          setCIPolicy('disarmed','base_drift');
+        } else if (evidence.reason === 'ci_infrastructure') {
+          const job = eligibleCIJobs(evidence).find(item=>item.required_check === true);
+          if (!job) setCIPolicy('disarmed','no_new_required_transient_job');
+          else if (!withinBackoff()) {
+            setCIPolicy('armed','rerun_reserved');
+            return submitIntegrationRerun(job,evidence,ciPolicy);
+          } else setCIPolicy('armed','backoff');
+        } else setCIPolicy('armed',evidence.reason ?? 'checking');
+      }
+      return await update(next,current.version,action.operation_id,'ci_auto_checked') ? success({access,run:next}) : conflict();
+    }
+    if (action.op === 'inspect_logs') {
+      if (repair || current.stopped || current.evidence?.reason !== 'ci_failure' || !current.pr_number) {
+        return errors(409,'Confirm the failed source checks before reading failed-step diagnostics');
+      }
+      const evidence = await github.repairSource(current,{includeLogs:true});
+      if (!evidence || !await sameCandidate()) return errors(409,'The exact PR head, base or workflow attempt could not be reconfirmed');
+      next.log_diagnostics = { ...evidence, observed_at:at };
+      return await update(next,current.version,action.operation_id,'ci_logs_observed') ? success({access,run:next}) : conflict();
     }
     if (action.op === 'arm_repair') {
       if (repair || current.stopped || !current.pr_number || !['checking','blocked'].includes(current.state) ||
@@ -368,7 +498,7 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       }
       if (action.decision === 'approve') {
         const diagnostics = await github.repairSource(current);
-        const fingerprint = diagnostics && await sha256(JSON.stringify([diagnostics.head_sha, diagnostics.base_sha, diagnostics.pr_number, diagnostics.jobs]));
+        const fingerprint = diagnostics && await repairFingerprint(diagnostics);
         if (fingerprint !== repair.fingerprint || !await sameCandidate()) return errors(409, 'The original source evidence changed before review');
       }
       replaceRepair({ status: action.decision === 'approve' ? 'approved' : 'rejected', reviewed_at: at });
@@ -380,7 +510,8 @@ export async function integrationOperation({ db, owner, namespace, github, acces
         next.head_sha = repair.candidate_sha;
         next.pr_number = null;
         next.state = 'awaiting_pr';
-        for (const field of ['published_branch','publication','transfer','merge_attempt','evidence']) delete next[field];
+        for (const field of ['published_branch','publication','transfer','merge_attempt','evidence','log_diagnostics']) delete next[field];
+        if (ciPolicy?.status === 'armed') setCIPolicy('disarmed','source_changed');
       }
       return await update(next, current.version, action.operation_id, 'source_repair_reviewed') ? success({ access, run: next }) : conflict();
     }
@@ -406,7 +537,7 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       if (action.op === 'repair_begin') {
         if (repair.status !== 'claimed') return conflict();
         const diagnostics = await github.repairSource(current);
-        const fingerprint = diagnostics && await sha256(JSON.stringify([diagnostics.head_sha, diagnostics.base_sha, diagnostics.pr_number, diagnostics.jobs]));
+        const fingerprint = diagnostics && await repairFingerprint(diagnostics);
         if (fingerprint !== repair.fingerprint || !repair.paths.every(path => diagnostics.paths.includes(path)) ||
             !await sameCandidate()) return errors(409, 'The repair head or failing CI attempt has changed');
         replaceRepair({ status: 'running', started_at: at });
@@ -528,40 +659,18 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       if (current.state !== 'blocked' || current.stopped || current.evidence?.reason !== 'ci_infrastructure' || !canSubmit(current)) {
         return errors(409, 'A classified infrastructure failure is required for an integration rerun');
       }
-      const repairs = current.repair_attempts ?? [];
       if (repairsUsed(current) >= current.policy.repair_limit) return errors(409, 'Integration repair limit reached');
-      if (repairs.length && now - Date.parse(repairs.at(-1).at) < repairBackoff * 2 ** (repairs.length - 1)) {
+      if (unresolvedCI.has(ciRepair?.status)) return errors(409,'Reconcile the prior CI rerun first');
+      if (withinBackoff()) {
         return errors(409, 'Wait for the current retry backoff window');
       }
       const evidence = await github.inspect({ ...current, expected_base: current.evidence.base_sha });
-      const job = evidence.reason === 'ci_infrastructure' && evidence.jobs?.find(item =>
-        item.job_id === action.job_id && item.head_sha === current.head_sha && item.infrastructure);
+      const job = evidence.reason === 'ci_infrastructure' && eligibleCIJobs(evidence).find(item=>item.job_id === action.job_id);
       if (!job || !await sameCandidate()) return errors(409, 'The exact failed job or reviewed source changed');
-      if (repairs.some(item => item.job_id === job.job_id && item.run_id === job.run_id &&
-          item.run_attempt === job.attempt && item.head_sha === job.head_sha)) {
-        return errors(409, 'This exact job attempt already has a repair receipt');
-      }
-      const repair = { id: action.operation_id, kind: 'ci_job_rerun', status: 'reserved', at,
-        head_sha: job.head_sha, base_sha: evidence.base_sha, run_id: job.run_id, workflow_id: job.workflow_id,
-        job_id: job.job_id, run_attempt: job.attempt };
-      applyEvidence(next, evidence);
-      next.state = 'repairing';
-      next.repair_attempts = [...repairs, repair];
-      if (!await update(next, current.version, action.operation_id, 'repair_reserved')) return conflict();
-      let status = 'unknown';
-      try {
-        const result = await rerunJob(job, repair.id);
-        if (['accepted', 'observed'].includes(result.body?.operation?.state)) status = 'submitted';
-        if (result.body?.operation?.state === 'rejected' || [400, 401, 403, 404, 422].includes(result.status)) status = 'rejected';
-      } catch { /* An uncertain rerun is reconciled by checking for a new GitHub run attempt. */ }
-      next.repair_attempts = [...repairs, { ...repair, status }];
-      if (status === 'rejected') next.state = 'blocked';
-      next.version += 1;
-      return await update(next, next.version - 1, crypto.randomUUID(), 'repair_response', 'ci-operation-receipt')
-        ? success({ access, run: next }) : success({ access, run: await get(current.id) });
+      return submitIntegrationRerun(job,evidence,null);
     }
     if (action.op === 'merge') {
-      if (current.state !== 'merge_ready' || !canSubmit(current) || action.head_sha !== current.head_sha ||
+      if (current.state !== 'merge_ready' || !canSubmit(current) || unresolvedCI.has(ciRepair?.status) || action.head_sha !== current.head_sha ||
           action.base_sha !== current.evidence?.base_sha) return errors(409, 'Confirm the current eligible head and base');
       applyEvidence(next, await github.inspect({ ...current, expected_base: action.base_sha }));
       if (!await sameCandidate()) return errors(409, 'Task acceptance changed during merge confirmation');
@@ -602,6 +711,9 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       if (current.policy.auto_source_repair?.status === 'armed') {
         next.policy = {...current.policy, auto_source_repair:{...current.policy.auto_source_repair,status:'disarmed'}};
       }
+      if (ciPolicy?.status === 'armed') {
+        next.policy = {...next.policy,auto_ci_reruns:{...ciPolicy,status:'disarmed',reason:'owner_stopped'}};
+      }
       if (!canSubmit(current)) return errors(409, 'A submitted operation requires GitHub reconciliation');
       if (current.state === 'repairing' && !repair) return errors(409, 'The submitted repair requires GitHub reconciliation');
       if (current.publication && current.publication.status !== 'rejected' && !current.pr_number) {
@@ -624,16 +736,14 @@ export async function integrationOperation({ db, owner, namespace, github, acces
       if (current.merge_attempt?.status === 'reserved' && now - Date.parse(current.merge_attempt.requested_at) < 45_000) {
         return errors(409, 'Merge submission is still in progress');
       }
-      const ciRepair = current.repair_attempts?.at(-1);
       if (ciRepair?.status === 'reserved' && now - Date.parse(ciRepair.at) < 45_000) {
         return errors(409, 'CI rerun submission is still in progress');
       }
       if (action.op === 'retry') next.stopped = false;
       applyEvidence(next, await github.inspect(next));
-      if (ciRepair && ['reserved', 'unknown', 'submitted'].includes(ciRepair.status) &&
-          next.evidence.workflows?.some(run => run.run_id === ciRepair.run_id && run.attempt > ciRepair.run_attempt)) {
-        next.repair_attempts = [...current.repair_attempts.slice(0, -1), { ...ciRepair, status: 'observed' }];
-      }
+      if (ciPolicy?.status === 'armed' && (['merged','merge_ready'].includes(next.state) ||
+          stopAutomation.has(next.evidence.reason))) setCIPolicy('disarmed',next.evidence.reason ?? next.state);
+      if (reconcileCI() && next.state !== 'merged' && !stopAutomation.has(next.evidence.reason)) next.state = 'repairing';
       if (next.merge_attempt && !canSubmit(next) && next.state !== 'merged') {
         const status = await github.mergeStatus(next.pr_number, next.merge_attempt.github_request_id);
         if (status) next.merge_attempt = { ...next.merge_attempt, status };

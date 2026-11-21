@@ -24,7 +24,7 @@ export const mcpOwnerCommands = new Set(ownerCommands);
 export const taskEngineToolSchema = object({
   request:object({
     op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse','recover_worker_candidate','integration_claim','integration_begin','integration_report',
-      'repair_tick','repair_claim','repair_begin','repair_status','repair_report']},
+      'repair_tick','repair_claim','repair_begin','repair_status','repair_report','ci_tick']},
     id:uuid,claim_id:uuid,repair_id:uuid,tree_sha:revision,shallow_base:revision,candidate_sha:revision,session_id:uuid,turn_id:uuid,
     changed_paths:strings(12,240),
     usage:object({input_tokens:{type:'integer',minimum:0},cached_input_tokens:{type:'integer',minimum:0},

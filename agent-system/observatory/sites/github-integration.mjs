@@ -1,5 +1,6 @@
 import { AUTH_REASON, githubReader, isRevision, RATE_REASON, readBounded, REPO } from './github.mjs';
 import { repairablePath, safeDiagnostic } from './source-repair.mjs';
+import { githubStepLog } from './github-step-logs.mjs';
 
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const apiVersion = '2026-03-10';
@@ -117,6 +118,7 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
       evidence.required_approvals = Math.max(0, protection?.required_pull_request_reviews?.required_approving_review_count ?? 0,
         ...rules.filter(rule => rule.type === 'pull_request').map(rule => rule.parameters?.required_approving_review_count ?? 0));
       evidence.policy_observed = Boolean(protection || rules.length);
+      const failedRequiredCheckURLs = new Set();
       evidence.checks = required.filter((check, index) => normalizedName(check.context) &&
         required.findIndex(other => other.context === check.context && other.app === check.app && other.source === check.source) === index)
         .map(({ context, app, source }) => {
@@ -126,12 +128,19 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
           if (commitStatus) results.push(commitStatus.state);
           const state = !results.length ? 'missing' : results.some(result => !passing.has(result) && !pending.has(result))
             ? 'failed' : results.some(result => pending.has(result)) ? 'pending' : 'passed';
+          for (const check of checkRuns) {
+            if (positive(check.id) && !passing.has(check.conclusion ?? check.status) &&
+                !pending.has(check.conclusion ?? check.status)) {
+              failedRequiredCheckURLs.add('https://api.github.com/repos/' + REPO + '/check-runs/' + check.id);
+            }
+          }
           return { context, app: app ?? null, source, state };
         });
       evidence.workflows = runs.workflow_runs.filter(run => positive(run.id) && positive(run.workflow_id) &&
         positive(run.run_attempt) && run.repository?.id === pr.base.repo.id).slice(0, 40).map(run => ({
         run_id: run.id, workflow_id: run.workflow_id, attempt: run.run_attempt,
         head_sha: head, name: normalizedName(run.name), url: runLink(run.id),
+        same_repository: run.repository?.full_name === REPO && run.head_repository?.full_name === REPO,
         status: normalizedName(run.status), conclusion: normalizedName(run.conclusion),
         created_at: observedTime(run.created_at), run_started_at: observedTime(run.run_started_at), updated_at: observedTime(run.updated_at),
       }));
@@ -146,12 +155,14 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
           try {
             const result = await get('/actions/runs/' + run.run_id + '/attempts/' + run.attempt + '/jobs?per_page=100');
             if (!Array.isArray(result?.jobs) || result.total_count !== result.jobs.length) return [];
-            return result.jobs.filter(job => positive(job.id) && job.run_id === run.run_id && job.run_attempt === run.attempt &&
+            return result.jobs.filter(job => positive(job.id) && job.run_id === run.run_id &&
+              (job.run_attempt === undefined || job.run_attempt === run.attempt) &&
               job.head_sha === head && job.status === 'completed' &&
               ['failure', 'timed_out', 'startup_failure'].includes(job.conclusion) && Array.isArray(job.steps)).slice(0, 8).map(job => ({
               job_id: job.id, run_id: run.run_id, attempt: run.attempt, workflow_id: run.workflow_id,
               name: normalizedName(job.name), conclusion: job.conclusion, head_sha: head,
               url: run.url + '/job/' + job.id,
+              required_check: run.same_repository && failedRequiredCheckURLs.has(job.check_run_url),
               infrastructure: ['startup_failure', 'stale'].includes(run.conclusion) &&
                 !(job.steps ?? []).some(step => step.conclusion === 'failure'),
               failed_steps: (job.steps ?? []).filter(step => step.conclusion === 'failure' && positive(step.number))
@@ -169,7 +180,10 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
       if (pr.mergeable_state !== 'clean') return blocked('policy', 'GitHub has not cleared all merge requirements.', evidence);
       return { ...evidence, state: 'merge_ready' };
     } catch (error) {
-      return classify(error);
+      const failure = classify(error);
+      const retryAt = reader.status().retryAt;
+      return failure.reason === 'rate_limited' && Number.isSafeInteger(retryAt) && retryAt > Date.now()
+        ? {...failure,retry_at:retryAt} : failure;
     }
   }
 
@@ -209,6 +223,20 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
       }
     } catch { /* A connection loss is ambiguous. Reconcile from GitHub before any further action. */ }
     return { status: 'unknown' };
+  }
+
+  async function rerunTarget(run) {
+    if (!token || !positive(run.pr_number) || !isRevision(run.head_sha) || !isRevision(run.evidence?.base_sha)) return false;
+    const reader = githubReader(read,AbortSignal.timeout(5000),token,Date.now,null,0);
+    try {
+      const [{data:pr},{data:main}] = await Promise.all([
+        reader.get('/pulls/'+run.pr_number),reader.get('/git/ref/heads/main'),
+      ]);
+      return pr?.number === run.pr_number && pr.state === 'open' && !pr.draft &&
+        pr.base?.repo?.full_name === REPO && pr.base.ref === 'main' && pr.base.sha === run.evidence.base_sha &&
+        pr.head?.sha === run.head_sha && main?.ref === 'refs/heads/main' && main.object?.type === 'commit' &&
+        main.object.sha === run.evidence.base_sha;
+    } catch { return false; }
   }
 
   async function mergeStatus(number, requestId) {
@@ -295,8 +323,8 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
     return { status: 'unknown' };
   }
 
-  async function repairSource(run) {
-    const evidence = await inspect({ ...run, expected_base: run.evidence?.base_sha });
+  async function repairSource(run, { includeLogs = false, evidence: observed, allowedPaths } = {}) {
+    const evidence = observed ?? await inspect({ ...run, expected_base: run.evidence?.base_sha });
     if (evidence.reason !== 'ci_failure') return null;
     const jobs = (evidence.jobs ?? []).filter(job => !job.infrastructure && job.failed_steps?.length && job.head_sha === run.head_sha);
     if (!jobs.length || !token) return null;
@@ -309,11 +337,37 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
           latest.base?.ref !== 'main' || latest.base?.repo?.full_name !== REPO) return null;
       const paths = [...new Set(files.data.filter(file => ['modified', 'added', 'renamed'].includes(file.status) &&
         repairablePath(file.filename)).map(file => file.filename))];
-      return { head_sha: run.head_sha, base_sha: evidence.base_sha, pr_number: run.pr_number, paths,
-        jobs: jobs.slice(0, 5).map(job => ({ job_id: job.job_id, run_id: job.run_id, run_attempt: job.attempt,
-          workflow_id: job.workflow_id, steps: job.failed_steps.slice(0, 5).map(step => ({
-            number: step.number, name: safeDiagnostic(step.name),
+      if (allowedPaths && !allowedPaths.every(path=>paths.includes(path))) return null;
+      const result = { head_sha:run.head_sha, base_sha:evidence.base_sha, pr_number:run.pr_number, paths,
+        jobs:jobs.slice(0,5).map(job => ({ job_id:job.job_id, run_id:job.run_id, run_attempt:job.attempt,
+          workflow_id:job.workflow_id, steps:job.failed_steps.slice(0,5).map(step => ({
+            number:step.number, name:safeDiagnostic(step.name),
           })) })) };
+      if (!includeLogs) return result;
+      const targets = result.jobs.flatMap((job,index) => jobs[index].required_check
+        ? job.steps.map(step=>({job:jobs[index],step})) : []).slice(0,3);
+      const logSignal = AbortSignal.timeout(6500);
+      await Promise.all(targets.map(async ({job,step}) => {
+        step.log = await githubStepLog({ fetcher, token, signal:logSignal, apiVersion, job, step, paths:allowedPaths ?? paths });
+      }));
+      if (targets.some(({step})=>step.log.status === 'observed')) {
+        const rebound = githubReader(read, AbortSignal.timeout(4000), token, Date.now, null, 0);
+        const [fresh, main, ...runs] = await Promise.all([
+          rebound.get('/pulls/' + run.pr_number),
+          rebound.get('/git/ref/heads/main'),
+          ...[...new Map(targets.map(({job})=>[job.run_id,job])).values()].map(async job => {
+            const {data} = await rebound.get('/actions/runs/' + job.run_id);
+            return data?.id === job.run_id && data.workflow_id === job.workflow_id && data.run_attempt === job.attempt &&
+              data.status === 'completed' && data.head_sha === run.head_sha && data.repository?.full_name === REPO;
+          }),
+        ]);
+        if (fresh.data?.number !== run.pr_number || fresh.data.state !== 'open' || fresh.data.head?.sha !== run.head_sha ||
+            fresh.data.base?.sha !== evidence.base_sha || fresh.data.base?.ref !== 'main' ||
+            fresh.data.base?.repo?.full_name !== REPO || main.data?.ref !== 'refs/heads/main' ||
+            main.data.object?.type !== 'commit' || main.data.object.sha !== evidence.base_sha ||
+            runs.some(match=>!match)) return null;
+      }
+      return result;
     } catch { return null; }
   }
 
@@ -324,5 +378,5 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
     catch { return false; }
   }
 
-  return { inspect, requestMerge, mergeStatus, publicationSource, openCandidatePull, repairSource, transferAnchor };
+  return { inspect, requestMerge, rerunTarget, mergeStatus, publicationSource, openCandidatePull, repairSource, transferAnchor };
 }

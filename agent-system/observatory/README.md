@@ -301,6 +301,10 @@ Evidence presentation is deliberately non-authoritative: a reported passing resu
 
 ## Merge Workspace
 
+Automatic infrastructure reruns require the existing CI owner and Actions credential, the live worker's `integration_ci_automation` opt-in, and a separate owner authorization of the exact PR head and base. The authorization expires after 30 minutes and consumes the shared repair limit. The worker reruns only a transient job tied to a failed required check. A pending submission stays fenced until a newer attempt of the exact workflow and head is observed.
+
+Failed-step diagnostics sample at most three steps and 64 KiB per step. The GitHub read credential stays on the API request. A single signed download redirect is allowed only to recognized Actions storage. Only fixed diagnostic codes, test ordinals, and locations in files verified on the PR are retained. The structured facts carry workflow, run, attempt, job, step, and head provenance. Remote log text never enters the Codex repair prompt.
+
 Integration runs and their audit history use the existing private, owner-scoped Observatory database. They retain the accepted Task attempt, exact candidate SHA and parent, PR identity, observed target and verified merge commit. Task prerequisites still default to acceptance. Select the merge milestone for individual prerequisite Task IDs when the downstream Task needs verification on `main`.
 
 The workspace reads GitHub without using the proposal or Actions write credentials. Protected merge and candidate PR publication require separate owner bindings and distinct repository-scoped credentials. Configure `OBSERVATORY_INTEGRATION_MERGE_OWNER_ID` with `GITHUB_INTEGRATION_MERGE_TOKEN` or `OBSERVATORY_INTEGRATION_PUBLISH_OWNER_ID` with `GITHUB_INTEGRATION_PUBLISH_TOKEN` only after authorizing that deployment. Direct merge requires strict base protection. Queue-required repositories use the GitHub queue. GitHub enforces its protection rules, and Observatory confirms the reported merge commit on main. Existing CI permissions govern targeted job reruns.

@@ -22,6 +22,56 @@ const editTitle = 'Worker-backed editor verification';
 const owner = 'isolated-browser-test';
 const githubToken = 'isolated-github-fixture';
 
+test('Merge Workspace sends exact owner rerun controls and renders sanitized step evidence', {timeout:120_000}, async t => {
+  const {origin} = await start(t);
+  const browser = await chromium.launch({headless:true,
+    ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? {executablePath:process.env.OBSERVATORY_BROWSER_EXECUTABLE} : {})});
+  t.after(()=>browser.close());
+  const page = await browser.newPage({reducedMotion:'reduce',viewport:{width:1080,height:780}});
+  const head = 'a'.repeat(40), base = 'b'.repeat(40);
+  const run = {id:'00000000-0000-4000-8000-000000000041',version:1,head_sha:head,pr_number:41,
+    state:'blocked',policy:{repair_limit:3},evidence:{state:'blocked',reason:'ci_infrastructure',base_sha:base}};
+  const access = {ci_enabled:true};
+  const operations = [];
+  await page.route('**/api/integrations/v1**', async route => {
+    const request = route.request();
+    if (request.method()==='POST') {
+      const body = request.postDataJSON();
+      operations.push(body);
+      if (body.op==='arm_ci_reruns') run.policy.auto_ci_reruns={status:'armed'};
+      if (body.op==='disarm_ci_reruns') run.policy.auto_ci_reruns={status:'disarmed'};
+      if (body.op==='refresh') run.evidence.reason='ci_failure';
+      if (body.op==='inspect_logs') run.log_diagnostics={head_sha:head,jobs:[
+        {workflow_id:12,run_id:110,run_attempt:3,job_id:152,steps:[{number:4,log:{status:'observed',
+          facts:[{kind:'source_location',path:'src/example.mjs',line:12,column:4},{kind:'test_ordinal',code:13}]}}]},
+      ]};
+      run.version++;
+      return route.fulfill({json:{run,access}});
+    }
+    return route.fulfill({json:new URL(request.url()).searchParams.has('id') ?
+      {run,access,events:[]} : {runs:[run],access}});
+  });
+  await page.goto(origin+'/#merge');
+  await page.getByRole('button',{name:/PR #41/}).click();
+  const arm = page.getByRole('button',{name:'Authorize automatic infrastructure reruns for this head'});
+  await arm.focus();
+  await arm.press('Enter');
+  const disarm = page.getByRole('button',{name:'Disarm automatic CI reruns'});
+  await disarm.click();
+  assert.deepEqual(operations.map(({op})=>op),['arm_ci_reruns','disarm_ci_reruns']);
+  assert.equal(operations[0].head_sha,head);
+  assert.equal(operations[0].base_sha,base);
+  assert.equal(operations[1].expected_version,2);
+  await page.getByRole('button',{name:'Refresh GitHub evidence'}).click();
+  await page.getByRole('button',{name:'Read sanitized failed-step diagnostics'}).click();
+  await page.getByRole('heading',{name:'Sanitized failed-step diagnostics'}).waitFor();
+  await page.getByText('Workflow 12 · run 110 · attempt 3',{exact:true}).waitFor();
+  await page.getByText('Job 152 · step 4',{exact:true}).waitFor();
+  await page.getByText('src/example.mjs:12:4',{exact:true}).waitFor();
+  await page.getByText('Failing TAP test 13',{exact:true}).waitFor();
+  assert.deepEqual(operations.map(({op})=>op),['arm_ci_reruns','disarm_ci_reruns','refresh','inspect_logs']);
+});
+
 async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());

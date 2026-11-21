@@ -87,6 +87,10 @@ function fixture(t, options = {}) {
     reads.push(path);
     if (path === '/actions/runs/100') return Response.json(current);
     if (path === '/actions/jobs/101') return Response.json(job);
+    if (path === '/actions/runs/100/attempts/1/jobs?per_page=100') {
+      const jobs = options.omitAttemptJob ? [] : [job];
+      return Response.json({total_count:jobs.length,jobs});
+    }
     if (path === '/actions/runs/100/attempts/1') return Response.json({ ...current, run_attempt: 1 });
     if (path === '/actions/runs/100/attempts/2') return newAttempt ? Response.json(newAttempt) : fail(404);
     if (path === '/actions/runs/100/attempts/2/jobs?per_page=50') {
@@ -105,6 +109,7 @@ function fixture(t, options = {}) {
   const env = {
     DB: db, GITHUB_ACTIONS_TOKEN: options.noCredential ? undefined : token, OBSERVATORY_CI_OWNER_ID: 'owner',
     ...(options.sharedToken ? { GITHUB_READ_TOKEN: token } : {}),
+    ...(options.sharedIntegrationToken ? { GITHUB_INTEGRATION_PUBLISH_TOKEN:token } : {}),
   };
   const call = (path, config) => createWorker({ assets: {}, fetcher }).fetch(new Request(origin + path, config), env);
   const post = (action, headers = {}) => call(route, { method: 'POST', headers: {
@@ -135,7 +140,7 @@ test('CI routes require owner permission, separate credentials and same-origin c
   assert.equal((await post({ ...action, enable_debug_logging: true })).status, 400);
   assert.equal((await post({ ...action, operation_id: 'bad' })).status, 400);
   assert.equal((await (await call(route, { headers: auth })).json()).access.enabled, true);
-  for (const options of [{ noCredential: true }, { sharedToken: true }]) {
+  for (const options of [{ noCredential: true }, { sharedToken: true }, {sharedIntegrationToken:true}]) {
     const disabled = fixture(t, options);
     assert.equal((await disabled.post(action)).status, 403);
     assert.equal((await (await disabled.call(route, { headers: auth })).json()).access.enabled, false);
@@ -143,6 +148,17 @@ test('CI routes require owner permission, separate credentials and same-origin c
   }
   assert.equal(writes.length, 0);
   assert.equal(reads.length, 0);
+});
+
+test('job rerun proves attempt membership if GitHub omits the field on the job response', async t => {
+  const allowed = fixture(t,{job:{run_attempt:undefined}});
+  const denied = fixture(t,{job:{run_attempt:undefined},omitAttemptJob:true});
+  const action = confirmation('rerun_job',{job_id:101});
+  assert.equal((await allowed.post(action)).status,200);
+  assert.ok(allowed.reads.includes('/actions/runs/100/attempts/1/jobs?per_page=100'));
+  assert.equal(allowed.writes[0].path,'/actions/jobs/101/rerun');
+  assert.equal((await denied.post(action)).status,409);
+  assert.equal(denied.writes.length,0);
 });
 
 test('reruns once across isolates and confirms both the new attempt and terminal result', async t => {

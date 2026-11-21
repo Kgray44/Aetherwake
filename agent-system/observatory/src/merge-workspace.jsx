@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GitMerge, GitPullRequest, RefreshCw } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { taskHref } from './task-workspace.mjs';
-import { integrationWorkflowTiming } from './integration-analytics.mjs';
+import { integrationLogFact, integrationWorkflowTiming } from './integration-analytics.mjs';
 import { codexThreadHref } from './task-engine-client.mjs';
 
 const endpoint = '/api/integrations/v1';
@@ -86,7 +86,9 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
   const run = detail?.run.id === selected ? detail.run : runs.find(item => item.id === selected);
   const sourceRepair = run?.source_repairs?.at(-1);
   const sourceActive = ['queued','claimed','running','awaiting_review'].includes(sourceRepair?.status);
+  const autoCI = run?.policy.auto_ci_reruns;
   const privateOnlyPoll = sourceActive || run?.policy.auto_source_repair?.status === 'armed' ||
+    autoCI?.status === 'armed' ||
     ['queued','claimed','sending'].includes(run?.transfer?.status);
   const { id: activeId, version: activeVersion, state: activeState, pr_number: activePull } = run ?? {};
   useEffect(() => {
@@ -192,6 +194,9 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
       {run.transfer && <p>Candidate transfer <strong>{run.transfer.status}</strong></p>}
       {run.policy.auto_source_repair && <p>Automatic source repair <strong>{run.policy.auto_source_repair.status}</strong>
         {run.policy.auto_source_repair.reason && <small> {run.policy.auto_source_repair.reason}</small>}</p>}
+      {autoCI && <p>Automatic CI reruns <strong>{autoCI.status}</strong>
+        {autoCI.reason && <small> {autoCI.reason.replaceAll('_',' ')}</small>}
+        {autoCI.status==='armed' && !access.ci_enabled && <small> CI write authorization is unavailable.</small>}</p>}
       {run.merge_attempt && <p>Merge request <strong>{run.merge_attempt.status}</strong> · {run.merge_attempt.method.replaceAll('_', ' ')}</p>}
       {!!run.evidence?.checks?.length && <section><h3>Required checks</h3><ul className="integration-evidence">
         {run.evidence.checks.map(check => <li key={JSON.stringify([check.context, check.app, check.source])}>
@@ -215,8 +220,22 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
       </ul></section>}
       {!!run.repair_attempts?.length && <section><h3>CI rerun history</h3><ol className="integration-evidence">
         {run.repair_attempts.map(repair => <li key={repair.id}><span>Job {repair.job_id} · workflow attempt {repair.run_attempt}</span>
-          <strong>{repair.status}</strong></li>)}
+          <strong>{repair.authorization_id ? 'Automatic · ' : ''}{repair.status}</strong></li>)}
       </ol></section>}
+      {run.log_diagnostics && <section><h3>Sanitized failed-step diagnostics</h3>
+        <p>Observed for head <code className="integration-sha">{run.log_diagnostics.head_sha}</code>.</p>
+        {!run.log_diagnostics.jobs.some(job=>job.steps.some(step=>step.log)) &&
+          <p>No failed-step log was linked to a confirmed required check.</p>}
+        <ul className="integration-evidence">{run.log_diagnostics.jobs.flatMap(job=>job.steps.filter(step=>step.log).map(step=>
+          <li key={job.job_id+':'+step.number}><div><strong>Workflow {job.workflow_id} · run {job.run_id} · attempt {job.run_attempt}</strong>
+            <small>Job {job.job_id} · step {step.number}</small>
+            {step.log.status==='observed' ? step.log.facts.length ? step.log.facts.map((fact,index)=><small key={index}>
+              {integrationLogFact(fact)}
+            </small>) : <small>No supported diagnostic facts were found in the sample.</small> :
+              <small>Log sample unavailable.</small>}
+          </div></li>
+        ))}</ul>
+      </section>}
       {!!run.source_repairs?.length && <section><h3>Codex source repairs</h3><ol className="integration-evidence">
         {run.source_repairs.map(repair => <li key={repair.id}><span>
           <strong>{repair.status.replaceAll('_', ' ')}</strong>
@@ -252,6 +271,18 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
         {run.pr_number && !run.stopped && !sourceActive && <button className="quiet-button" disabled={busy} onClick={() => change('refresh')}>
           <RefreshCw size={15} aria-hidden="true"/> Refresh GitHub evidence
         </button>}
+        {autoCI?.status === 'armed' && <button className="quiet-button" disabled={busy}
+          onClick={()=>change('disarm_ci_reruns')}>Disarm automatic CI reruns</button>}
+        {access.ci_enabled && autoCI?.status !== 'armed' && ['checking','blocked'].includes(run.state) &&
+          !run.stopped && !sourceActive && run.pr_number &&
+          run.evidence?.base_sha && (run.state === 'checking' || ['missing_checks','ci_infrastructure'].includes(run.evidence.reason)) &&
+          (run.repair_attempts?.length ?? 0)+(run.source_repairs?.length ?? 0) < run.policy.repair_limit &&
+          <button className="quiet-button" disabled={busy}
+            onClick={()=>change('arm_ci_reruns',{head_sha:run.head_sha,base_sha:run.evidence.base_sha})}>
+            Authorize automatic infrastructure reruns for this head
+          </button>}
+        {run.state==='blocked' && !run.stopped && run.pr_number && run.evidence?.reason==='ci_failure' &&
+          <button className="quiet-button" disabled={busy} onClick={()=>change('inspect_logs')}>Read sanitized failed-step diagnostics</button>}
         {run.state === 'blocked' && run.pr_number && <form onSubmit={event => {
           event.preventDefault();
           change('retry', { feedback: new FormData(event.currentTarget).get('feedback') });

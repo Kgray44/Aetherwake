@@ -16,7 +16,8 @@ const runPath = id => '/actions/runs/' + id;
 function validSecret(env) {
   const token = env.GITHUB_ACTIONS_TOKEN;
   return typeof token === 'string' && /^(?:github_pat_|ghs_|ghu_)[A-Za-z0-9_]{20,}$/.test(token) &&
-    token !== env.GITHUB_PROPOSAL_TOKEN && token !== env.GITHUB_READ_TOKEN;
+    ![env.GITHUB_PROPOSAL_TOKEN,env.GITHUB_READ_TOKEN,env.GITHUB_INTEGRATION_MERGE_TOKEN,
+      env.GITHUB_INTEGRATION_PUBLISH_TOKEN].includes(token);
 }
 
 export function ciAccess(env, owner, verification) {
@@ -26,6 +27,13 @@ export function ciAccess(env, owner, verification) {
   }
   if (env.OBSERVATORY_CI_OWNER_ID !== owner) return { enabled: false, reason: 'The signed-in visitor is not authorized for CI actions.' };
   return { enabled: true, diagnostics: [{ key: DIAGNOSTIC.key, name: DIAGNOSTIC.name, ref: DIAGNOSTIC.ref }] };
+}
+
+export function integrationCIRerunner({env,owner,verification,fetcher}) {
+  if (!ciAccess(env,owner,verification).enabled) return undefined;
+  return (job,id) => submitCI({db:env.DB,owner,fetcher,token:env.GITHUB_ACTIONS_TOKEN,
+    body:{type:'rerun_job',operation_id:id,expected_revision:job.head_sha,run_id:job.run_id,
+      workflow_id:job.workflow_id,attempt:job.attempt,job_id:job.job_id}});
 }
 
 function parseAction(body) {
@@ -134,8 +142,20 @@ async function preflight(send, action) {
   if (action.type === 'rerun_job') {
     const job = await readGitHub(send, '/actions/jobs/' + action.job_id);
     if (job?.id !== action.job_id || job.run_id !== action.run_id || job.head_sha !== action.expected_revision ||
-        job.run_attempt !== action.attempt || job.status !== 'completed' || !isFailedConclusion(job.conclusion)) {
+        (job.run_attempt !== undefined && job.run_attempt !== action.attempt) ||
+        job.status !== 'completed' || !isFailedConclusion(job.conclusion)) {
       targetError('The failed job is stale or does not belong to the confirmed workflow attempt.');
+    }
+    if (job.run_attempt === undefined) {
+      // The attempt-qualified endpoint proves membership when the separate job
+      // response omits its redundant attempt number.
+      const list = await readGitHub(send,path+'/attempts/'+action.attempt+'/jobs?per_page=100');
+      if (!Array.isArray(list?.jobs) || list.total_count !== list.jobs.length || !list.jobs.some(candidate =>
+        candidate.id === job.id && candidate.run_id === action.run_id && candidate.head_sha === action.expected_revision &&
+        (candidate.run_attempt === undefined || candidate.run_attempt === action.attempt) &&
+        candidate.status === job.status && candidate.conclusion === job.conclusion)) {
+        targetError('GitHub did not confirm the failed job in the selected workflow attempt.');
+      }
     }
     target.job_id = job.id;
     target.job_name = typeof job.name === 'string' ? job.name.slice(0, 240) : null;

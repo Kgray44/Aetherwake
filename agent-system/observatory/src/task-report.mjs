@@ -8,7 +8,7 @@ import { executionTiming,timingLegend } from './execution-timing.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 import { taskDataCoverage } from './task-data-coverage.mjs';
-import { integrationMilestones, integrationWorkflowTiming, integrationRepairPricing } from './integration-analytics.mjs';
+import { integrationMilestones, integrationWorkflowTiming, integrationRepairPricing, integrationLogFact } from './integration-analytics.mjs';
 import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 
 const words = value => value.replaceAll('_',' ');
@@ -183,9 +183,17 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
             ['PR creation time (UTC)',milestones.prCreatedAt], ['Merge time (UTC)',milestones.mergedAt],
             ['Acceptance to PR (ms)',milestones.acceptanceToPrMs], ['PR to merge (ms)',milestones.prToMergeMs],
             ['CI rerun receipts',run.repair_attempts?.length ?? 0], ['Actual integration billing','Unavailable'],
+            ['Automatic infrastructure authorization',run.policy?.auto_ci_reruns?.status],
+            ['Automatic CI rerun receipts',(run.repair_attempts ?? []).filter(attempt=>attempt.authorization_id).length],
             ['OpenAI API reference estimate for repairs',estimate.total===null?'Unavailable':
               formatReferenceCost(estimate.total)+' across '+estimate.attempts.length+' priced repairs'],
           ]),
+          ...blocks((run.log_diagnostics?.jobs ?? []).flatMap(job=>job.steps).flatMap(step=>step.log?[step.log]:[]),
+            log=>'GitHub failed-step diagnostics',log=>[
+              ['Workflow',log.workflow_id], ['Run',log.run_id], ['Attempt',log.run_attempt],
+              ['Job',log.job_id], ['Step',log.step_number], ['Head SHA',log.head_sha],
+              ['Sample status',log.status], ['Observed facts',log.facts?.map(integrationLogFact).join(' · ')],
+            ]),
           ...blocks(run.source_repairs ?? [],repair=>'Codex source repair '+repair.id,repair=>[
             ['Status',words(repair.status)], ['Failed head SHA',repair.head_sha],
             ['Candidate SHA',repair.candidate_sha], ['Candidate tree',repair.tree_sha],

@@ -1024,6 +1024,8 @@ async function main(configPath) {
   const scope = config.auto_provision?.task_ids ?? (author ? undefined : [...workspaces.keys()]);
   const appServer = config.executor_transport === 'app_server';
   const repairEnabled = config.integration_source_repair === true;
+  const ciAutomation = config.integration_ci_automation === true;
+  if (ciAutomation && verification) throw Error('Automatic CI reruns require a live worker');
   if (repairEnabled && (!appServer || !author || verification)) throw Error('Source repair requires a live App Server worker with isolated checkout provisioning');
   if (scope !== undefined && (!Array.isArray(scope) || !scope.length || scope.length > 500 ||
       !scope.every(id => taskIdPattern.test(id)))) throw Error('Invalid automatic checkout Task scope');
@@ -1082,10 +1084,14 @@ async function main(configPath) {
     return true;
   }
   async function workIntegration() {
-    if ((!integrationGit && !repairEnabled) || active.size || Date.now() < nextTransferPoll) return false;
+    if ((!integrationGit && !repairEnabled && !ciAutomation) || active.size || Date.now() < nextTransferPoll) return false;
     nextTransferPoll = Date.now() + 15_000;
+    const scopeFields = scope ? {task_ids:scope} : {};
+    if (ciAutomation) {
+      await sendIntegration({op:'ci_tick',operation_id:randomUUID(),worker_id:workerId,...scopeFields})
+        .catch(() => {}); // A denied CI poll cannot block Task or source repair claims.
+    }
     if (repairEnabled) {
-      const scopeFields = scope ? {task_ids:scope} : {};
       await sendIntegration({ op:'repair_tick', operation_id:randomUUID(), worker_id:workerId, ...scopeFields })
         .catch(() => {}); // A monitoring conflict never prevents already queued work from being claimed.
       const { job } = await sendIntegration({ op: 'repair_claim', operation_id: randomUUID(), worker_id: workerId,
