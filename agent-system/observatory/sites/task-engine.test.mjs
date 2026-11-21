@@ -13,7 +13,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkspaceTelemetryScope, codexTaskPrompt, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { hasLiveTaskWork, workerDispatchStatus } from '../src/task-engine-client.mjs';
 import { openObservatoryConnector } from '../../../scripts/agent/observatory-connector.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
 import { buildEngineeringAnalytics } from '../src/engineering-analytics.mjs';
@@ -28,7 +29,7 @@ function setup(t, { countAuditWrites = false } = {}) {
   const sqlite = new DatabaseSync(':memory:');
   t.after(() => sqlite.close());
   for (const migration of ['0000_proposals', '0003_proposal_publication', '0004_cached_proposal_revision',
-    '0007_proposal_controls', '0011_task_engine']) {
+    '0007_proposal_controls', '0011_task_engine', '0013_task_worker_liveness']) {
     sqlite.exec(readFileSync(new URL('./drizzle/' + migration + '.sql', import.meta.url), 'utf8'));
   }
   const db = { prepare(statement) {
@@ -60,6 +61,40 @@ function setup(t, { countAuditWrites = false } = {}) {
     expected_version: task.version, operation_id: crypto.randomUUID(), action: { type, ...extra } }, access);
   return { sqlite, call, register, command, get, pin: value => { revision = value; }, advance: ms => { now += ms; } };
 }
+
+test('authenticated worker liveness is owner-scoped, expires, and does not create a Task or attempt', async t => {
+  const { call, advance } = setup(t);
+  const pulse = { op:'worker_pulse', worker_id:crypto.randomUUID(), worker_state:'available' };
+  assert.equal((await call(pulse)).status, 403);
+  assert.equal((await call({ ...pulse, worker_state:'arbitrary text' }, 'worker')).status, 400);
+  const receipt = await call(pulse, 'worker');
+  assert.equal(receipt.status, 200);
+  const view = async () => (await call({ op:'list' })).body;
+  assert.deepEqual((await view()).tasks, []);
+  assert.equal(workerDispatchStatus((await view()).worker_dispatch, 'configured').label, 'Codex worker online');
+  assert.deepEqual((await call({ op:'list' }, 'owner', 'other-owner')).body.worker_dispatch.states, []);
+  assert.equal((await call({ op:'list' }, 'agent')).body.worker_dispatch, undefined);
+  await call({ ...pulse, worker_state:'claim_rejected' }, 'worker');
+  assert.equal(workerDispatchStatus((await view()).worker_dispatch, 'configured').label, 'Recent worker claim rejected');
+  advance(60_000);
+  const stale = workerDispatchStatus((await view()).worker_dispatch, 'configured');
+  assert.equal(stale.label, 'Codex worker disconnected');
+  assert.equal(stale.at, receipt.body.seen_at);
+  assert.equal(hasLiveTaskWork([{ lifecycle:{ state:'ready' } }]), true);
+});
+
+test('storage guard permits slower verification and distinguishes timeout, reserve denial and unavailable data', async () => {
+  const command = ['guard', 'bounded-budget'];
+  await checkWorkerStorage(command, '.', async (file, args, options) => {
+    assert.equal(file, 'guard');
+    assert.deepEqual(args, ['bounded-budget']);
+    assert.equal(options.timeout, 30_000);
+  });
+  for (const [cause, code] of [[{ killed:true },'storage_guard_timeout'], [{ code:2 },'storage_reserve_denied'],
+    [{ code:'ENOENT' },'storage_guard_unavailable']]) {
+    await assert.rejects(checkWorkerStorage(command, '.', async () => { throw cause; }), { code });
+  }
+});
 
 test('legacy and Codex-created Tasks share one identity and versioned writes', async t => {
   const { sqlite, call, register, command, get } = setup(t);

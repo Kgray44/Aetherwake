@@ -366,15 +366,31 @@ function taskForExecution(task,lifecycle) {
   return {...task, objective: task.objective+'\n\nOwner feedback for this follow-up attempt\n'+lifecycle.feedback};
 }
 
+const workerOperations = new Set(['claim', 'report', 'worker_pulse']);
+const workerStates = new Set(['available', 'busy', 'claim_rejected', 'task_connection_unavailable',
+  'storage_guard_timeout', 'storage_reserve_denied', 'storage_guard_unavailable']);
+const workerFreshnessMs = 60_000;
+
 export async function taskOperation({ db, owner, namespace, body, access, validate, revision, now = Date.now() }) {
-  if (!body || !['list', 'get', 'register', 'command', 'claim', 'report'].includes(body.op)) return failure(400, 'Invalid Task operation');
-  if (['claim', 'report'].includes(body.op) && access !== 'worker') return failure(403, 'Executor authorization required');
+  if (!body || !['list', 'get', 'register', 'command', ...workerOperations].includes(body.op)) return failure(400, 'Invalid Task operation');
+  if (workerOperations.has(body.op) && access !== 'worker') return failure(403, 'Executor authorization required');
   if (body.op === 'command' && access !== 'owner' && !agentCommands.has(body.action?.type)) return failure(403, 'Owner action required');
-  if (access === 'worker' && !['claim', 'report'].includes(body.op)) return failure(403, 'Executor scope does not allow this operation');
-  if (!['list', 'get'].includes(body.op) && !operationId.test(body.operation_id)) return failure(400, 'Operation UUID required');
+  if (access === 'worker' && !workerOperations.has(body.op)) return failure(403, 'Executor scope does not allow this operation');
+  if (!['list', 'get', 'worker_pulse'].includes(body.op) && !operationId.test(body.operation_id)) return failure(400, 'Operation UUID required');
   if (['get', 'command', 'report'].includes(body.op) && !taskId(body.task_id)) return failure(400, 'Invalid Task ID');
 
   const query = (sql, ...args) => db.prepare(sql).bind(...args);
+  if (body.op === 'worker_pulse') {
+    if (!operationId.test(body.worker_id) || !workerStates.has(body.worker_state)) return failure(400, 'Invalid worker observation');
+    await query('DELETE FROM task_worker_liveness WHERE owner_id = ? AND namespace = ? AND seen_at < ?',
+      owner, namespace, now - 86_400_000).run();
+    await query(`
+      INSERT INTO task_worker_liveness (owner_id, namespace, worker_id, seen_at, state) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(owner_id, namespace, worker_id) DO UPDATE SET seen_at = excluded.seen_at, state = excluded.state
+      WHERE excluded.seen_at >= task_worker_liveness.seen_at
+    `, owner, namespace, body.worker_id, now, body.worker_state).run();
+    return success({ seen_at: timestamp(now) });
+  }
   const rows = new Map((await readTaskRows({ db, owner, namespace, now })).map(row => [row.task_id, row]));
   const currentRow = rows.get(body.task_id);
   const receipts = id => query('SELECT event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND task_id = ? ORDER BY version',
@@ -390,8 +406,14 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   });
   if (body.op === 'list') {
     const tasks = [...rows.values()].map(summary);
+    const dispatch = access === 'owner'
+      ? (await query(`
+        SELECT seen_at, state FROM task_worker_liveness WHERE owner_id = ? AND namespace = ? ORDER BY seen_at DESC LIMIT 20
+      `, owner, namespace).all()).results : null;
     return success({ tasks: tasks.filter(item => body.state === undefined
-      ? body.include_archived === true || item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state) });
+      ? body.include_archived === true || item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state),
+    ...(dispatch ? { worker_dispatch: { last_seen_at: dispatch.length ? timestamp(dispatch[0].seen_at) : null,
+      states: dispatch.filter(worker => now - worker.seen_at < workerFreshnessMs).map(worker => worker.state) } } : {}) });
   }
   if (body.op === 'get') return currentRow ? success(await view(currentRow)) : failure(404, 'Task not found');
 
@@ -483,7 +505,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
         if (!await save(row, task, lifecycle, { kind: 'dependency_cancelled', id: crypto.randomUUID(), eventDigest: 'scheduler' })) return conflict();
       }
     }
-    if (running.length >= claimLimit) return success({ claim: null });
+    if (running.length >= claimLimit) return success({ claim: null, dispatch_state:'busy' });
     const candidate = admitted.filter(row => !body.task_ids || body.task_ids.includes(row.task_id)).map(row => rows.get(row.task_id))
       .filter(row => {
         const lifecycle=details(row);

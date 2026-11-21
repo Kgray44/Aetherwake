@@ -21,7 +21,9 @@ export const mcpOwnerCommands = new Set(ownerCommands);
 
 export const taskEngineToolSchema = object({
   request:object({
-    op:{type:'string',enum:['list','get','register','command','claim','report']},
+    op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse']},
+    worker_id:{type:'string',description:'Worker UUID for authenticated liveness observations.'},
+    worker_state:{type:'string',enum:['available','busy','claim_rejected','task_connection_unavailable','storage_guard_timeout','storage_reserve_denied','storage_guard_unavailable']},
     operation_id:{...uuid,description:'Required for register, command, claim and report. Generate a UUID v4 once per write and reuse it only to replay the same request.'},
     task_id:taskId,
     expected_version:{type:'integer',minimum:1,description:'Required for command. Use the current version returned by get.'},
@@ -50,5 +52,5 @@ export const taskEngineToolSchema = object({
     },['type']),
   },['op']),
   verification:{...uuid,description:'Optional isolated verification namespace. Independent of request.operation_id.'},
-  worker_key:{type:'string',minLength:32,maxLength:256,description:'Configured executor credential for claim and report only. Do not include it for owner operations.'},
+  worker_key:{type:'string',minLength:32,maxLength:256,description:'Configured executor credential for claim, report and worker liveness. Do not include it for owner operations.'},
 },['request']);

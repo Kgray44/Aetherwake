@@ -44,6 +44,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
   sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0012_task_trace_receipts.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0013_task_worker_liveness.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {

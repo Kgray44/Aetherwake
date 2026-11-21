@@ -1,4 +1,24 @@
-const changingStates=new Set(['admitted','queued','scheduled','running','pausing','cancelling','verifying']);
+const changingStates=new Set(['admitted','ready','queued','scheduled','running','pausing','cancelling','verifying']);
+
+const workerLabels={
+  available:'Codex worker online',
+  busy:'Codex worker at capacity',
+  claim_rejected:'Recent worker claim rejected',
+  task_connection_unavailable:'Worker could not reach Task Engine',
+  storage_guard_timeout:'Worker storage guard timed out',
+  storage_guard_unavailable:'Worker could not check storage reserves',
+  storage_reserve_denied:'Worker storage reserve denied',
+};
+
+export function workerDispatchStatus(observation, access) {
+  if (access==='not_configured') return {label:'Codex worker access unavailable'};
+  if (!observation) return {label:'Worker availability unknown'};
+  const states=observation.states??[];
+  const state=['available','claim_rejected','task_connection_unavailable','storage_guard_timeout',
+    'storage_guard_unavailable','storage_reserve_denied','busy'].find(value=>states.includes(value));
+  return {label:workerLabels[state]??(observation.last_seen_at ? 'Codex worker disconnected' : 'Awaiting first worker heartbeat'),
+    at:observation.last_seen_at,state};
+}
 
 export function hasLiveTaskWork(tasks) {
   return tasks.some(task=>changingStates.has(task.lifecycle?.stored_state??task.lifecycle?.state));
@@ -43,7 +63,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   return result;
 }
 
-export function taskNextAction(detail, workerAccess) {
+export function taskNextAction(detail, workerAccess, observation) {
   const lifecycle = detail?.lifecycle;
   if (!lifecycle) return null;
   const { state, executor, blockers = [], start_at: startAt } = lifecycle;
@@ -55,7 +75,7 @@ export function taskNextAction(detail, workerAccess) {
     Number.isFinite(startAt) ? new Date(startAt).toISOString() : undefined);
   if (['admitted','ready','queued'].includes(state) && executor) return workerAccess==='not_configured'
     ? action('Configure Codex worker access', 'A worker credential is required before a worker can claim this Task.', 'task-controls')
-    : action('Waiting for worker claim', 'The Task is in the execution queue.', 'task-controls');
+    : action('Eligible · awaiting worker claim', workerDispatchStatus(observation,workerAccess).label + '.', 'task-controls');
   if (state === 'verifying') return action('Review the candidate', 'Review the linked evidence and record the owner decision.', 'task-evidence');
   if (state === 'failed') return options.includes('retry')
     ? action('Review the failure before retrying', 'Inspect the latest attempt and record what changed before restarting execution.', 'task-attempts')
