@@ -10,6 +10,7 @@ const idPattern = /^task_([a-f0-9-]+)$/;
 const taskId = value => typeof value === 'string' && operationId.test(value.match(idPattern)?.[1] ?? '');
 const scopeLimit = 500;
 const leaseMs = 60_000;
+const candidateRecoveryMs = 24 * 60 * 60 * 1000;
 const maxAttempts = 3;
 const defaultAttemptMinutes = 30;
 const attemptLimit = lifecycle => lifecycle.max_attempt_minutes ?? defaultAttemptMinutes;
@@ -24,6 +25,7 @@ function safeReference(value) {
 const refKinds = ['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session'];
 const sessionPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const revisionPattern = /^[a-f0-9]{40}$/;
+const recoveryProof = /^[a-f0-9]{64}$/;
 const scheduledDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const agentCommands = new Set(['edit', 'associate']);
 const claimStates = new Set(['admitted', 'queued', 'scheduled']);
@@ -98,7 +100,7 @@ function hasCycle(id, task, rows) {
   return false;
 }
 
-function exposeAttempt({ lease, ...attempt }) {
+function exposeAttempt({ lease, recovery_commitment, ...attempt }) {
   return attempt;
 }
 
@@ -285,6 +287,8 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
     last.candidate_revision = action.revision;
     last.candidate_origin = 'recovered';
     delete last.failure;
+    delete last.recovery_commitment;
+    delete last.recovery_until;
     return { lifecycle: { ...lifecycle, state: 'verifying', recovered_candidate:true }, previousFailure };
   }
   if (type === 'accept' && current === 'verifying') {
@@ -446,6 +450,7 @@ function workerChange(lifecycle, body, now) {
     active.candidate_revision = report.revision;
     active.state = 'verifying';
     active.finished_at = timestamp(now);
+    delete active.recovery_commitment;
     return { lifecycle: { ...lifecycle, state: 'verifying' }, addenda: deferAddenda(lifecycle, active) };
   }
   if (report.type === 'stopped' && ['pausing', 'cancelling'].includes(lifecycle.state)) {
@@ -453,6 +458,7 @@ function workerChange(lifecycle, body, now) {
     if (typeof report.revision === 'string' && revisionPattern.test(report.revision)) active.checkpoint_revision = report.revision;
     active.state = state;
     active.finished_at = timestamp(now);
+    delete active.recovery_commitment;
     return { lifecycle: { ...lifecycle, state }, addenda: deferAddenda(lifecycle, active) };
   }
   if (report.type === 'failed' && typeof report.failure === 'string' && report.failure.trim() && report.failure.length <= 500) {
@@ -463,9 +469,35 @@ function workerChange(lifecycle, body, now) {
     }
     active.failure = report.failure.trim();
     active.finished_at = timestamp(now);
+    delete active.recovery_commitment;
     return { lifecycle: { ...lifecycle, state: 'failed' }, addenda: deferAddenda(lifecycle, active) };
   }
   return failure(409, 'Report conflicts with current Task state');
+}
+
+async function recoverWorkerCandidate(lifecycle, body, now) {
+  const attempt = lifecycle.attempts.at(-1);
+  const candidate = body.candidate_recovery;
+  if (!candidate || typeof candidate.key !== 'string' || !recoveryProof.test(candidate.key) ||
+      typeof candidate.revision !== 'string' || !revisionPattern.test(candidate.revision) ||
+      body.lease !== undefined || body.report !== undefined || body.action !== undefined) {
+    return failure(400, 'Invalid candidate recovery proof');
+  }
+  if (lifecycle.state !== 'failed' || attempt?.state !== 'orphaned' || attempt.id !== body.attempt_id ||
+      !attempt.recovery_commitment || !Number.isFinite(attempt.recovery_until) || now >= attempt.recovery_until ||
+      candidate.revision === attempt.revision || !attempt.branch || candidate.branch !== attempt.branch ||
+      !attempt.session_id || candidate.session_id !== attempt.session_id ||
+      await sha256(candidate.key) !== attempt.recovery_commitment) {
+    return failure(409, 'Candidate recovery does not match the current orphaned attempt');
+  }
+  const previousFailure = attempt.failure;
+  delete attempt.failure;
+  delete attempt.recovery_commitment;
+  delete attempt.recovery_until;
+  attempt.state = 'verifying';
+  attempt.candidate_revision = candidate.revision;
+  attempt.candidate_origin = 'worker_recovered';
+  return { lifecycle:{...lifecycle,state:'verifying',recovered_candidate:true}, previousFailure };
 }
 
 export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
@@ -478,6 +510,8 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
     const attempt = lifecycle.attempts.at(-1);
     if (attempt?.state !== 'running' || attempt.lease_until > now) return row;
 
+    if (lifecycle.state !== 'running') delete attempt.recovery_commitment;
+    if (attempt.recovery_commitment) attempt.recovery_until = now + candidateRecoveryMs;
     attempt.state = 'orphaned';
     const deadlineReached = attempt.lease_until === attempt.deadline;
     attempt.failure = deadlineReached
@@ -517,7 +551,7 @@ function claimPayload(task,lifecycle,attempt,separateNotes) {
   };
 }
 
-const workerOperations = new Set(['claim', 'report', 'worker_pulse']);
+const workerOperations = new Set(['claim', 'report', 'worker_pulse', 'recover_worker_candidate']);
 const workerStates = new Set(['available', 'busy', 'claim_rejected', 'task_connection_unavailable',
   'storage_guard_timeout', 'storage_reserve_denied', 'storage_guard_unavailable']);
 const workerFreshnessMs = 60_000;
@@ -528,7 +562,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   if (body.op === 'command' && access !== 'owner' && !agentCommands.has(body.action?.type)) return failure(403, 'Owner action required');
   if (access === 'worker' && !workerOperations.has(body.op)) return failure(403, 'Executor scope does not allow this operation');
   if (!['list', 'get', 'worker_pulse'].includes(body.op) && !operationId.test(body.operation_id)) return failure(400, 'Operation UUID required');
-  if (['get', 'command', 'report'].includes(body.op) && !taskId(body.task_id)) return failure(400, 'Invalid Task ID');
+  if (['get', 'command', 'report','recover_worker_candidate'].includes(body.op) && !taskId(body.task_id)) return failure(400, 'Invalid Task ID');
 
   const query = (sql, ...args) => db.prepare(sql).bind(...args);
   if (body.op === 'worker_pulse') {
@@ -605,6 +639,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   }) : failure(404, 'Task not found');
 
   if (body.op === 'claim' && !validWorkerScope(body.task_ids)) return failure(400, 'Invalid executor Task scope');
+  if (body.op === 'claim' && body.recovery_commitment !== undefined &&
+      (typeof body.recovery_commitment !== 'string' || !recoveryProof.test(body.recovery_commitment))) {
+    return failure(400, 'Invalid candidate recovery commitment');
+  }
   const digest = await sha256(JSON.stringify({ access, body }));
   const prior = await query('SELECT task_id, event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND operation_id = ?',
     owner, namespace, body.operation_id).first();
@@ -629,7 +667,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
         item.reservation_id === (body.report.reservation_id ?? body.operation_id));
       return success({addenda: body.report.type === 'addenda_take' ? addenda.filter(item => item.status === 'pending') : []});
     }
-    if (body.op === 'report') return success(reportView(row, previous));
+    if (['report','recover_worker_candidate'].includes(body.op)) return success(reportView(row, previous));
     return success(await view(row));
   }
 
@@ -731,6 +769,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       revision: lifecycle.followup_revision ?? task.revision, state: 'running', started_at: timestamp(now), lease: crypto.randomUUID(),
       lease_until: Math.min(now + leaseMs, deadline), deadline, spec_version: lifecycle.spec_version ?? 1,
       ...(body.live_addenda === true ? { live_addenda: true } : {}),
+      ...(body.recovery_commitment ? {recovery_commitment:body.recovery_commitment} : {}),
       ...(lifecycle.changed_assumption ? { changed_assumption:lifecycle.changed_assumption } : {}),
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
@@ -768,7 +807,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const change = body.op === 'command'
     ? commandChange(task, lifecycle, { action: body.action, now, rows, access, nextVersion: currentRow.version + 1,
       priority: currentRow.priority, operationId: body.operation_id })
-    : workerChange(lifecycle, body, now);
+    : body.op === 'recover_worker_candidate' ? await recoverWorkerCandidate(lifecycle,body,now) : workerChange(lifecycle, body, now);
   if (change.status) return change;
   const nextTask = change.task ?? task;
   if (change.specification && !validate({ ...nextTask, ...change.specification.after })) {
@@ -800,10 +839,11 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     ...(action?.type === 'continue_candidate' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision } : {}),
     ...(action?.type === 'recover_candidate' ? { revision:action.revision, reason:action.reason.trim(),
       previous_failure:change.previousFailure } : {}),
+    ...(body.op === 'recover_worker_candidate' ? { revision:latest.candidate_revision, previous_failure:change.previousFailure } : {}),
     ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence } : {}),
   };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
-    priority: change.priority, kind: action?.type ?? body.report.type, receipt,
+    priority: change.priority, kind: action?.type ?? body.report?.type ?? body.op, receipt,
     attemptId:body.attempt_id ?? (['accept','reject','reopen','recover_candidate','continue_candidate'].includes(action?.type)?latest?.id:undefined),
     fenceGraph: body.op !== 'report',
   });
@@ -811,6 +851,6 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   if (addendumReports.has(body.report?.type)) return success({
     addenda: body.report.type === 'addenda_take' ? change.addenda : [],
   });
-  if (body.op === 'report') return success(reportView(updated, details(updated).event));
+  if (['report','recover_worker_candidate'].includes(body.op)) return success(reportView(updated, details(updated).event));
   return success(await view(updated));
 }

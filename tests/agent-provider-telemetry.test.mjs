@@ -4,7 +4,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,8 +15,8 @@ import { reconstructAttempts } from '../scripts/agent/record-journal.mjs';
 import { sanitizeExport } from '../scripts/agent/telemetry-export.mjs';
 import { appServerTurnProfile, observeCodexStream } from '../scripts/agent/provider-events.mjs';
 import { openObservatoryConnector } from '../scripts/agent/observatory-connector.mjs';
-import { checkoutIdentity } from '../scripts/agent/observatory-task-worker.mjs';
-import { reconcileAbandonedClaim } from '../scripts/agent/claim-telemetry.mjs';
+import { checkoutIdentity, verifyRetainedCandidate } from '../scripts/agent/observatory-task-worker.mjs';
+import { reconcileAbandonedClaim, retainActiveClaim } from '../scripts/agent/claim-telemetry.mjs';
 import { realpath } from 'node:fs/promises';
 
 test('forced worker termination preserves a recoverable claim until canonical orphan reconciliation', async t=>{
@@ -61,6 +61,53 @@ test('forced worker termination preserves a recoverable claim until canonical or
   attempt.candidate_revision=checkpoint.candidateRevision;
   await reconcileAbandonedClaim(recovery);
   await assert.rejects(readFile(markerPath),{code:'ENOENT'});
+});
+
+test('worker recovery rereads the exact clean Git checkpoint and preserves dirty source', async t=>{
+  const directory=await realpath(await mkdtemp(join(tmpdir(),'aads-candidate-recovery-')));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const workspace=join(directory,'checkout'), journal=join(directory,'worker');
+  await mkdir(workspace);
+  const git=(...args)=>execFileSync('git',['-C',workspace,...args],{encoding:'utf8',windowsHide:true}).trim();
+  const branch='codex/aads-task-recovery-fixture';
+  git('init','-b',branch);
+  git('config','user.name','Fixture');
+  git('config','user.email','worker@example.test');
+  git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  git('-c','commit.gpgsign=false','commit','--allow-empty','-m','Pinned source');
+  const revision=git('rev-parse','HEAD');
+  const file=join(workspace,'result.txt');
+  await writeFile(file,'Verified result\n');
+  git('add','--','result.txt');
+  git('-c','commit.gpgsign=false','commit','-m','Verified candidate');
+  const candidateRevision=git('rev-parse','HEAD');
+  const task={id:'task_00000000-0000-4000-8000-000000000001',repository:'Kgray44/Aetherwake'};
+  const attempt={id:'attempt_00000000-0000-4000-8000-000000000002',revision,branch,
+    session_id:'00000000-0000-4000-8000-000000000003',state:'orphaned',finished_at:'2026-11-20T23:51:42.040Z',
+    recovery_until:Date.now()+60_000};
+  const hold=await retainActiveClaim(journal,{task,attempt,recoveryKey:'b'.repeat(64)});
+  await hold.update({workspace,branch,sessionId:attempt.session_id,candidateRevision,turnId:'turn-fixture',
+    terminalOperationId:'00000000-0000-4000-8000-000000000005',
+    recoveryOperationId:'00000000-0000-4000-8000-000000000004',settled:true});
+  let reports=0;
+  const recovery={directory:journal,taskId:task.id,readTask:async()=>({task,lifecycle:{stored_state:'failed'},attempts:[attempt]}),
+    recoverCandidate:async marker=>{
+      if (!await verifyRetainedCandidate(workspace,marker)) return false;
+      reports++;
+      assert.equal(marker.candidateRevision,candidateRevision);
+      return true;
+    }};
+  const dirty=join(workspace,'draft.txt');
+  await writeFile(dirty,'Legitimate edits\n');
+  await reconcileAbandonedClaim(recovery);
+  assert.equal(reports,0);
+  assert.equal(await readFile(dirty,'utf8'),'Legitimate edits\n');
+  await unlink(dirty);
+  await reconcileAbandonedClaim(recovery);
+  await reconcileAbandonedClaim(recovery);
+  assert.equal(reports,1);
+  assert.equal(git('rev-parse','HEAD'),candidateRevision);
+  assert.equal(await readFile(file,'utf8'),'Verified result\n');
 });
 
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));

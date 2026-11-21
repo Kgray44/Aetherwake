@@ -189,6 +189,8 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         {supervision.progress&&<div><dt>Last recorded execution progress</dt>
           <dd>{supervision.progress.label} · <time dateTime={supervision.progress.at}>{displayTime(supervision.progress.at)}</time></dd></div>}
         {supervision.recovery&&<div><dt>Recovery</dt><dd>{supervision.recovery}</dd></div>}
+        {supervision.recoveryUntil!==null&&<div><dt>Saved candidate recovery deadline</dt>
+          <dd>{displayTime(supervision.recoveryUntil)}</dd></div>}
         <div><dt>Base revision</dt><dd><code>{attempt.revision}</code></dd></div>
         {attempt.candidate_revision&&<div><dt>Candidate revision</dt><dd><code>{attempt.candidate_revision}</code></dd></div>}
         {attempt.checkpoint_revision&&<div><dt>Checkpoint revision</dt><dd><code>{attempt.checkpoint_revision}</code></dd></div>}

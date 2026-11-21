@@ -22,7 +22,7 @@ export const mcpOwnerCommands = new Set(ownerCommands);
 
 export const taskEngineToolSchema = object({
   request:object({
-    op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse']},
+    op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse','recover_worker_candidate']},
     worker_id:{type:'string',description:'Worker UUID for authenticated liveness observations.'},
     worker_state:{type:'string',enum:['available','busy','claim_rejected','task_connection_unavailable','storage_guard_timeout','storage_reserve_denied','storage_guard_unavailable']},
     operation_id:{...uuid,description:'Required for register, command, claim and report. Generate a UUID v4 once per write and reuse it only to replay the same request.'},
@@ -51,6 +51,10 @@ export const taskEngineToolSchema = object({
     conversation_continuation:{type:'boolean',description:'Worker supports clean-checkout continuation of stored Codex conversations.'},
     separate_execution_notes:{type:'boolean',description:'Worker receives owner follow-up notes separately from the canonical objective.'},
     live_addenda:{type:'boolean',description:'Worker supports a fenced addendum checkpoint on the persisted Codex conversation.'},
+    recovery_commitment:{type:'string',pattern:'^[a-f0-9]{64}$',description:'SHA-256 commitment to a worker-held candidate recovery key.'},
+    candidate_recovery:object({
+      key:{type:'string',pattern:'^[a-f0-9]{64}$'},revision,session_id:uuid,branch:string(200),
+    },['key','revision','session_id','branch']),
     attempt_id:string(160),lease:string(256),
     report:object({
       checkout_diagnostic:checkoutDiagnosticSchema,

@@ -18,6 +18,7 @@ export function mergeTaskAttempts(taskId, reported, canonical) {
 const operations = {
   claim:'Executor claimed attempt', heartbeat:'Worker heartbeat', finished:'Candidate submitted for review',
   recover_candidate:'Recovered candidate submitted for review',
+  recover_worker_candidate:'Worker reconciled a saved candidate',
   continue_candidate:'Owner authorized continuation from candidate',
   failed:'Worker reported failure', stopped:'Worker stopped', accept:'Owner accepted result', reject:'Owner rejected candidate',
   lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
@@ -43,7 +44,9 @@ function attemptSupervision(attempt, trace, receipts) {
     provider:turn?{state:turn.state,at:turn.occurred_at}:null,
     progress:progress?{label:progress.kind==='development_note'?'Development note':progressPhases[progress.phase],
       at:progress.occurred_at}:null,
-    recovery:attempt.state==='orphaned'?'Reconciliation required':attempt.candidate_origin==='recovered'?'Candidate recovered':null,
+    recovery:attempt.state==='orphaned'?'Reconciliation required':
+      ['recovered','worker_recovered'].includes(attempt.candidate_origin)?'Candidate recovered':null,
+    recoveryUntil:attempt.state==='orphaned'&&Number.isFinite(attempt.recovery_until)?attempt.recovery_until:null,
   };
 }
 

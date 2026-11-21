@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdtemp, open, readdir, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -123,6 +123,15 @@ async function workerTelemetryDirectory(root, taskId, workspace) {
   const current = join(root,'.aads-observatory',taskId);
   const legacy = join(workspace??join(root,taskId),'.git','agent-harness');
   return !await existingPrivateDirectory(current) && await existingPrivateDirectory(legacy) ? legacy : current;
+}
+
+export async function verifyRetainedCandidate(workspace, marker) {
+  if (marker.workspace!==workspace || marker.candidateRevision===marker.revision ||
+      !await existingPrivateDirectory(workspace)) return false;
+  try {
+    const result=await checkoutIdentity(workspace,marker.revision,{readGit:(cwd,...args)=>git(cwd,'--no-lazy-fetch',...args)});
+    return !result.dirty && result.branch===marker.branch && result.revision===marker.candidateRevision;
+  } catch { return false; }
 }
 
 function gitProvisioningIdentity(settings) {
@@ -419,7 +428,7 @@ export async function executeAppServer(connector, {cwd,task,attempt,onSession,on
   return {ok:result.status==='completed',stopped:signal.aborted,providerStatus:result.status};
 }
 
-export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
+export async function runClaim({ claim, send, workspace, executable, signal, admitStorage, recoveryKey,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart,
   telemetryDirectory, onDevelopmentNote,
   verificationNamespace, prepareWorkspace, managedConnection, providerStream, interval = 12_000,
@@ -543,17 +552,28 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   const guardStorage = async () => {
-    try { await admitStorage(); }
-    catch (error) {
-      const reserve = error.reserve;
-      const measurements = reserve ?
-        ' C: '+reserve.cFreeBytes+' bytes free, D: '+reserve.dFreeBytes+' bytes free; floor '+reserve.floorBytesEach+' bytes each.' : '';
-      stop(({
-        storage_guard_timeout: 'The worker storage guard timed out before execution.',
-        storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
-        storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
-      }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
-      throw error;
+    for (let retries=0;;retries++) {
+      workerSignal.throwIfAborted();
+      try {
+        await admitStorage();
+      } catch (error) {
+        if (error.code==='storage_guard_timeout' && retries<2) {
+          await sleep(250*2**retries,undefined,{signal:workerSignal});
+          continue;
+        }
+        const reserve = error.reserve;
+        const measurements = reserve ?
+          ' C: '+reserve.cFreeBytes+' bytes free, D: '+reserve.dFreeBytes+' bytes free; floor '+reserve.floorBytesEach+' bytes each.' : '';
+        stop(({
+          storage_guard_timeout: 'The worker storage guard timed out before execution.',
+          storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
+          storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
+        }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
+        throw error;
+      }
+      workerSignal.throwIfAborted();
+      if (retries) console.info(new Date().toISOString(),attempt.id,'Storage preflight recovered after',retries,'retry attempt(s).');
+      return;
     }
   };
   try {
@@ -578,7 +598,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     })();
     if (telemetryDirectory && !onTelemetryStart && !onUsage && !onTelemetryEnd) {
       await guardStorage();
-      retainedClaim=await retainActiveClaim(telemetryDirectory,{task,attempt});
+      retainedClaim=await retainActiveClaim(telemetryDirectory,{task,attempt,recoveryKey});
       ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart, onDevelopmentNote } =
         createClaimTelemetryHooks(telemetryDirectory, {managedConnection}, telemetryDirectory));
       telemetryStarted = liveStages = true;
@@ -691,7 +711,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   const terminal = async (type, fields) => {
     const operationId=randomUUID();
     if (type==='finished') {
-      await retainedClaim?.update({candidateRevision:fields.revision,terminalOperationId:operationId});
+      await retainedClaim?.update({candidateRevision:fields.revision,terminalOperationId:operationId,
+        ...(recoveryKey ? {recoveryOperationId:randomUUID()} : {})});
     }
     const submit = () => report(type,fields,operationId);
     if (type === 'finished') await submit();
@@ -897,7 +918,15 @@ async function main(configPath) {
       const telemetryDirectory=await workerTelemetryDirectory(root,taskId,workspaces.get(taskId));
       try {
         await reconcileAbandonedClaim({directory:telemetryDirectory,taskId,
-          readTask:id=>recovery.call({request:{op:'get',task_id:id},...(verification?{verification}:{})})});
+          readTask:id=>recovery.call({request:{op:'get',task_id:id},...(verification?{verification}:{})}),
+          recoverCandidate:async marker=>{
+            if (!await verifyRetainedCandidate(workspaces.get(taskId)??join(root,taskId),marker)) return false;
+            const request={op:'recover_worker_candidate',task_id:taskId,attempt_id:marker.attemptId,
+              operation_id:marker.recoveryOperationId,candidate_recovery:{key:marker.recoveryKey,
+                revision:marker.candidateRevision,session_id:marker.sessionId,branch:marker.branch}};
+            const result=await recovery.call({request,worker_key:credential,...(verification?{verification}:{})},tool);
+            return result.attempts?.some(attempt=>attempt.id===marker.attemptId && attempt.candidate_revision===marker.candidateRevision);
+          }});
         if (await recoverWorkerTelemetry({taskId,telemetryDirectory,verification,connector:managedConnection})) break;
       } catch {
         console.error('A saved Task telemetry delivery is still pending.');
@@ -912,7 +941,9 @@ async function main(configPath) {
           await admitStorage();
           // Do not spend a new claim's lease on local App Server startup.
           await control.ready(signal);
+          const recoveryKey=appServer?randomBytes(32).toString('hex'):undefined;
           const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:appServer,
+            ...(recoveryKey?{recovery_commitment:createHash('sha256').update(recoveryKey).digest('hex')}:{}),
             live_addenda:appServer, separate_execution_notes:true, ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
             if (error.status && error.status < 500) throw error;
@@ -922,7 +953,7 @@ async function main(configPath) {
             const workspace = workspaces.get(result.claim.task.id);
             const taskId = result.claim.task.id;
             const telemetryDirectory = await workerTelemetryDirectory(root,taskId,workspace);
-            const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal,
+            const job = runClaim({ claim:result.claim, send, workspace, executable:config.codex_bin, signal, recoveryKey,
               verificationNamespace:verification ?? null,managedConnection,telemetryDirectory,
               ...(config.executor_transport==='app_server' ? {
                   execute:async options=>{
