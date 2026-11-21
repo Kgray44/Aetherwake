@@ -23,6 +23,11 @@ The current connected application lives under `prototypes/visual-experience/cine
 
 Browse [architecture](architecture/), [design](design/), [specifications](specifications/), [decisions](decisions/), [research](research/) and [vision](vision/) by purpose. These do not supersede the governing registry.
 
+## Virtual environment intelligence (proposed)
+
+- [AVEI architecture and capability contracts](architecture/AVEI-VIRTUAL-ENVIRONMENT-INTELLIGENCE.md): proposed multi-provider VM provisioning, scoped computer use, lifecycle/recovery, security, licensing, and ARIE/AEP integration; design only, not implemented or qualified.
+- [AVEI documentation audit and ownership](architecture/AVEI-DOCUMENTATION-AUDIT-AND-OWNERSHIP.md): existing charter authority, gap analysis, cross-document conflict checks and PR integration boundaries. The visual-system documentation is owned by a parallel workstream.
+
 ## Acceptance and evidence
 
 - [FI acceptance registry](engineering/FI-ACCEPTANCE-REGISTRY.json): scenario/evidence references and explicit adjudication status. Registration is not a pass.
