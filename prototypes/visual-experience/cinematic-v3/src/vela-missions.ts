@@ -150,6 +150,8 @@ export function missionTaskControls(
 ) {
   const active =
     mission.disposition !== "cancelled" && mission.outcome !== "verified";
+  const restartBlocked = !!mission.restartReviewRequired &&
+    ["artifact.illustration", "chatgpt.specialist", "api.specialist", "codex.project-check"].includes(task.executor);
   const attempt = task.attempts.at(-1), receipt = attempt?.backendInspection;
   // This offers host readback only; the renderer cannot establish receipt validity or quiescence.
   const reconcile = active && task.executor === "inspect.backend-source" && !!attempt?.id &&
@@ -159,11 +161,11 @@ export function missionTaskControls(
   return {
     reconcile,
     retry:
-      reconcile || (active &&
+      !restartBlocked && (reconcile || (active &&
       task.executor !== "chatgpt.specialist" &&
       task.executor !== "api.specialist" &&
       (task.state === "failed" || task.state === "blocked") &&
-      task.attempts.length < task.maxAttempts),
+      task.attempts.length < task.maxAttempts)),
     priority: active && task.state === "queued",
     cancel:
       active &&
@@ -1343,17 +1345,17 @@ export function createVelaMissionView(
     if (!terminal) {
       const controls = actions(),
         paused = current.disposition === "paused";
-      controls.append(
-        control(
+      if (current.restartReviewRequired) section.append(el("p", "vela-core-meta",
+        "This restored mission contains provider, artifact, or native check work. Review and start a new mission to continue; this journal remains available."));
+      else controls.append(control(
           paused ? "Resume mission" : "Pause mission",
           "pause-resume",
           current,
           () => ({ type: paused ? "resume" : "pause" }),
-        ),
-        control("Cancel mission", "cancel-mission", current, () => ({
+        ));
+      controls.append(control("Cancel mission", "cancel-mission", current, () => ({
           type: "cancel",
-        })),
-      );
+        })));
       const cap = select(
         "Parallel tasks",
         "concurrency",
