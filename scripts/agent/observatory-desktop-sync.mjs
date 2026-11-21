@@ -87,10 +87,21 @@ async function main() {
       return;
     }
     do {
-      const result = await syncDesktopHistory(connection,{
-        taskId:values['task-id'],threadId:values['thread-id'],verification:values.verification,
-      });
-      console.log(JSON.stringify(result));
+      const args = {taskId:values['task-id'],threadId:values['thread-id'],verification:values.verification};
+      try {
+        let result;
+        try { result = await syncDesktopHistory(connection,args); }
+        catch (error) {
+          if (error.status!==409) throw error;
+          // A managed worker can publish between baseline read and delivery.
+          // Re-read the canonical attempts and receipt before retrying once.
+          result = await syncDesktopHistory(connection,args);
+        }
+        console.log(JSON.stringify(result));
+      } catch (error) {
+        if (!values.watch || !(error.status>=500 || error.status===409)) throw error;
+        console.error(JSON.stringify({status:'sync_deferred',httpStatus:error.status}));
+      }
       if (values.watch) await sleep(30000,undefined,{signal:controller.signal});
     } while (values.watch && !controller.signal.aborted);
   } catch (error) {
