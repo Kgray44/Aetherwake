@@ -572,15 +572,21 @@ test('an owner retry resumes the exact dirty checkout after the recorded process
   const report={op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
     operation_id:crypto.randomUUID(),lease:claim.lease,report:{type:'heartbeat',session_id,branch}};
   assert.equal((await call(report,'worker')).status,200);
-  const previous=[0,1].map(()=>spawn(process.execPath,['-e',''],{windowsHide:true}));
-  await Promise.all(previous.map(child=>once(child,'exit')));
+  const previousWorker=spawn(process.execPath,['-e',''],{windowsHide:true});
+  const previousProvider=spawn(process.execPath,['-e','setInterval(() => {}, 1000)'],{windowsHide:true});
+  const providerExited=once(previousProvider,'exit');
+  t.after(async()=>{
+    previousProvider.kill();
+    await providerExited;
+  });
+  await once(previousWorker,'exit');
   const lock=join(workspace,'.git','aads-task-worker.lock');
   await mkdir(lock);
   await writeFile(join(lock,createHash('sha256').update(claim.attempt.id).digest('hex')),'');
   await writeFile(join(workspace,'retained.txt'),'Saved before the interruption.');
   await writeFile(join(telemetryDirectory,'active-'+claim.attempt.id+'.json'),JSON.stringify({
     host:hostname(),taskId:task.task.id,attemptId:claim.attempt.id,revision,workspace,branch,
-    sessionId:session_id,turnId:crypto.randomUUID(),recoveryKey,pid:previous[0].pid,providerPid:previous[1].pid,
+    sessionId:session_id,turnId:crypto.randomUUID(),recoveryKey,pid:previousWorker.pid,providerPid:previousProvider.pid,
   }));
   advance(61_000);
   const orphan=await get(task);
@@ -596,6 +602,21 @@ test('an owner retry resumes the exact dirty checkout after the recorded process
   assert.deepEqual(resumed.interrupted_checkout,{attempt_id:claim.attempt.id,recovery_commitment,branch});
   assert.equal((await get(task)).attempts.at(-1).recovery_commitment,undefined);
   let executions=0;
+  const denied=[];
+  // Exercise the local preflight with an isolated report transport. The
+  // canonical lease below remains usable once this fixture's provider exits.
+  const trial={...resumed,attempt:{...resumed.attempt,id:'attempt_'+crypto.randomUUID()}};
+  await runClaim({claim:trial,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
+    send:async ({report})=>{
+      denied.push(report);
+      return {lifecycle:{state:report.type==='failed'?'failed':'running'}};
+    },
+    execute:async ()=>{executions++;return {ok:false};}});
+  assert.equal(executions,0);
+  assert.equal(denied.at(-1).failure_kind,'checkout');
+  assert.ok(existsSync(join(lock,createHash('sha256').update(claim.attempt.id).digest('hex'))));
+  previousProvider.kill();
+  await providerExited;
   await runClaim({claim:resumed,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
     send:async request=>(await call(request,'worker')).body,
     execute:async ({onSession})=>{
