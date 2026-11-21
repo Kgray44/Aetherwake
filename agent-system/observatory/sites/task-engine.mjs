@@ -1,4 +1,5 @@
 import { proposedTask, validateNewTask } from '../intake.mjs';
+import { taskExecutionCapacity } from '../task-execution-capacity.mjs';
 import { operationId, priorities, proposalControl } from './proposal-controls.mjs';
 import { sha256 } from './task-telemetry.mjs';
 
@@ -7,7 +8,6 @@ export const isTaskWorkerKey = value => typeof value==='string' && value.length>
 const idPattern = /^task_([a-f0-9-]+)$/;
 const taskId = value => typeof value === 'string' && operationId.test(value.match(idPattern)?.[1] ?? '');
 const scopeLimit = 500;
-const claimLimit = 2;
 const leaseMs = 60_000;
 const maxAttempts = 3;
 const defaultAttemptMinutes = 30;
@@ -370,6 +370,7 @@ const workerOperations = new Set(['claim', 'report', 'worker_pulse']);
 const workerStates = new Set(['available', 'busy', 'claim_rejected', 'task_connection_unavailable',
   'storage_guard_timeout', 'storage_reserve_denied', 'storage_guard_unavailable']);
 const workerFreshnessMs = 60_000;
+const runningAttempts = rows => [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running').length;
 
 export async function taskOperation({ db, owner, namespace, body, access, validate, revision, now = Date.now() }) {
   if (!body || !['list', 'get', 'register', 'command', ...workerOperations].includes(body.op)) return failure(400, 'Invalid Task operation');
@@ -413,7 +414,8 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     return success({ tasks: tasks.filter(item => body.state === undefined
       ? body.include_archived === true || item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state),
     ...(dispatch ? { worker_dispatch: { last_seen_at: dispatch.length ? timestamp(dispatch[0].seen_at) : null,
-      states: dispatch.filter(worker => now - worker.seen_at < workerFreshnessMs).map(worker => worker.state) } } : {}) });
+      states: dispatch.filter(worker => now - worker.seen_at < workerFreshnessMs).map(worker => worker.state),
+      active_slots:runningAttempts(rows), total_slots:taskExecutionCapacity } } : {}) });
   }
   if (body.op === 'get') return currentRow ? success(await view(currentRow)) : failure(404, 'Task not found');
 
@@ -492,8 +494,6 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   }
 
   if (body.op === 'claim') {
-    const running = [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running');
-
     const admitted = [...rows.values()].filter(row => row.engine && details(row).executor === 'codex' &&
       claimStates.has(details(row).state));
     for (const row of admitted) {
@@ -505,7 +505,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
         if (!await save(row, task, lifecycle, { kind: 'dependency_cancelled', id: crypto.randomUUID(), eventDigest: 'scheduler' })) return conflict();
       }
     }
-    if (running.length >= claimLimit) return success({ claim: null, dispatch_state:'busy' });
+    if (runningAttempts(rows) >= taskExecutionCapacity) return success({ claim: null, dispatch_state:'busy' });
     const candidate = admitted.filter(row => !body.task_ids || body.task_ids.includes(row.task_id)).map(row => rows.get(row.task_id))
       .filter(row => {
         const lifecycle=details(row);
