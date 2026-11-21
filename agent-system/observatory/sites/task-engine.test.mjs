@@ -768,6 +768,50 @@ test('candidate recovery respects owner cancellation and a replacement attempt',
   }
 });
 
+test('owner can request another round from the exact pending candidate and then accept without URLs', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('simple owner review');
+  await command(task,'admit',{executor:'codex'});
+  const claim=async()=> (await call({op:'claim',operation_id:crypto.randomUUID(),
+    task_ids:[task.task.id],conversation_continuation:true},'worker')).body.claim;
+  const session=crypto.randomUUID();
+  const finish=(item,revision)=>call({op:'report',task_id:task.task.id,operation_id:crypto.randomUUID(),
+    attempt_id:item.attempt.id,lease:item.lease,report:{type:'finished',result:'candidate',revision,session_id:session,branch:'codex/aads-task-review'}},'worker');
+  const firstRevision='b'.repeat(40);
+  const first=(await finish(await claim(),firstRevision)).body;
+  assert.equal((await command(first,'accept',{revision:rev})).status,409);
+  assert.equal((await command(first,'accept',{revision:firstRevision},'agent')).status,403);
+  assert.equal((await command(first,'reopen',{revision:firstRevision,feedback:'  '})).status,400);
+  const feedback='Check the updated API output and add a link.';
+  const rerun={revision:firstRevision,feedback};
+  assert.equal((await command(first,'reopen',{...rerun,revision:rev})).status,409);
+  assert.equal((await command(first,'reopen',rerun,'agent')).status,403);
+  const queued=(await command(first,'reopen',rerun)).body;
+  assert.equal(queued.lifecycle.stored_state,'queued');
+  assert.equal(queued.lifecycle.cycle_attempts,1);
+  assert.equal(queued.task.owner_acceptance,'not_reviewed');
+  assert.equal(queued.events.at(-1).feedback,feedback);
+  assert.equal(queued.events.at(-1).previous_state,'verifying');
+  const next=await claim();
+  assert.equal(next.attempt.resume_session_id,session);
+  assert.equal(next.attempt.revision,firstRevision);
+  assert.equal(next.attempt.branch,'codex/aads-task-review');
+  assert.equal(next.attempt.attempt_number,2);
+  assert.ok(next.task.objective.endsWith(feedback));
+
+  const revision='c'.repeat(40);
+  const second=(await finish(next,revision)).body;
+  const receipt={revision,notes:'   Reviewed the result. https://example.test/test-report   '};
+  const accepted=(await command(second,'accept',receipt)).body;
+  assert.equal(accepted.lifecycle.stored_state,'completed');
+  assert.equal(accepted.task.owner_acceptance,'accepted');
+  assert.equal(accepted.events.at(-1).actor,'owner');
+  assert.equal(accepted.events.at(-1).notes,receipt.notes.trim());
+  assert.deepEqual((await get(task)).lifecycle.evidence,[
+    {criterion_id:'criterion-1',revision,attested:true},
+  ]);
+});
+
 test('versioned Task scope reaches the Codex worker with its input references and outcomes', async t => {
   const {call,register,command}=setup(t);
   const task=await register('task scope');

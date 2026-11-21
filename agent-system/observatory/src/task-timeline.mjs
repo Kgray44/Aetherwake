@@ -131,13 +131,14 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
     if (receipt.target_id && receipt.target_id !== task.id) continue;
     const operation = receipt.kind ?? receipt.type ?? 'operation';
     if (operation === 'heartbeat') continue;
-    add({id:'audit:'+receipt.operation_id,at:receipt.at,type:'Audit',title:receiptTitles[operation]??humanize(operation),
+    add({id:'audit:'+receipt.operation_id,at:receipt.at,type:'Audit',title:operation==='reopen'&&receipt.previous_state==='verifying'
+        ?'Another round requested':receiptTitles[operation]??humanize(operation),
       milestone:operation==='accept', attemptId:attemptById.has(receipt.attempt_id)?receipt.attempt_id:null,
       description:humanize(receipt.state),activityType:operation,outcome:receipt.state,
       executor:attemptById.get(receipt.attempt_id)?.executor??attemptById.get(receipt.attempt_id)?.provider,
       href:receipt.reference?.uri, reviewedEvidence:receipt.evidence??[], details:[
         ...detail('Recorded by',receipt.actor),...detail('Task version',receipt.version),...detail('Reason',receipt.reason),
-        ...detail('Owner feedback',receipt.feedback),...detail('Scheduled start',receipt.start_at),
+        ...detail('Owner feedback',receipt.feedback),...detail('Owner review notes',receipt.notes),...detail('Scheduled start',receipt.start_at),
         ...detail('Time limit (minutes)',receipt.max_attempt_minutes),
         ...detail('Cancel with dependency',receipt.cancel_with_dependency===undefined?null:receipt.cancel_with_dependency?'Enabled':'Disabled'),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
         ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),...detail('Original failure',receipt.previous_failure),
