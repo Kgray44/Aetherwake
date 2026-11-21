@@ -714,7 +714,11 @@ test('hung control report returns at lease expiry without submitting a stale ter
   const task=await register('Hung control transport');
   assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
   const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
-  claim.attempt.lease_until=Date.now()+80;
+  // Simulate a monotonic timer firing while the wall clock still reads
+  // before expiry, as it can around clock adjustment and timer rounding.
+  const wallClock=Date.now();
+  t.mock.method(Date,'now',()=>wallClock);
+  claim.attempt.lease_until=wallClock+80;
   const reports=[];
   const guard=new AbortController();
   t.after(()=>guard.abort());

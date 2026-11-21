@@ -304,17 +304,21 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let desired;
   let stopReason;
   let terminalConfirmed = false;
+  let reportDeadlineExpired = false;
   let leaseUntil = attempt.lease_until ?? attempt.deadline;
   const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
   const leaseExpired = () => Object.assign(Error('The Task lease expired before the worker could confirm its report.'), {code:'report_lease_expired'});
   // A control reconnect can outlast the lease even though execution has time left.
   const sendBeforeLeaseExpiry = async request => {
     const remaining = timeUntilLeaseExpiry();
-    if (remaining <= 0) throw leaseExpired();
+    if (reportDeadlineExpired || remaining <= 0) throw leaseExpired();
     const reportController = new AbortController();
     let timer;
     const expired = new Promise((_, reject) => {
       timer = setTimeout(() => {
+        // A lost renewal is ambiguous. Keep the lease fenced even if the
+        // wall clock still reads before expiry when another report runs.
+        reportDeadlineExpired = true;
         const error = leaseExpired();
         reportController.abort(error);
         reject(error);
