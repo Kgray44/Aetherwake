@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { taskExecutionCapacity } from '../../agent-system/observatory/task-execution-capacity.mjs';
 import { createClaimTelemetryHooks, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
@@ -657,7 +658,7 @@ async function main(configPath) {
   }
   try {
     while (!signal.aborted) {
-      if (active.size < 2) {
+      if (active.size < taskExecutionCapacity) {
         try {
           await admitStorage();
           const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:true, ...(scope ? { task_ids:scope } : {}) };
@@ -685,7 +686,7 @@ async function main(configPath) {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');
               }).finally(() => active.delete(job));
             active.add(job);
-            pulse(active.size === 2 ? 'busy' : 'available');
+            pulse(active.size === taskExecutionCapacity ? 'busy' : 'available');
             continue;
           }
           pulse(result.dispatch_state === 'busy' ? 'busy' : 'available');

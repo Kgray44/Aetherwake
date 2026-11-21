@@ -149,6 +149,33 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
 });
 
+test('four concurrent claims fence a fifth until an active attempt releases its slot', async t => {
+  const { call, register, command } = setup(t);
+  for (let i = 0; i < 5; i++) {
+    const task = await register('capacity ' + i);
+    assert.equal((await command(task, 'admit', { executor:'codex' })).status, 200);
+  }
+  const claim = () => call({ op:'claim', operation_id:crypto.randomUUID() }, 'worker');
+  const first = (await claim()).body.claim;
+  assert.ok(first);
+  assert.ok((await claim()).body.claim);
+  assert.ok((await claim()).body.claim);
+  const lastSlot = await Promise.all([claim(), claim()]);
+  assert.equal(lastSlot.filter(result => result.body.claim).length, 1);
+  assert.deepEqual((await claim()).body, { claim:null, dispatch_state:'busy' });
+  const { tasks:before, worker_dispatch:dispatch } = (await call({ op:'list' })).body;
+  assert.equal(dispatch.active_slots, 4);
+  assert.equal(dispatch.total_slots, 4);
+  const waiting = before.filter(item => item.lifecycle.state === 'ready');
+  assert.equal(waiting.length, 1);
+  assert.equal(before.filter(item => item.lifecycle.state === 'running').length, 4);
+  assert.equal((await call({
+    op:'report', operation_id:crypto.randomUUID(), task_id:first.task.id, attempt_id:first.attempt.id, lease:first.lease,
+    report:{ type:'finished', result:'candidate', revision:rev },
+  }, 'worker')).status, 200);
+  assert.equal((await claim()).body.claim.task.id, waiting[0].task.id);
+});
+
 test('owner can submit a checked recovered candidate without replaying execution or accepting it', async t=>{
   const {call,register,command,get,advance}=setup(t);
   const task=await register('recover orphan');
