@@ -1,5 +1,7 @@
 import { isAbsolute, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { hostname } from 'node:os';
+import { lstat, mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { appendEvent, traceEvent } from './journal.mjs';
 import { startObservatorySync } from './observatory-sync.mjs';
@@ -8,9 +10,55 @@ import { validateRecord, validateTraceEvent } from './validate-record.mjs';
 
 const identity = /^[A-Za-z0-9_.:-]{1,160}$/;
 const revision = /^[a-f0-9]{40}$/;
+const claimMarker = /^active-(attempt_[a-f0-9-]{36})\.json$/;
 const terminalStates = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
 const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event',
   'codex_app_server_token_usage_updated']);
+
+// A local marker survives abrupt process exit. It carries no lease, workspace
+// contents, or credentials. The existing telemetry journal carries the result.
+export async function retainActiveClaim(directory, { task, attempt }) {
+  if (!claimMarker.test('active-'+attempt.id+'.json')) throw Error('Invalid active claim identity');
+  await mkdir(directory,{recursive:true,mode:0o700});
+  if (!(await lstat(directory)).isDirectory()) throw Error('Claim telemetry directory must be local');
+  const path=join(directory,'active-'+attempt.id+'.json');
+  const file=await open(path,'wx',0o600);
+  try {
+    await file.writeFile(JSON.stringify({taskId:task.id,attemptId:attempt.id,revision:attempt.revision,
+      pid:process.pid,host:hostname()}));
+    await file.sync();
+  } finally { await file.close(); }
+  return ()=>unlink(path);
+}
+
+export async function reconcileAbandonedClaim({directory,taskId,readTask}) {
+  try { if (!(await lstat(directory)).isDirectory()) return; }
+  catch(error) { if(error.code==='ENOENT')return; throw error; }
+  const entries=await readdir(directory,{withFileTypes:true}).catch(error=>{
+    if(error.code==='ENOENT')return [];
+    throw error;
+  });
+  for (const file of entries.filter(entry=>entry.isFile()&&claimMarker.test(entry.name)).slice(0,8)) {
+    const path=join(directory,file.name);
+    const marker=JSON.parse(await readFile(path,'utf8'));
+    if (marker.host!==hostname() || marker.taskId!==taskId || marker.attemptId!==file.name.match(claimMarker)[1] ||
+        !revision.test(marker.revision) || !Number.isSafeInteger(marker.pid) || marker.pid<=0) continue;
+    try { process.kill(marker.pid,0); continue; }
+    catch (error) { if (error.code!=='ESRCH') continue; }
+    const detail=await readTask(taskId);
+    const attempt=detail.attempts?.find(item=>item.id===marker.attemptId);
+    if (detail.task?.id!==taskId || detail.task.repository!=='Kgray44/Aetherwake' || attempt?.revision!==marker.revision ||
+        !attempt.finished_at || ['running','pausing','cancelling'].includes(attempt.state)) continue;
+    if(attempt.state==='orphaned'){
+      const spanId='codex-'+attempt.id+'-worker_exit_recovery';
+      const entry=traceEvent({task:{...detail.task,revision:attempt.revision},attemptId:attempt.id,sessionId:attempt.session_id,
+        spanId,eventId:spanId,kind:'lifecycle',phase:'other',state:'interrupted',occurredAt:attempt.finished_at});
+      if(validateTraceEvent(entry).length)throw Error('Invalid abandoned claim recovery event');
+      await appendEvent(join(directory,'claimed-execution.journal'),entry);
+    }
+    await unlink(path).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  }
+}
 
 /** Observe a claimed execution without owning its lifecycle or making an executor call. */
 export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory, verificationNamespace,

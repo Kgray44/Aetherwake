@@ -34,6 +34,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
   if (state === 'paused' && attemptsThisCycle < 3) result.push('resume');
+  if (state === 'failed' && attempts.at(-1)?.state === 'orphaned') result.push('recover_candidate');
   if (state === 'failed' && attemptsThisCycle > 0 && attemptsThisCycle < 3) result.push('retry');
   if (state === 'verifying') result.push('accept', 'reject');
   if (!['completed', 'failed', 'cancelled', 'superseded', 'archived', 'cancelling'].includes(state)) result.push('cancel');
@@ -95,8 +96,8 @@ function appServerTokenRow(taskId, repository, attempt, events, progress = false
   if (progress) receipts.sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at)||
     a.event_id.localeCompare(b.event_id));
   const receipt=receipts[0];
-  const tokens = name => {
-    const samples = receipt.measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
+  const tokens = (name, sample=receipt) => {
+    const samples = sample.measurements.filter(metric => metric.name === 'provider_' + name + '_tokens' &&
       metric.source === appServerSource && methods.has(metric.method));
     const metric = samples.length === 1 ? samples[0] : null;
     return metric?.availability === 'observed' && metric.unit === 'tokens' &&
@@ -107,12 +108,26 @@ function appServerTokenRow(taskId, repository, attempt, events, progress = false
   const cached = tokens('cached_input'), reasoning = tokens('reasoning_output');
   const cachedInputTokens = cached != null && inputTokens != null && cached > inputTokens ? null : cached;
   const reasoningOutputTokens = reasoning != null && outputTokens != null && reasoning > outputTokens ? null : reasoning;
+  let pace;
+  if (progress && inputTokens != null) {
+    const windows = [...new Map(receipts.map(sample=>[sample.event_id,sample])).values()].slice(0,3);
+    const samples = windows.map(sample=>({
+      at:Date.parse(sample.occurred_at), input:tokens('input',sample),
+    }));
+    const elapsedMs = samples[0].at - samples[1]?.at;
+    const added = inputTokens - samples[1]?.input;
+    if (elapsedMs > 0 && samples[1]?.input != null && added >= 0) {
+      const sustained = samples.length===3 && samples[2].input!=null &&
+        samples[1].at>samples[2].at && added>0 && samples[1].input>samples[2].input;
+      pace = {inputPerMinute:added*60_000/elapsedMs, elapsedMs, sustained};
+    }
+  }
   return {
     taskId, attemptId:attempt.id, revision:attempt.revision, attemptNumber:attempt.attempt_number,
     provider:attempt.execution_identity?.provider ?? attempt.provider ?? attempt.executor ?? 'codex',
     model:attempt.execution_identity?.model ?? attempt.model, identitySource:attempt.execution_identity?.source, state:attempt.state,
     coverage:progress?'in-progress':'observed', source:'Codex App Server', receiptId:receipt.event_id,
-    ...(progress?{observedAt:receipt.occurred_at}:{}),
+    ...(progress?{observedAt:receipt.occurred_at,...(pace?{pace}:{})}:{}),
     observed:{ totalTokens,inputTokens,outputTokens,cachedInputTokens,reasoningOutputTokens,
       cacheWriteInputTokens:tokens('cache_write_input'),
       uncachedInputTokens:inputTokens != null && cachedInputTokens != null ? inputTokens - cachedInputTokens : null, turns:progress?null:1 },

@@ -217,9 +217,14 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
         ...(row.receiptId?[['Source event',row.receiptId],['Observed at',row.observedAt]]:[]),
       ]),
       ...blocks(tokens,item=>'Attempt '+(item.attemptNumber??item.attemptId)),
-      ...blocks(usage.progressRows,item=>'In-progress Codex usage · attempt '+item.attemptNumber,item=>[
+      ...blocks(usage.progressRows,item=>(item.state==='running'?'In-progress':'Partial')+' Codex usage · attempt '+item.attemptNumber,item=>[
         ['Coverage','Observed during the turn. Task totals use final usage receipts.'],
         ['Observed at',item.observedAt],['Source event',item.receiptId],
+        ...(item.pace?[
+          ['Sampled input tokens per minute',display(Math.round(item.pace.inputPerMinute))],
+          ['Sample interval',display(item.pace.elapsedMs/1000)+' s'],
+          ...(item.pace.sustained?[['Diagnostic','Input increased across the last two sampled intervals. Review repeated tool work and context.']]:[]),
+        ]:[]),
         ...usageFields.map(([key,label])=>[label,display(item.observed[key])]),
       ]),
       ...blocks(desktop,item=>words(item.name)),

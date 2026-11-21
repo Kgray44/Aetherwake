@@ -114,6 +114,33 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
 });
 
+test('owner can submit a checked recovered candidate without replaying execution or accepting it', async t=>{
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('recover orphan');
+  const dependent=await register('downstream',[task.task.id]);
+  await command(task,'admit',{executor:'codex'});
+  await command(dependent,'admit',{executor:'codex'});
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  advance(65_000);
+  const orphan=await get(task);
+  assert.equal(orphan.attempts[0].state,'orphaned');
+  const decision={attempt_id:claim.attempt.id,revision:'b'.repeat(40),reason:'Verified the preserved checkout against the pinned base.'};
+  assert.equal((await command(orphan,'recover_candidate',decision,'agent')).status,403);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,attempt_id:'different'})).status,409);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,revision:rev})).status,409);
+  const recovered=(await command(orphan,'recover_candidate',decision)).body;
+  assert.equal(recovered.lifecycle.stored_state,'verifying');
+  assert.equal(recovered.lifecycle.recovered_candidate,true);
+  assert.equal(recovered.task.owner_acceptance,'not_reviewed');
+  assert.equal(recovered.attempts[0].candidate_origin,'recovered');
+  assert.equal(recovered.attempts[0].candidate_revision,decision.revision);
+  assert.equal(recovered.events.at(-1).previous_failure,orphan.attempts[0].failure);
+  assert.equal(recovered.events.at(-1).attempt_id,claim.attempt.id);
+  assert.ok(recovered.events.some(event=>event.kind==='lease_expired'));
+  assert.equal((await get(dependent)).lifecycle.state,'blocked');
+  assert.equal((await command(recovered,'recover_candidate',decision)).status,409);
+});
+
 test('archive keeps accepted prerequisites and feedback reopens at the accepted revision', async t => {
   const {call,register,command,get}=setup(t);
   const task=await register('follow-up');
@@ -284,14 +311,19 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'aads-automatic-checkout-')));
   t.after(() => rm(parent, { force:true, recursive:true }));
   const source = join(parent, 'source');
-  const root = join(parent, 'worker');
-  await mkdir(source);
+  const root = process.platform==='win32' ? join(parent,'worker-'+'a'.repeat(Math.max(12,170-parent.length))) : join(parent,'worker');
+  const nested = 'evidence-'+'n'.repeat(70);
+  const filename = 'record-'+'v'.repeat(65)+'.txt';
+  await mkdir(join(source,nested),{recursive:true});
+  await writeFile(join(source,nested,filename),'source evidence');
   await mkdir(root);
   const exec = promisify(execFile);
   const git = async (cwd, ...args) => (await exec('git', args, { cwd, windowsHide:true })).stdout.trim();
   await git(source, 'init');
+  if (process.platform==='win32') await git(source,'config','--local','core.longpaths','true');
+  await git(source, 'add', '--', nested+'/'+filename);
   await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
-    'commit', '--allow-empty', '-m', 'pinned');
+    'commit', '-m', 'pinned');
   const baseline = await git(source, 'rev-parse', 'HEAD');
   await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
     'commit', '--allow-empty', '-m', 'new upstream head');
@@ -314,12 +346,17 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
     execute:async ({ cwd }) => {
       assert.equal(cwd, workspace);
       assert.equal(await git(cwd, 'rev-parse', 'HEAD'), baseline);
+      if(process.platform==='win32') {
+        assert.ok(join(cwd,nested,filename).length>260);
+        assert.equal(await git(cwd,'config','--local','core.longpaths'),'true');
+      }
+      assert.equal(readFileSync(join(cwd,nested,filename),'utf8'),'source evidence');
       await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", "worker output")'], { cwd });
       return { ok:true };
     },
   });
   const candidate = await get(task);
-  assert.equal(candidate.lifecycle.state, 'verifying');
+  assert.equal(candidate.lifecycle.state, 'verifying', candidate.attempts.at(-1)?.failure);
   const revision = candidate.attempts[0].candidate_revision;
   assert.notEqual(revision, baseline);
   assert.equal(await git(workspace, 'show', revision + ':artifact.txt'), 'worker output');
