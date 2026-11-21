@@ -734,10 +734,11 @@ test('retry queue guidance follows canonical state while the previous failure re
   const lifecycle = {state:'ready',stored_state:'queued',executor:'codex'};
   const canonical = {task,lifecycle,attempts:[attempt]};
   assert.equal(taskExecutionStatus({taskId:task.id,state:lifecycle.state,attempt}),null);
-  assert.equal(taskNextAction(canonical).title,'Waiting for worker claim');
+  assert.equal(taskNextAction(canonical).title,'Eligible · awaiting worker claim');
+  assert.equal(taskNextAction(canonical,'configured',{states:['busy']}).description,'Codex worker at capacity.');
   assert.equal(taskNextAction(canonical,'not_configured').title,'Configure Codex worker access');
   const report = JSON.stringify(taskReportDefinition({task,canonical,attempts:[attempt]}).content);
-  assert.match(report,/Waiting for worker claim/);
+  assert.match(report,/Eligible · awaiting worker claim/);
   assert.match(report,/Pinned checkout failed/);
 
   const blocked = {...canonical,lifecycle:{...lifecycle,state:'blocked',blockers:[{type:'task',id:'task_parent'}]}};
