@@ -9,6 +9,7 @@ const receiptTitles = {
   resume:'Task resumed', cancel:'Cancellation requested', archive:'Task archived', reopen:'Task reopened with feedback',
   supersede:'Task superseded', associate:'Delivery reference linked', dependency_cancelled:'Cancelled by dependency',
   failed:'Executor reported failure', finished:'Candidate submitted for review', stopped:'Executor stopped',
+  recover_candidate:'Recovered candidate submitted for review',
   lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
 };
 
@@ -54,6 +55,11 @@ export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) 
     };
   }
   if (!activeExecution.has(state)) {
+    if (state==='verifying'&&attempt.candidate_origin==='recovered') {
+      const recovered=audits.findLast(receipt=>receipt.kind==='recover_candidate'&&receipt.attempt_id===attempt.id);
+      return {title:'Recovered candidate ready for review',tone:'neutral',at:recovered?.at,
+        description:'The original executor stopped. A preserved revision was checked and submitted separately.'};
+    }
     if (!attempt.finished_at||state==='completed'||state==='archived') return null;
     return {title:attempt.session_id?'Codex stopped working':'Execution attempt ended',tone:'neutral',
       at:attempt.finished_at,description:state==='verifying'?'Candidate awaits owner review.':null};
@@ -125,7 +131,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
         ...detail('Owner feedback',receipt.feedback),...detail('Scheduled start',receipt.start_at),
         ...detail('Time limit (minutes)',receipt.max_attempt_minutes),
         ...detail('Cancel with dependency',receipt.cancel_with_dependency===undefined?null:receipt.cancel_with_dependency?'Enabled':'Disabled'),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
-        ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),
+        ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),...detail('Original failure',receipt.previous_failure),
         ...detail('Reviewed criteria',receipt.evidence?.length),...detail('Reference type',humanize(receipt.reference?.kind)),
         ...detail('Attempt',receipt.attempt_id),...detail('Operation ID',receipt.operation_id),
       ]});

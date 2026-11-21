@@ -34,6 +34,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
   if (state === 'paused' && attemptsThisCycle < 3) result.push('resume');
+  if (state === 'failed' && attempts.at(-1)?.state === 'orphaned') result.push('recover_candidate');
   if (state === 'failed' && attemptsThisCycle > 0 && attemptsThisCycle < 3) result.push('retry');
   if (state === 'verifying') result.push('accept', 'reject');
   if (!['completed', 'failed', 'cancelled', 'superseded', 'archived', 'cancelling'].includes(state)) result.push('cancel');

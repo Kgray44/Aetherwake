@@ -114,6 +114,33 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
 });
 
+test('owner can submit a checked recovered candidate without replaying execution or accepting it', async t=>{
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('recover orphan');
+  const dependent=await register('downstream',[task.task.id]);
+  await command(task,'admit',{executor:'codex'});
+  await command(dependent,'admit',{executor:'codex'});
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  advance(65_000);
+  const orphan=await get(task);
+  assert.equal(orphan.attempts[0].state,'orphaned');
+  const decision={attempt_id:claim.attempt.id,revision:'b'.repeat(40),reason:'Verified the preserved checkout against the pinned base.'};
+  assert.equal((await command(orphan,'recover_candidate',decision,'agent')).status,403);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,attempt_id:'different'})).status,409);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,revision:rev})).status,409);
+  const recovered=(await command(orphan,'recover_candidate',decision)).body;
+  assert.equal(recovered.lifecycle.stored_state,'verifying');
+  assert.equal(recovered.lifecycle.recovered_candidate,true);
+  assert.equal(recovered.task.owner_acceptance,'not_reviewed');
+  assert.equal(recovered.attempts[0].candidate_origin,'recovered');
+  assert.equal(recovered.attempts[0].candidate_revision,decision.revision);
+  assert.equal(recovered.events.at(-1).previous_failure,orphan.attempts[0].failure);
+  assert.equal(recovered.events.at(-1).attempt_id,claim.attempt.id);
+  assert.ok(recovered.events.some(event=>event.kind==='lease_expired'));
+  assert.equal((await get(dependent)).lifecycle.state,'blocked');
+  assert.equal((await command(recovered,'recover_candidate',decision)).status,409);
+});
+
 test('archive keeps accepted prerequisites and feedback reopens at the accepted revision', async t => {
   const {call,register,command,get}=setup(t);
   const task=await register('follow-up');
