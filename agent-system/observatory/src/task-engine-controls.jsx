@@ -6,16 +6,17 @@ import { PrerequisiteChecks } from './task-workspace.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
 import { StickySectionAside } from './sticky-section-aside.jsx';
 import { useCardMotion } from './card-motion.jsx';
-import { executionActions, reviewRevision } from './task-engine-client.mjs';
+import { executionActions, reviewRevision, workerDispatchStatus } from './task-engine-client.mjs';
 
 const actionLabels = {
+  addendum:'Add owner instructions',
   recover_candidate:'Submit recovered candidate',
   configure_execution:'Edit execution settings', admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
   archive:'Archive Task', reopen:'Reopen with feedback', accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
-const actionIcons = { recover_candidate:CheckCircle2, configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
+const actionIcons = { addendum:Link2, recover_candidate:CheckCircle2, configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
   archive:Archive, reopen:RotateCcw, reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
-const actionHints = { recover_candidate:'Send the checked revision for owner review', configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
+const actionHints = { addendum:'Send instructions at an attempt checkpoint', recover_candidate:'Send the checked revision for owner review', configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
   resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
   reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
   archive:'Move the Task out of active views', reopen:'Queue a new attempt with owner feedback', supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
@@ -30,11 +31,12 @@ function localStart(value) {
   return new Date(value-date.getTimezoneOffset()*60_000).toISOString().slice(0,16);
 }
 
-export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCommand, tasks, Status }) {
+export function TaskEngineControls({ detail, workerAccess, workerDispatch, publishedIntake, onCommand, tasks, Status }) {
   const reduce = useReducedMotion();
   const interaction = useCardMotion(true);
   const [action, setAction] = useState('');
   const [actionVersion, setActionVersion] = useState(detail.version);
+  const [actionAttempt, setActionAttempt] = useState(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [busy, setBusy] = useState(false);
@@ -55,7 +57,9 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
 
   async function send(change) {
     if (pending.current) return;
-    if (action && detail.version !== actionVersion) {
+    if (action && (action === 'addendum'
+      ? (candidate?.id ?? null) !== actionAttempt || !lifecycle.can_addendum
+      : detail.version !== actionVersion)) {
       setError('The Task changed. Reopen the action to review the latest state.');
       return;
     }
@@ -81,6 +85,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
     } else {
       setAction(type);
       setActionVersion(detail.version);
+      setActionAttempt(candidate?.id ?? null);
       setError('');
       setResult('');
     }
@@ -103,6 +108,11 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         change.prerequisites=fields.getAll('verified_capability');
       }
       if (action === 'retry') change.changed_assumption = fields.get('reason');
+      if (action === 'addendum') {
+        change.text = fields.get('text');
+        change.target = fields.get('target');
+        if (change.target === 'active_attempt') change.attempt_id = actionAttempt;
+      }
       if (action === 'recover_candidate') {
         change.attempt_id = candidate.id;
         change.revision = fields.get('revision');
@@ -132,6 +142,13 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         <dl className="task-command-facts">
           <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
           {workerAccess&&<div><dt>Codex worker access</dt><dd>{workerAccess==='not_configured'?'Not configured':'Configured'}</dd></div>}
+          {lifecycle.executor && <div><dt>Worker status</dt><dd>{workerDispatchStatus(workerDispatch, workerAccess).label}
+            {workerDispatch?.last_seen_at && <><br/><time dateTime={workerDispatch.last_seen_at}>{stamp(workerDispatch.last_seen_at)}</time></>}</dd></div>}
+          {lifecycle.executor && workerDispatch?.last_error && <div><dt>Last worker error</dt>
+            <dd>{humanize(workerDispatch.last_error.state)} · <time dateTime={workerDispatch.last_error.at}>{stamp(workerDispatch.last_error.at)}</time></dd></div>}
+          <div><dt>Specification</dt><dd>v{lifecycle.spec_version ?? 1}
+            {candidate?.spec_version && <> · Last claim v{candidate.spec_version}</>}
+            {lifecycle.pending_spec && <> · Next attempt v{lifecycle.pending_spec.version}</>}</dd></div>
           <div><dt><Clock3 size={14} aria-hidden="true"/>Start time</dt><dd>{lifecycle.start_at == null ? 'Unscheduled' : stamp(lifecycle.start_at)}</dd></div>
           <div><dt>Priority</dt><dd>{detail.priority}</dd></div>
           <div><dt>Attempt time limit</dt><dd>{lifecycle.max_attempt_minutes == null ? 'Unreported' : lifecycle.max_attempt_minutes+' min'}</dd></div>
@@ -142,6 +159,20 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         {blocker.length > 0 && <section className="task-command-blockers"><h3>Blocking execution</h3><ul aria-label="Admission blockers">{blocker.map(item => <li key={item.type + ':' + item.id}>
           {tasks.find(other => other.id === item.id)?.title ?? item.id} · {humanize(item.state)}
         </li>)}</ul></section>}
+        {!!lifecycle.addenda?.length && <section aria-label="Owner addendum delivery">
+          <h3>Owner addenda</h3>
+          <ul className="task-links">{[...lifecycle.addenda].reverse().map(item => <li key={item.id}>
+            <div><Status value={item.status}/> <span>Added at v{item.version} · {stamp(item.accepted_at)}</span></div>
+            <details><summary>{item.attempt_id ? 'Attempt ' + item.attempt_id : 'Next attempt'}</summary>
+              <p>{item.text}</p>
+              {item.spec_version != null && <p>Claimed specification v{item.spec_version}</p>}
+              {item.session_id && <p>Codex thread <code>{item.session_id}</code></p>}
+              {item.delivered_at && <p>Delivered {stamp(item.delivered_at)}</p>}
+              {item.acknowledged_at && <p>Executor completed the addendum turn {stamp(item.acknowledged_at)}</p>}
+              {item.reason && <p>{item.reason}</p>}
+            </details>
+          </li>)}</ul>
+        </section>}
       </div>
       <StickySectionAside className="task-command-deck">
         <nav aria-label="Task actions" className="task-command-actions">
@@ -185,6 +216,14 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
       {action==='recover_candidate'&&<>
         <label>Recovered Git revision<input name="revision" required pattern="[a-f0-9]{40}"/></label>
         <label>How did you check the recovered candidate?<textarea name="reason" required maxLength={500}/></label>
+      </>}
+      {action==='addendum'&&<>
+        <p>Instructions are appended to the Task history. The active attempt can receive them at its supported Codex turn boundary.</p>
+        <label>Delivery target <select name="target" defaultValue={lifecycle.stored_state==='running'?'active_attempt':'next_attempt'}>
+          {lifecycle.stored_state==='running'&&<option value="active_attempt">Current attempt</option>}
+          <option value="next_attempt">Next attempt</option>
+        </select></label>
+        <label>Supplemental instructions <textarea name="text" required maxLength={2000}/></label>
       </>}
       {['retry', 'reject'].includes(action) && <label>{action === 'retry' ? 'Changed assumption' : 'Review reason'}
         <textarea name="reason" required maxLength={500}/>

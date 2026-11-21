@@ -16,7 +16,7 @@ const taskFields = object({
     kind:{type:'string',enum:requirementKinds},uri:string(1000),revision:string(128),
   },['kind','uri'])},
 },['title','objective','primary','profile_id','criteria']);
-const ownerCommands = ['admit','configure_execution','pause','resume','cancel'];
+const ownerCommands = ['edit','addendum','admit','configure_execution','pause','resume','cancel','retry'];
 export const mcpOwnerCommands = new Set(ownerCommands);
 
 export const taskEngineToolSchema = object({
@@ -30,9 +30,13 @@ export const taskEngineToolSchema = object({
     include_archived:{type:'boolean'},state:string(32,'Optional lifecycle state filter for list.'),
     fields:taskFields,
     action:object({
-      type:{type:'string',enum:['edit','associate',...ownerCommands],
+      type:{type:'string',enum:['associate',...ownerCommands],
         description:'admit dispatches a proposed Task to the Codex queue. Use start_at to schedule it.'},
       fields:taskFields,
+      text:string(2000,'Authenticated owner instructions for the chosen attempt.'),
+      target:{type:'string',enum:['active_attempt','next_attempt']},
+      attempt_id:string(160),
+      changed_assumption:string(500,'Required for retry of a failed Task. Explain what changed since the failed attempt.'),
       executor:{type:'string',enum:['codex']},
       start_at:{type:['string','null'],description:'ISO 8601 datetime with offset. Null clears an existing schedule on configure_execution.'},
       max_attempt_minutes:{type:'integer',minimum:1,maximum:30},
@@ -42,9 +46,11 @@ export const taskEngineToolSchema = object({
     },['type']),
     task_ids:{type:'array',maxItems:500,items:taskId},
     conversation_continuation:{type:'boolean',description:'Worker supports clean-checkout continuation of stored Codex conversations.'},
+    live_addenda:{type:'boolean',description:'Worker supports a fenced addendum checkpoint on the persisted Codex conversation.'},
     attempt_id:string(160),lease:string(256),
     report:object({
-      type:{type:'string',enum:['heartbeat','finished','failed','stopped']},
+      type:{type:'string',enum:['heartbeat','finished','failed','stopped','addenda_take','addenda_delivered','addenda_acknowledged']},
+      turn_id:uuid,reservation_id:uuid,
       session_id:uuid,branch:string(200),revision,result:{type:'string',enum:['candidate']},failure:string(500),
       execution_identity:object({
         model:string(100),provider:string(100),source:{type:'string',enum:['codex_app_server_thread_start']},

@@ -3,6 +3,7 @@ import { accountEngineeringTokens, accountLoadedAttemptReceipts } from './engine
 import { evidenceClaimStatus } from './evidence-status.mjs';
 import { activityId } from './github-activity.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
+import { appServerTurnProfiles } from './task-engine-client.mjs';
 
 const DAY_MS = 86_400_000;
 const TERMINAL_ATTEMPTS = new Set(['succeeded', 'failed', 'cancelled']);
@@ -123,6 +124,9 @@ function dailyTrends(now, recordsKnown, {tasks, attempts, evidence, pulls, merge
 
 function metricKind(metric) {
   if (metric?.availability !== 'observed' || !Number.isFinite(metric.value) || metric.value < 0) return null;
+  // App Server totals and progress notices are cumulative. Only the scoped
+  // attempt receipt projection may contribute these to token accounting.
+  if (metric.source === 'codex_app_server_token_usage_updated') return null;
   if (TOKEN_NAMES.has(metric.name) && metric.unit === 'tokens' && Number.isSafeInteger(metric.value)) return 'token';
   if (RESOURCE_UNITS.get(metric.name) === metric.unit && RESOURCE_UNITS.has(metric.name)) return 'resource';
   if (metric.name === 'provider_cost_usd' && ['usd', 'USD'].includes(metric.unit)) return 'cost';
@@ -172,7 +176,7 @@ function summarizeMetrics(records, events) {
 }
 
 /** A summary of the received projection and bounded GitHub collections. */
-export function buildEngineeringAnalytics({records, events, github, experimentPairs = [], now = Date.now()} = {}) {
+export function buildEngineeringAnalytics({records, events, github, sessionBindings = [], experimentPairs = [], now = Date.now()} = {}) {
   const cutoff = new Date(now).getTime();
   if (!Number.isFinite(cutoff)) throw new RangeError('Invalid analytics clock');
 
@@ -182,7 +186,13 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
     JSON.stringify([record.record_type, record.id]) : null);
   const eventData = uniqueEngineeringEvents(traceSource ? events : []);
   const byType = type => recordData.items.filter(record => record.record_type === type);
-  const tasks = byType('task'), attempts = byType('attempt'), evidence = byType('evidence');
+  const attemptBindings = new Map(sessionBindings.flatMap(({task_id,attempt_bindings=[]})=>
+    attempt_bindings.map(binding=>[JSON.stringify([task_id,binding.id,binding.revision]),binding])));
+  const tasks = byType('task'), evidence = byType('evidence');
+  const attempts = byType('attempt').map(attempt=>{
+    const binding = attemptBindings.get(JSON.stringify([attempt.task_id,attempt.id,attempt.revision]));
+    return binding?{...attempt,session_id:binding.session_id,resume_session_id:binding.resume_session_id}:attempt;
+  });
   const attemptsById = new Map(attempts.map(attempt => [attempt.id, attempt]));
   const terminal = attempts.filter(attempt => TERMINAL_ATTEMPTS.has(attempt.state));
   const succeeded = terminal.filter(attempt => attempt.state === 'succeeded').length;
@@ -251,8 +261,9 @@ export function buildEngineeringAnalytics({records, events, github, experimentPa
     },
     tokenAccounting,
     attemptReceiptAccounting,
+    appServerProfiles:appServerTurnProfiles(attempts,eventData.items.filter(event=>time(event.occurred_at)<=cutoff)),
     experiments:compareEngineeringExperiments({
-      pairs:experimentPairs,tasks,attempts,telemetry,cutoff,accounting:tokenAccounting,
+      pairs:experimentPairs,tasks,attempts,telemetry,events:eventData.items,cutoff,accounting:tokenAccounting,attemptReceipts:attemptReceiptAccounting,
       conflicted:sourceConflicts > 0 || tokenAccounting.unattributedTurns > 0,
     }),
     usage:summarizeMetrics(telemetry, eventData.items),

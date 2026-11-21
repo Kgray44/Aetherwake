@@ -47,8 +47,8 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
   const usage = useMemo(() => taskUsageAccounting({task,canonical,attempts,events,pricing}), [task,canonical,attempts,events,pricing]);
   const {rows:tokens,desktop} = usage;
   const diagnostics = useMemo(() => taskExecutionDiagnostics({
-    task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
-  }), [task,canonical,attempts,timeline,tokens,records]);
+    task, canonical, attempts, trace:timeline, tokens, records:records ?? [], events,
+  }), [task,canonical,attempts,timeline,tokens,records,events]);
   const dataCoverage = useMemo(() => taskDataCoverage({task,canonical,attempts,usage,diagnostics,events,telemetrySource}),
     [task,canonical,attempts,usage,diagnostics,events,telemetrySource]);
   const coverageRows = diagnostics.coverage.slice(-8).flatMap(row => [

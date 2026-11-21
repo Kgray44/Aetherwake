@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { relative } from 'node:path';
 import { parseDevelopmentNote } from '../../agent-system/observatory/development-notes.mjs';
+import { appServerTurnProfile } from './provider-events.mjs';
 
 const server = 'codex_apps';
 const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
@@ -79,7 +80,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
   async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession,
-    onDevelopmentNote,onTurnStarted,onTurnFinished,onUsageSnapshot}) {
+    onDevelopmentNote,onTurnStarted,onTurnAccepted,onTurnFinished,onUsageSnapshot,
+    captureFreshThreadUsage = !resumeSessionId}) {
     runSignal.throwIfAborted();
     await initialized;
     const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
@@ -96,6 +98,9 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     runSignal.throwIfAborted();
     let turnId, usage, finish, usageWrite, publishedUsage;
     const earlyTurns = new Map();
+    const promptBytes = Buffer.byteLength(prompt);
+    const createProfile = () => appServerTurnProfile(Boolean(resumeSessionId), promptBytes);
+    let profile, limitedStart = false;
     let lastSampleAt = -Infinity, samples = 0;
     let noteWrites=Promise.resolve();
     async function publishUsage(total) {
@@ -126,21 +131,27 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       }
     };
     threadListeners.set(id,(method,params)=>{
-      const usageUpdate=method==='thread/tokenUsage/updated'&&!resumeSessionId;
+      const usageUpdate=method==='thread/tokenUsage/updated';
       const completionUpdate=method==='turn/completed';
-      if (usageUpdate||completionUpdate) {
-        const noticeId=usageUpdate?params.turnId:params.turn?.id;
-        if (!identifier(noticeId)) return;
+      const toolUpdate=method==='item/completed'&&['commandExecution','mcpToolCall'].includes(params.item?.type);
+      if (usageUpdate||completionUpdate||toolUpdate) {
+        const noticeTurn=completionUpdate?params.turn?.id:params.turnId;
+        if (!identifier(noticeTurn)) return;
         if (!turnId) {
-          if (!earlyTurns.has(noticeId)&&earlyTurns.size>=32) return;
-          const early=earlyTurns.get(noticeId)??{};
+          if (!earlyTurns.has(noticeTurn)&&earlyTurns.size>=32) { limitedStart=true; return; }
+          const early=earlyTurns.get(noticeTurn)??{profile:createProfile()};
           if (usageUpdate) {
+            early.profile.observeUsage(params.tokenUsage);
             const value=params.tokenUsage?.total?.totalTokens;
-            if (Number.isSafeInteger(value)&&value>=(early.usage?.tokenUsage.total.totalTokens??0)) early.usage=params;
-          } else early.status=params.turn.status;
-          earlyTurns.set(noticeId,early);
-        } else if (noticeId===turnId) {
-          if (usageUpdate) observeUsage(params);
+            if (captureFreshThreadUsage&&Number.isSafeInteger(value)&&value>=(early.usage?.tokenUsage.total.totalTokens??0)) early.usage=params;
+          } else if (toolUpdate) early.profile.observeTool(params.item);
+          else early.status=params.turn.status;
+          earlyTurns.set(noticeTurn,early);
+        } else if (noticeTurn===turnId) {
+          if (usageUpdate) {
+            profile.observeUsage(params.tokenUsage);
+            if (captureFreshThreadUsage) observeUsage(params);
+          } else if (toolUpdate) profile.observeTool(params.item);
           else finish(params.turn.status);
         }
       }
@@ -163,8 +174,10 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (!identifier(turnId)) throw Error('App Server turn identity was not confirmed');
       const early=earlyTurns.get(turnId);
       earlyTurns.clear();
+      profile=early?.profile??createProfile();
       if (early?.usage) observeUsage(early.usage);
       if (early?.status) finish(early.status);
+      await onTurnAccepted?.(turnId);
       await onTurnStarted?.();
       if (runSignal.aborted) abort();
       const status=await completion;
@@ -176,7 +189,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (status!=='completed'&&onUsageSnapshot&&usage&&JSON.stringify(usage)!==JSON.stringify(publishedUsage)) {
         await publishUsage(usage);
       }
-      return {status,usage,sessionId:id};
+      return {status,usage,sessionId:id,profile:profile.measurements(status==='completed',limitedStart)};
     } finally {
       runSignal.removeEventListener('abort',abort);
       threadListeners.delete(id);

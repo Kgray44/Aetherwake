@@ -23,9 +23,17 @@ function safeReference(value) {
 const refKinds = ['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session'];
 const sessionPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const revisionPattern = /^[a-f0-9]{40}$/;
+const scheduledDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const agentCommands = new Set(['edit', 'associate']);
 const claimStates = new Set(['admitted', 'queued', 'scheduled']);
 const activeStates = new Set(['running', 'pausing', 'cancelling']);
+const futureSpecStates = new Set(['running', 'pausing', 'verifying', 'failed']);
+const addendumReports = new Set(['addenda_take', 'addenda_delivered', 'addenda_acknowledged']);
+const canAddendum = lifecycle => canEditSpec(lifecycle) && lifecycle.state !== 'pausing';
+const specFields = ['title', 'objective', 'classification', 'prerequisites', 'requirements', 'deliverables', 'acceptance'];
+const canEditSpec = lifecycle => futureSpecStates.has(lifecycle.state) || claimStates.has(lifecycle.state) ||
+  ['proposed', 'blocked', 'paused'].includes(lifecycle.state);
+const editableSpec = task => Object.fromEntries(specFields.filter(key => Object.hasOwn(task, key)).map(key => [key, task[key]]));
 const canConfigureExecution = lifecycle => lifecycle.executor === 'codex' &&
   (claimStates.has(lifecycle.state) || lifecycle.state === 'paused');
 const failure = (status, error) => ({ status, body: { error } });
@@ -41,6 +49,12 @@ const stateForV1 = {
 };
 const unique = items => [...new Set(items)];
 const cycleAttempts = lifecycle => lifecycle.attempts.length - (lifecycle.cycle_start ?? 0);
+const validWorkerScope = scope => scope === undefined ||
+  (Array.isArray(scope) && scope.length <= scopeLimit && scope.every(taskId));
+const needsContinuation = lifecycle => {
+  const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
+  return Boolean(checkpoint?.session_id && checkpoint.state !== 'paused');
+};
 
 function prerequisiteStatus(task,lifecycle,rows) {
   const dependencies=task.prerequisites.task_ids.map(id=>{
@@ -98,11 +112,16 @@ export function taskAttemptRecord(task, attempt) {
 
 function publicLifecycle(row,rows,now,includePrerequisites=false) {
   const stored=details(row);
-  const {attempts,event,cycle_start,...lifecycle}=stored;
+  const {attempts,event,cycle_start,addenda,pending_spec,...lifecycle}=stored;
   const task=record(row);
   const checks=includePrerequisites?prerequisiteStatus(task,lifecycle,rows):undefined;
   return {...lifecycle,cycle_attempts:cycleAttempts(stored),max_attempt_minutes:attemptLimit(stored),
     can_configure_execution:canConfigureExecution(stored),stored_state:lifecycle.state,
+    can_edit_spec: canEditSpec(stored), spec_version: stored.spec_version ?? 1,
+    edit_effect: futureSpecStates.has(stored.state) ? 'next_attempt' : 'before_claim',
+    can_addendum: canAddendum(stored),
+    ...(includePrerequisites ? { addenda: addenda ?? [], pending_spec } :
+      { pending_spec_version: pending_spec?.version }),
     ...waitState(task,lifecycle,rows,now,checks),...(checks?{prerequisite_status:checks}:{})};
 }
 
@@ -113,7 +132,9 @@ function validateReferenceRevisions(requirements) {
 }
 
 function editTask(task, fields) {
-  const input = validateNewTask(fields);
+  const input = validateNewTask({
+    dependencies: task.prerequisites.task_ids, capabilities: task.prerequisites.capabilities, ...fields,
+  });
   validateReferenceRevisions(input.requirements);
   const previous = [...task.acceptance.criteria];
   const criteria = input.accept.map(({ description }) => {
@@ -139,7 +160,7 @@ function reviewedEvidence(task, evidence, revision) {
 function executionSettings(lifecycle,action,now) {
   const start=action.start_at===undefined ? lifecycle.start_at??now
     : action.start_at===null ? now
-    : typeof action.start_at==='string' ? Date.parse(action.start_at) : NaN;
+    : typeof action.start_at==='string' && scheduledDate.test(action.start_at) ? Date.parse(action.start_at) : NaN;
   const minutes=action.max_attempt_minutes===undefined ? attemptLimit(lifecycle) : action.max_attempt_minutes;
   const cancel=action.cancel_with_dependency===undefined ? !!lifecycle.cancel_with_dependency : action.cancel_with_dependency;
   if (!Number.isFinite(start)) throw Error('Invalid execution start time');
@@ -150,7 +171,7 @@ function executionSettings(lifecycle,action,now) {
   return {start_at:start,max_attempt_minutes:minutes,cancel_with_dependency:cancel};
 }
 
-function commandChange(task, lifecycle, { action, now, rows }) {
+function commandChange(task, lifecycle, { action, now, rows, access, nextVersion, priority, operationId }) {
   const type = action?.type;
   const current = lifecycle.state;
   if (type === 'associate') {
@@ -163,10 +184,54 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     return { lifecycle: { ...lifecycle, links: exists ? links : [...links, link] } };
   }
   if (type === 'edit') {
-    if (!['proposed', 'blocked'].includes(current) || lifecycle.executor) return failure(409, 'Only unadmitted Tasks can be edited');
-    if (!priorities.includes(action.fields?.priority)) return failure(400, 'Invalid priority');
-    try { return { task: editTask(task, action.fields), priority: action.fields.priority }; }
-    catch (error) { return failure(400, error.message); }
+    if (access !== 'owner' && (lifecycle.executor || !['proposed', 'blocked'].includes(current))) {
+      return failure(403, 'Owner action required for admitted Tasks');
+    }
+    if (!canEditSpec(lifecycle)) return failure(409, 'Reopen the Task for a new review cycle before editing');
+    const nextPriority = action.fields?.priority ?? priority;
+    if (!priorities.includes(nextPriority)) return failure(400, 'Invalid priority');
+    try {
+      const before = editableSpec(lifecycle.pending_spec?.fields ?? task);
+      const edited = editTask({ ...task, ...before }, action.fields);
+      const after = editableSpec(edited);
+      if (lifecycle.executor && JSON.stringify(after.prerequisites) !== JSON.stringify(task.prerequisites)) {
+        return failure(409, 'Changing prerequisites requires new execution admission');
+      }
+      const pending = futureSpecStates.has(current);
+      const next = { ...lifecycle };
+      if (pending) next.pending_spec = { version: nextVersion, fields: after };
+      else {
+        next.spec_version = nextVersion;
+        delete next.pending_spec;
+      }
+      return {
+        task: pending ? task : edited, lifecycle: next, priority: nextPriority,
+        specification: { before, after, effect: pending ? 'next_attempt' : 'before_claim', version: nextVersion },
+      };
+    } catch (error) { return failure(400, error.message); }
+  }
+  if (type === 'addendum') {
+    const { text, target, attempt_id } = action;
+    if (typeof text !== 'string' || !text.trim() || text.length > 2000) return failure(400, 'Provide 1 to 2000 characters of owner instructions');
+    if (!['active_attempt', 'next_attempt'].includes(target)) return failure(400, 'Choose an amendment target');
+    if (!canAddendum(lifecycle)) return failure(409, 'This Task cannot receive an addendum in its current state');
+    const addenda = lifecycle.addenda ?? [];
+    if (addenda.length >= 32) return failure(409, 'This Task has reached its addendum limit');
+    const attempt = lifecycle.attempts.at(-1);
+    if (target === 'active_attempt' && (!attempt || attempt.id !== attempt_id || !['running', 'verifying'].includes(current))) {
+      return failure(409, 'The selected attempt is no longer available for an addendum');
+    }
+    if (target === 'next_attempt' && attempt_id !== undefined) return failure(400, 'A future addendum must not specify a current attempt');
+    const immediate = target === 'active_attempt';
+    const available = current === 'running' && attempt?.live_addenda && !attempt.addendum_checkpoint;
+    const addendum = {
+      id: operationId, task_id: task.id, text: text.trim(), target, version: nextVersion,
+      accepted_at: timestamp(now), status: immediate && !available ? 'deferred' : 'pending',
+      ...(immediate ? { attempt_id, spec_version: attempt.spec_version ?? 1,
+        ...(attempt.session_id ? { session_id: attempt.session_id } : {}),
+        ...(!available ? { reason: 'No delivery checkpoint remains on this attempt' } : {}) } : {}),
+    };
+    return { lifecycle: { ...lifecycle, addenda: [...addenda, addendum] }, addendum };
   }
   if (type === 'admit' && ['proposed', 'blocked'].includes(current) && !lifecycle.executor) {
     if (action.executor !== 'codex') return failure(400, 'Unsupported executor');
@@ -236,6 +301,9 @@ function commandChange(task, lifecycle, { action, now, rows }) {
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {
     return { lifecycle: { ...lifecycle, state: current === 'running' ? 'pausing' : 'paused' } };
   }
+  if (type === 'resume' && current === 'failed') {
+    return failure(409, 'Failed Tasks require an owner Retry with a changed assumption.');
+  }
   if (type === 'resume' && current === 'paused' && cycleAttempts(lifecycle) < maxAttempts) {
     const paused = lifecycle.attempts.at(-1);
     if (paused?.state === 'paused' && !(paused.session_id && paused.checkpoint_revision)) {
@@ -261,7 +329,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     }
     return { task:{ ...task, owner_acceptance:'not_reviewed' }, lifecycle:{
       ...lifecycle, state:'queued', start_at:now, cycle_start:lifecycle.attempts.length,
-      evidence:[], feedback:action.feedback.trim(), followup_revision:accepted.candidate_revision,
+      evidence:[], feedback:action.feedback.trim(), changed_assumption:undefined, followup_revision:accepted.candidate_revision,
       resume_attempt_id:accepted.session_id?accepted.id:undefined,
     } };
   }
@@ -271,6 +339,53 @@ function commandChange(task, lifecycle, { action, now, rows }) {
   return failure(409, 'Invalid Task transition from ' + current);
 }
 
+function deferAddenda(lifecycle, attempt) {
+  const changed = [];
+  for (const addendum of lifecycle.addenda ?? []) {
+    if (addendum.attempt_id !== attempt.id) continue;
+    if (addendum.status === 'delivered') addendum.reason = 'The executor did not acknowledge completion of this turn';
+    else if (addendum.status === 'pending') {
+      addendum.status = 'deferred';
+      addendum.reason = addendum.reservation_id
+        ? 'Delivery could not be confirmed before the attempt ended'
+        : 'The attempt ended before a delivery checkpoint';
+    } else continue;
+    changed.push(addendum);
+  }
+  return changed;
+}
+const addendumReceipt = ({ id, status, session_id, turn_id, spec_version, reason }) =>
+  ({ id, status, session_id, turn_id, spec_version, reason });
+
+function workerAddenda(lifecycle, attempt, body, now) {
+  const { report, operation_id } = body;
+  if (lifecycle.state !== 'running' || !attempt.live_addenda || !attempt.session_id ||
+      attempt.session_id !== report.session_id) return failure(409, 'Addendum checkpoint is unavailable');
+  const addenda = (lifecycle.addenda ?? []).filter(item => item.attempt_id === attempt.id && item.status === 'pending');
+  if (report.type === 'addenda_take') {
+    if (attempt.addendum_checkpoint) return failure(409, 'This attempt already used its addendum checkpoint');
+    attempt.addendum_checkpoint = operation_id;
+    for (const item of addenda) {
+      item.session_id = attempt.session_id;
+      item.reservation_id = operation_id;
+    }
+    return { lifecycle, addenda };
+  }
+  const reserved = (lifecycle.addenda ?? []).filter(item => item.attempt_id === attempt.id &&
+    item.session_id === attempt.session_id && item.reservation_id === report.reservation_id);
+  const delivered = report.type === 'addenda_delivered';
+  if (!operationId.test(report.reservation_id) || !sessionPattern.test(report.turn_id ?? '') || !reserved.length ||
+      reserved.some(item => delivered ? item.status !== 'pending' : item.status !== 'delivered' || item.turn_id !== report.turn_id)) {
+    return failure(409, 'Addendum receipt does not match the reserved delivery');
+  }
+  for (const item of reserved) {
+    item.turn_id = report.turn_id;
+    item.status = delivered ? 'delivered' : 'acknowledged';
+    item[delivered ? 'delivered_at' : 'acknowledged_at'] = timestamp(now);
+  }
+  return { lifecycle, addenda: reserved };
+}
+
 function workerChange(lifecycle, body, now) {
   const active = lifecycle.attempts.at(-1);
   if (!active || active.id !== body.attempt_id || active.lease !== body.lease ||
@@ -278,6 +393,7 @@ function workerChange(lifecycle, body, now) {
     return failure(409, 'Attempt lease is stale or invalid');
   }
   const report = body.report;
+  if (addendumReports.has(report?.type)) return workerAddenda(lifecycle, active, body, now);
   if (!report || !['heartbeat', 'finished', 'failed', 'stopped'].includes(report.type)) return failure(400, 'Invalid attempt report');
   if (report.session_id !== undefined && (typeof report.session_id !== 'string' ||
       !sessionPattern.test(report.session_id) || (active.session_id && active.session_id !== report.session_id) ||
@@ -308,20 +424,20 @@ function workerChange(lifecycle, body, now) {
     active.candidate_revision = report.revision;
     active.state = 'verifying';
     active.finished_at = timestamp(now);
-    return { lifecycle: { ...lifecycle, state: 'verifying' } };
+    return { lifecycle: { ...lifecycle, state: 'verifying' }, addenda: deferAddenda(lifecycle, active) };
   }
   if (report.type === 'stopped' && ['pausing', 'cancelling'].includes(lifecycle.state)) {
     const state = lifecycle.state === 'pausing' ? 'paused' : 'cancelled';
     if (typeof report.revision === 'string' && revisionPattern.test(report.revision)) active.checkpoint_revision = report.revision;
     active.state = state;
     active.finished_at = timestamp(now);
-    return { lifecycle: { ...lifecycle, state } };
+    return { lifecycle: { ...lifecycle, state }, addenda: deferAddenda(lifecycle, active) };
   }
   if (report.type === 'failed' && typeof report.failure === 'string' && report.failure.trim() && report.failure.length <= 500) {
     active.state = 'failed';
     active.failure = report.failure.trim();
     active.finished_at = timestamp(now);
-    return { lifecycle: { ...lifecycle, state: 'failed' } };
+    return { lifecycle: { ...lifecycle, state: 'failed' }, addenda: deferAddenda(lifecycle, active) };
   }
   return failure(409, 'Report conflicts with current Task state');
 }
@@ -342,11 +458,13 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
       ? 'Attempt time limit reached. Reconcile possible effects before retrying.'
       : 'Executor lease expired. Reconcile possible effects before retrying.';
     attempt.finished_at = timestamp(now);
+    const addenda = deferAddenda(lifecycle, attempt);
     lifecycle.state = 'failed';
     const version = row.version + 1;
     lifecycle.event = {
       operation_id: crypto.randomUUID(), digest: 'scheduler', kind: deadlineReached ? 'attempt_time_limit_reached' : 'lease_expired', actor: 'scheduler',
       reason: attempt.failure,
+      ...(addenda.length ? {addenda: addenda.map(addendumReceipt)} : {}),
       version, state: 'failed', at: timestamp(now), attempt_id: attempt.id,
     };
     const next = { ...row, record: JSON.stringify({ ...record(row), state: 'failed' }), engine: JSON.stringify(lifecycle), version };
@@ -361,16 +479,18 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
   }));
 }
 
-function taskForExecution(task,lifecycle) {
-  if (!lifecycle.feedback) return task;
-  return {...task, objective: task.objective+'\n\nOwner feedback for this follow-up attempt\n'+lifecycle.feedback};
+function taskForExecution(task,lifecycle,attempt) {
+  const feedback = [
+    lifecycle.feedback && 'Owner feedback for this follow-up attempt\n' + lifecycle.feedback,
+    attempt.changed_assumption && 'Owner retry diagnosis and changed assumption\n' + attempt.changed_assumption,
+  ].filter(Boolean);
+  return feedback.length ? {...task, objective:[task.objective, ...feedback].join('\n\n')} : task;
 }
 
 const workerOperations = new Set(['claim', 'report', 'worker_pulse']);
 const workerStates = new Set(['available', 'busy', 'claim_rejected', 'task_connection_unavailable',
   'storage_guard_timeout', 'storage_reserve_denied', 'storage_guard_unavailable']);
 const workerFreshnessMs = 60_000;
-const runningAttempts = rows => [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running').length;
 
 export async function taskOperation({ db, owner, namespace, body, access, validate, revision, now = Date.now() }) {
   if (!body || !['list', 'get', 'register', 'command', ...workerOperations].includes(body.op)) return failure(400, 'Invalid Task operation');
@@ -382,18 +502,49 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
 
   const query = (sql, ...args) => db.prepare(sql).bind(...args);
   if (body.op === 'worker_pulse') {
-    if (!operationId.test(body.worker_id) || !workerStates.has(body.worker_state)) return failure(400, 'Invalid worker observation');
+    if (!operationId.test(body.worker_id) || !workerStates.has(body.worker_state) || !validWorkerScope(body.task_ids) ||
+        (body.conversation_continuation !== undefined && typeof body.conversation_continuation !== 'boolean')) {
+      return failure(400, 'Invalid worker observation');
+    }
     await query('DELETE FROM task_worker_liveness WHERE owner_id = ? AND namespace = ? AND seen_at < ?',
       owner, namespace, now - 86_400_000).run();
     await query(`
-      INSERT INTO task_worker_liveness (owner_id, namespace, worker_id, seen_at, state) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(owner_id, namespace, worker_id) DO UPDATE SET seen_at = excluded.seen_at, state = excluded.state
+      INSERT INTO task_worker_liveness (owner_id, namespace, worker_id, seen_at, state, task_scope, conversation_continuation,
+        last_error, last_error_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_id, namespace, worker_id) DO UPDATE SET seen_at = excluded.seen_at, state = excluded.state,
+        task_scope = excluded.task_scope, conversation_continuation = excluded.conversation_continuation,
+        last_error = COALESCE(excluded.last_error, task_worker_liveness.last_error),
+        last_error_at = COALESCE(excluded.last_error_at, task_worker_liveness.last_error_at)
       WHERE excluded.seen_at >= task_worker_liveness.seen_at
-    `, owner, namespace, body.worker_id, now, body.worker_state).run();
+    `, owner, namespace, body.worker_id, now, body.worker_state,
+      body.task_ids ? JSON.stringify(body.task_ids) : null, body.conversation_continuation === undefined ? null : Number(body.conversation_continuation),
+      ...(['available', 'busy'].includes(body.worker_state) ? [null, null] : [body.worker_state, now])).run();
     return success({ seen_at: timestamp(now) });
   }
   const rows = new Map((await readTaskRows({ db, owner, namespace, now })).map(row => [row.task_id, row]));
   const currentRow = rows.get(body.task_id);
+  const slotsInUse = () => [...rows.values()].filter(row => details(row).attempts.at(-1)?.state === 'running').length;
+  const observeDispatch = async row => {
+    const { results } = await query(`
+      SELECT seen_at, state, task_scope, conversation_continuation, last_error, last_error_at FROM task_worker_liveness
+      WHERE owner_id = ? AND namespace = ? ORDER BY seen_at DESC LIMIT 20
+    `, owner, namespace).all();
+    const matching = row ? results.filter(worker => (!worker.task_scope || JSON.parse(worker.task_scope).includes(row.task_id)) &&
+      (!needsContinuation(details(row)) || worker.conversation_continuation === 1)) : results;
+    const slots = slotsInUse();
+    const lastError = matching.filter(worker => worker.last_error_at != null)
+      .sort((a, b) => b.last_error_at - a.last_error_at)[0];
+    return {
+      last_seen_at: matching.length ? timestamp(matching[0].seen_at) : null,
+      states: matching.filter(worker => now - worker.seen_at < workerFreshnessMs).map(worker => worker.state),
+      active_slots: slots,
+      total_slots: taskExecutionCapacity,
+      ...(lastError ? { last_error: { state: lastError.last_error, at: timestamp(lastError.last_error_at) } } : {}),
+      ...(row && results.some(worker => now - worker.seen_at < workerFreshnessMs) &&
+        !matching.some(worker => now - worker.seen_at < workerFreshnessMs) ? { no_matching_worker: true } : {}),
+    };
+  };
   const receipts = id => query('SELECT event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND task_id = ? ORDER BY version',
     owner, namespace, id).all();
   const view = async row => ({
@@ -402,25 +553,28 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     events: [...proposalControl(row).history, ...(await receipts(row.task_id)).results
       .map(({ event }) => { const { digest, ...receipt } = JSON.parse(event); return receipt; })],
   });
+  const reportView = (row, persisted) => {
+    const lifecycle = details(row);
+    const attempt = lifecycle.attempts.find(item => item.id === body.attempt_id);
+    const { digest, ...receipt } = persisted;
+    return { task: { id: row.task_id }, version: row.version,
+      lifecycle: { state: lifecycle.attempts.at(-1)?.id === attempt?.id ? lifecycle.state : receipt.state },
+      attempts: attempt ? [exposeAttempt(attempt)] : [], events: [receipt] };
+  };
   const summary = row => ({
     task: record(row), version: row.version, priority: row.priority, lifecycle: publicLifecycle(row, rows, now),
   });
   if (body.op === 'list') {
     const tasks = [...rows.values()].map(summary);
-    const dispatch = access === 'owner'
-      ? (await query(`
-        SELECT seen_at, state FROM task_worker_liveness WHERE owner_id = ? AND namespace = ? ORDER BY seen_at DESC LIMIT 20
-      `, owner, namespace).all()).results : null;
     return success({ tasks: tasks.filter(item => body.state === undefined
       ? body.include_archived === true || item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state),
-    ...(dispatch ? { worker_dispatch: { last_seen_at: dispatch.length ? timestamp(dispatch[0].seen_at) : null,
-      states: dispatch.filter(worker => now - worker.seen_at < workerFreshnessMs).map(worker => worker.state),
-      active_slots:runningAttempts(rows), total_slots:taskExecutionCapacity } } : {}) });
+    ...(access === 'owner' ? { worker_dispatch: await observeDispatch() } : {}) });
   }
-  if (body.op === 'get') return currentRow ? success(await view(currentRow)) : failure(404, 'Task not found');
+  if (body.op === 'get') return currentRow ? success({
+    ...await view(currentRow), ...(access === 'owner' ? { worker_dispatch: await observeDispatch(currentRow) } : {}),
+  }) : failure(404, 'Task not found');
 
-  if (body.op === 'claim' && body.task_ids !== undefined && (!Array.isArray(body.task_ids) ||
-      body.task_ids.length > scopeLimit || !body.task_ids.every(taskId))) return failure(400, 'Invalid executor Task scope');
+  if (body.op === 'claim' && !validWorkerScope(body.task_ids)) return failure(400, 'Invalid executor Task scope');
   const digest = await sha256(JSON.stringify({ access, body }));
   const prior = await query('SELECT task_id, event FROM task_engine_events WHERE owner_id = ? AND namespace = ? AND operation_id = ?',
     owner, namespace, body.operation_id).first();
@@ -432,8 +586,20 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     if (body.op === 'claim') {
       const attempt = details(row).attempts.at(-1);
       if (attempt?.id !== previous.attempt_id || !activeStates.has(details(row).state) || attempt.lease_until <= now) return success({ claim: null });
-      return success({ claim: { task: taskForExecution(record(row), details(row)), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+      return success({ claim: { task: taskForExecution(record(row), details(row), attempt), attempt: exposeAttempt(attempt), lease: attempt.lease } });
     }
+    if (addendumReports.has(body.report?.type) || body.report?.type === 'heartbeat') {
+      const lifecycle = details(row);
+      const attempt = lifecycle.attempts.at(-1);
+      const allowed = body.report.type === 'heartbeat' ? activeStates.has(lifecycle.state) : lifecycle.state === 'running';
+      if (!allowed || attempt?.id !== body.attempt_id ||
+          attempt.lease !== body.lease || attempt.lease_until <= now) return failure(409, 'Attempt lease is stale or invalid');
+      if (body.report.type === 'heartbeat') return success(reportView(row, previous));
+      const addenda = (lifecycle.addenda ?? []).filter(item =>
+        item.reservation_id === (body.report.reservation_id ?? body.operation_id));
+      return success({addenda: body.report.type === 'addenda_take' ? addenda.filter(item => item.status === 'pending') : []});
+    }
+    if (body.op === 'report') return success(reportView(row, previous));
     return success(await view(row));
   }
 
@@ -454,6 +620,13 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const save = async (row, task, lifecycle, { priority = row.priority, kind, id = body.operation_id, eventDigest, attemptId, receipt = {}, fenceGraph = true } = {}) => {
     task = { ...task, state: stateForV1[lifecycle.state] ?? lifecycle.state };
     if (!validate(task)) return null;
+    if (terminal.has(lifecycle.state) && lifecycle.state !== 'failed') {
+      for (const item of lifecycle.addenda ?? []) {
+        if (item.status !== 'pending' || item.attempt_id) continue;
+        item.status = 'deferred';
+        item.reason = 'The Task closed before another attempt was claimed';
+      }
+    }
     const version = row.version + 1;
     const next = { ...lifecycle, event: { ...event(id, kind, version, lifecycle.state, attemptId, eventDigest), ...receipt } };
     const guard = fenceGraph ? unchangedGraph : 'version = ?';
@@ -494,6 +667,8 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   }
 
   if (body.op === 'claim') {
+    const running = slotsInUse();
+
     const admitted = [...rows.values()].filter(row => row.engine && details(row).executor === 'codex' &&
       claimStates.has(details(row).state));
     for (const row of admitted) {
@@ -505,25 +680,28 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
         if (!await save(row, task, lifecycle, { kind: 'dependency_cancelled', id: crypto.randomUUID(), eventDigest: 'scheduler' })) return conflict();
       }
     }
-    if (runningAttempts(rows) >= taskExecutionCapacity) return success({ claim: null, dispatch_state:'busy' });
+    if (running >= taskExecutionCapacity) return success({ claim: null, dispatch_state:'busy' });
     const candidate = admitted.filter(row => !body.task_ids || body.task_ids.includes(row.task_id)).map(row => rows.get(row.task_id))
       .filter(row => {
         const lifecycle=details(row);
-        const checkpoint=lifecycle.attempts.find(item=>item.id===lifecycle.resume_attempt_id);
-        const requiresCleanContinuation=checkpoint?.session_id&&checkpoint.state!=='paused';
-        return (!requiresCleanContinuation||body.conversation_continuation===true)&&
+        return (!needsContinuation(lifecycle)||body.conversation_continuation===true)&&
           waitState(record(row),lifecycle,rows,now).state==='ready';
       })
       .sort((a, b) => priorities.indexOf(b.priority) - priorities.indexOf(a.priority) ||
         a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id))[0];
     if (!candidate) return success({ claim: null });
-    const task = record(candidate);
     const lifecycle = details(candidate);
+    const pendingSpec = lifecycle.pending_spec;
+    const task = { ...record(candidate), ...pendingSpec?.fields };
+    if (pendingSpec) lifecycle.spec_version = pendingSpec.version;
+    delete lifecycle.pending_spec;
     const deadline = now + attemptLimit(lifecycle) * 60_000;
     const attempt = {
       id: 'attempt_' + crypto.randomUUID(), attempt_number: lifecycle.attempts.length + 1, executor: lifecycle.executor,
       revision: lifecycle.followup_revision ?? task.revision, state: 'running', started_at: timestamp(now), lease: crypto.randomUUID(),
-      lease_until: Math.min(now + leaseMs, deadline), deadline,
+      lease_until: Math.min(now + leaseMs, deadline), deadline, spec_version: lifecycle.spec_version ?? 1,
+      ...(body.live_addenda === true ? { live_addenda: true } : {}),
+      ...(lifecycle.changed_assumption ? { changed_assumption:lifecycle.changed_assumption } : {}),
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
     if (checkpoint?.session_id) {
@@ -535,8 +713,17 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     delete lifecycle.recovered_candidate;
     lifecycle.state = 'running';
     lifecycle.attempts.push(attempt);
+    for (const item of lifecycle.addenda ?? []) {
+      if (item.target !== 'next_attempt' || item.attempt_id || item.status !== 'pending') continue;
+      item.attempt_id = attempt.id;
+      item.spec_version = attempt.spec_version;
+      if (!attempt.live_addenda) {
+        item.status = 'deferred';
+        item.reason = 'The claiming worker does not support addendum checkpoints';
+      }
+    }
     if (!await save(candidate, task, lifecycle, { kind: 'claim', attemptId: attempt.id })) return conflict();
-    return success({ claim: { task: taskForExecution(record(rows.get(candidate.task_id)),lifecycle), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+    return success({ claim: { task: taskForExecution(record(rows.get(candidate.task_id)),lifecycle,attempt), attempt: exposeAttempt(attempt), lease: attempt.lease } });
   }
 
   if (!currentRow) return failure(404, 'Task not found');
@@ -548,22 +735,29 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const task = record(currentRow);
   const lifecycle = details(currentRow);
   const change = body.op === 'command'
-    ? commandChange(task, lifecycle, { action: body.action, now, rows })
+    ? commandChange(task, lifecycle, { action: body.action, now, rows, access, nextVersion: currentRow.version + 1,
+      priority: currentRow.priority, operationId: body.operation_id })
     : workerChange(lifecycle, body, now);
   if (change.status) return change;
   const nextTask = change.task ?? task;
+  if (change.specification && !validate({ ...nextTask, ...change.specification.after })) {
+    return failure(400, 'Invalid Task specification');
+  }
   if (nextTask.prerequisites.task_ids.some(id => !taskId(id))) return failure(400, 'Invalid dependency ID');
   if (['admit', 'edit'].includes(body.action?.type) && hasCycle(task.id, nextTask, rows)) return failure(409, 'Dependency cycle');
   const action = body.action;
   const latest = lifecycle.attempts.at(-1);
   const receipt = {
+    ...(change.addendum ? { addendum: change.addendum } : {}),
+    ...(change.addenda?.length ? { addenda: change.addenda.map(addendumReceipt) } : {}),
     ...(['admit','configure_execution'].includes(action?.type) ? { max_attempt_minutes:attemptLimit(change.lifecycle),
       start_at:timestamp(change.lifecycle.start_at),cancel_with_dependency:change.lifecycle.cancel_with_dependency } : {}),
-    ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
+    ...(action?.type === 'reject' ? { reason:action.reason.trim() } : {}),
+    ...(action?.type === 'retry' ? { reason:change.lifecycle.changed_assumption } : {}),
     ...(body.report?.type==='failed' && latest?.failure ? {reason:latest.failure}:{}),
-    ...(action?.type === 'edit' ? { fields:[
-      ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
-        JSON.stringify(task[key]) !== JSON.stringify(nextTask[key])),
+    ...(change.specification ? { specification: change.specification, fields:[
+      ...specFields.filter(key =>
+        JSON.stringify(change.specification.before[key]) !== JSON.stringify(change.specification.after[key])),
       ...(change.priority!==currentRow.priority?['priority']:[]),
     ] } : {}),
     ...(action?.type === 'associate' ? { reference:{
@@ -580,5 +774,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     attemptId:body.attempt_id ?? (['accept','reject','reopen','recover_candidate'].includes(action?.type)?latest?.id:undefined),
     fenceGraph: body.op !== 'report',
   });
-  return updated ? success(await view(updated)) : conflict();
+  if (!updated) return conflict();
+  if (addendumReports.has(body.report?.type)) return success({
+    addenda: body.report.type === 'addenda_take' ? change.addenda : [],
+  });
+  if (body.op === 'report') return success(reportView(updated, details(updated).event));
+  return success(await view(updated));
 }

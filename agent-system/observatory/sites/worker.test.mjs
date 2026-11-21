@@ -45,6 +45,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
   sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0012_task_trace_receipts.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0013_task_worker_liveness.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0014_task_worker_scope.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -836,6 +837,8 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   assert.equal(requestProperties.expected_version.type,'integer');
   assert.ok(requestProperties.fields.required.includes('objective'));
   assert.ok(requestProperties.action.properties.type.enum.includes('admit'));
+  assert.ok(requestProperties.action.properties.type.enum.includes('retry'));
+  assert.ok(requestProperties.action.properties.type.enum.includes('addendum'));
   assert.ok(!requestProperties.action.properties.type.enum.includes('accept'));
   assert.match(schema.properties.verification.description,/Independent of request.operation_id/);
   const missingId=await tool({op:'register',fields:input},{verification:namespace});
@@ -866,6 +869,38 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   const overview = await (await call('/api/overview', { headers: ownerHeader })).json();
   assert.equal(overview.records.find(item => item.id === task.id).state, 'running');
   assert.equal(overview.records.find(item => item.id === leased.attempt.id).task_id, task.id);
+
+  const session_id = crypto.randomUUID();
+  const failure = await tool({
+    op:'report', operation_id:crypto.randomUUID(), task_id:task.id, attempt_id:leased.attempt.id, lease:leased.lease,
+    report:{type:'failed', failure:'Fixture: Task records were unavailable', session_id},
+  }, {worker_key:key});
+  assert.equal(failure.lifecycle.state,'failed');
+  const retry = {
+    ...command, operation_id:crypto.randomUUID(), expected_version:failure.version,
+    action:{type:'retry', changed_assumption:'Canonical Task records are now readable.'},
+  };
+  const resume = await tool({...retry, action:{type:'resume'}});
+  assert.equal(resume.status,409);
+  assert.match(resume.error,/owner Retry/);
+  assert.equal((await tool(retry,{worker_key:key})).status,403);
+  assert.equal((await tool({...retry,expected_version:detail.version})).status,409);
+  const retried = await tool(retry);
+  assert.equal(retried.status,200);
+  assert.equal((await tool(retry)).version,retried.version);
+  const resumedClaim = {
+    ...claim, operation_id:crypto.randomUUID(), conversation_continuation:true,
+  };
+  const resumedAttempt = (await tool(resumedClaim,{worker_key:key})).claim;
+  assert.equal(resumedAttempt.attempt.resume_session_id,session_id);
+  assert.equal(resumedAttempt.attempt.revision,leased.attempt.revision);
+  assert.equal(resumedAttempt.attempt.changed_assumption,retry.action.changed_assumption);
+  assert.ok(resumedAttempt.task.objective.endsWith(retry.action.changed_assumption));
+  assert.deepEqual((await tool(resumedClaim,{worker_key:key})).claim,resumedAttempt);
+  const retriedDetail = await tool(get);
+  assert.equal(retriedDetail.task.objective,task.objective);
+  assert.deepEqual(retriedDetail.attempts.map(attempt=>attempt.state),['failed','running']);
+  assert.equal(retriedDetail.events.filter(event=>event.kind==='retry').length,1);
 
   const fixtureTask=await tool({op:'register',operation_id:crypto.randomUUID(),fields:input},{verification:namespace});
   const fixtureCommand=(expected_version,action)=>tool({op:'command',task_id:fixtureTask.task.id,

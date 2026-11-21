@@ -13,7 +13,7 @@ import { createSnapshot } from '../scripts/agent/context.mjs';
 import { readJournal } from '../scripts/agent/journal.mjs';
 import { reconstructAttempts } from '../scripts/agent/record-journal.mjs';
 import { sanitizeExport } from '../scripts/agent/telemetry-export.mjs';
-import { observeCodexStream } from '../scripts/agent/provider-events.mjs';
+import { appServerTurnProfile, observeCodexStream } from '../scripts/agent/provider-events.mjs';
 import { openObservatoryConnector } from '../scripts/agent/observatory-connector.mjs';
 import { checkoutIdentity } from '../scripts/agent/observatory-task-worker.mjs';
 import { reconcileAbandonedClaim } from '../scripts/agent/claim-telemetry.mjs';
@@ -54,6 +54,48 @@ test('forced worker termination preserves a recoverable claim until canonical or
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
 const stream = chunks => Readable.from(chunks.map(chunk => Buffer.from(chunk)));
 const line = event => JSON.stringify(event) + '\n';
+
+test('App Server profile reconciles response intervals without summing lifetime counters or exposing tool contents', () => {
+  const usage = (inputTokens,cachedInputTokens,outputTokens) =>
+    ({inputTokens,cachedInputTokens,outputTokens,totalTokens:inputTokens+outputTokens});
+  const profile = appServerTurnProfile(false,125);
+  const first = {total:usage(100,20,10),last:usage(100,20,10)};
+  const command = {type:'commandExecution',id:'1',command:'private',cwd:'private',aggregatedOutput:'é',status:'completed'};
+  profile.observeUsage(null);
+  profile.observeUsage(first);
+  profile.observeUsage(first);
+  profile.observeUsage({total:usage(370,220,30),last:usage(150,120,12)}); // two responses before this notice
+  profile.observeTool(command);
+  profile.observeUsage({total:usage(570,400,40),last:usage(200,180,10)});
+  profile.observeUsage(first); // stale read
+  profile.observeTool(command);
+  profile.observeTool({...command,id:'2',aggregatedOutput:null,status:'failed'});
+  profile.observeTool({type:'mcpToolCall',id:'3',result:'private'});
+  const rows = profile.measurements(true);
+  const got = findings(rows);
+  const value = field => got['app_server_'+field]?.value;
+  assert.deepEqual([value('usage_notification_count'),value('observed_interval_count'),value('reconciled_response_count')],[3,3,2]);
+  assert.deepEqual([value('first_response_input_tokens'),value('latest_response_input_tokens'),value('latest_response_cached_input_tokens')],[100,200,180]);
+  assert.equal(value('interval_2_response_input_tokens'),undefined);
+  assert.deepEqual([value('interval_3_response_output_tokens'),value('interval_3_command_count')],[10,1]);
+  assert.deepEqual([value('command_count'),value('repeated_command_count'),value('failed_command_count'),
+    value('command_event_output_bytes'),value('mcp_tool_count')],[2,1,1,2,1]);
+  assert.doesNotMatch(JSON.stringify(rows),/private|é/);
+
+  const resumed = appServerTurnProfile(true,125);
+  resumed.observeUsage(first);
+  resumed.observeUsage({total:usage(300,200,20),last:usage(200,180,10)});
+  const resumedRows = findings(resumed.measurements(false));
+  assert.equal(resumedRows.app_server_reconciled_response_count.value,1);
+  assert.equal(resumedRows.app_server_first_response_input_tokens.value,200);
+
+  const long = appServerTurnProfile(false,10);
+  for (let i=1;i<=20;i++) long.observeUsage({total:usage(i*100,i*20,i*10),last:usage(100,20,10)});
+  const bounded=long.measurements(true);
+  assert.ok(bounded.length<=64);
+  assert.deepEqual(bounded.flatMap(row=>row.name.match(/^app_server_interval_(\d+)_command_count$/)?.[1]??[]),
+    ['1','2','3','4','17','18','19','20']);
+});
 
 test('checkout readback batches compatible queries and falls back on ambiguous records',async()=>{
   const cwd=await realpath(process.cwd());
@@ -100,6 +142,8 @@ function fixtureAppServer(status) {
         networkAccess:false,writableRoots:[params.cwd]}}});
       if (method==='turn/start') {
         notice('turn/completed',{turn:{id:'unrelated',status:'failed'}});
+        notice('item/completed',{turnId:'unrelated',item:{id:'bad',type:'commandExecution'}});
+        notice('item/completed',{turnId,item:{id:'early',type:'commandExecution'}});
         usage(100);
         usage(400,'unrelated');
         send({id,result:{turn:{id:turnId}}});
@@ -126,6 +170,7 @@ test('App Server keeps early usage for the exact turn and ignores unrelated comp
     assert.equal(result.status,'completed');
     assert.equal(result.usage.totalTokens,200);
     assert.equal(result.sessionId,session);
+    assert.equal(findings(result.profile).app_server_command_count.value,1);
   } finally {connector.close();}
 });
 
@@ -136,8 +181,12 @@ test('a failed fresh App Server turn publishes its last observed usage as progre
   const observed=[];
   try {
     const result=await connector.runWorkspaceTurn({cwd,prompt:'Fixture',signal:AbortSignal.timeout(5000),
-      onSession:()=>{},onUsageSnapshot:usage=>observed.push(usage.totalTokens)});
+      onSession:()=>{},onUsageSnapshot:usage=>{
+        observed.push(usage.totalTokens);
+        if (observed.length===1) throw Error('Transient journal error');
+      }});
     assert.equal(result.status,'failed');
+    assert.equal(findings(result.profile).app_server_turn_completed.value,0);
     assert.deepEqual(observed,[100,200]);
   } finally {connector.close();}
 });

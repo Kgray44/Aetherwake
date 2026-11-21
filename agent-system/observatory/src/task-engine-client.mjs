@@ -13,6 +13,8 @@ const workerLabels={
 export function workerDispatchStatus(observation, access) {
   if (access==='not_configured') return {label:'Codex worker access unavailable'};
   if (!observation) return {label:'Worker availability unknown'};
+  if (observation.no_matching_worker) return {label:'No recent worker confirmed this Task’s scope and continuation requirements'};
+  if (observation.active_slots >= observation.total_slots) return {label:workerLabels.busy,at:observation.last_seen_at,state:'busy'};
   const states=observation.states??[];
   const state=['available','claim_rejected','task_connection_unavailable','storage_guard_timeout',
     'storage_guard_unavailable','storage_reserve_denied','busy'].find(value=>states.includes(value));
@@ -50,6 +52,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   const attemptsThisCycle = lifecycle.cycle_attempts ?? attempts.length;
   if (publishedIntake) return ['proposed', 'blocked'].includes(state) ? ['admit'] : [];
   const result = [];
+  if (lifecycle.can_addendum===true) result.push('addendum');
   if (lifecycle.can_configure_execution===true) result.push('configure_execution');
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
@@ -75,7 +78,7 @@ export function taskNextAction(detail, workerAccess, observation) {
     Number.isFinite(startAt) ? new Date(startAt).toISOString() : undefined);
   if (['admitted','ready','queued'].includes(state) && executor) return workerAccess==='not_configured'
     ? action('Configure Codex worker access', 'A worker credential is required before a worker can claim this Task.', 'task-controls')
-    : action('Eligible · awaiting worker claim', workerDispatchStatus(observation,workerAccess).label + '.', 'task-controls');
+    : action('Eligible · awaiting worker claim', workerDispatchStatus(detail.worker_dispatch??observation,workerAccess).label + '.', 'task-controls');
   if (state === 'verifying') return action('Review the candidate', 'Review the linked evidence and record the owner decision.', 'task-evidence');
   if (state === 'failed') return options.includes('retry')
     ? action('Review the failure before retrying', 'Inspect the latest attempt and record what changed before restarting execution.', 'task-attempts')
@@ -97,12 +100,55 @@ export function reviewRevision(attempt) {
 }
 
 const appServerSource = 'codex_app_server_token_usage_updated';
+const appServerProfileSource = 'codex_app_server_turn_profile';
 const appServerMethods = new Set(['single_ephemeral_thread_total','fresh_thread_total']);
 const progressMethods = new Set(['fresh_thread_progress']);
 
 export function isAppServerUsageProgress(event) {
   return event.kind==='measurement'&&(event.measurements??[]).some(metric=>
     metric.source===appServerSource&&progressMethods.has(metric.method));
+}
+
+export function appServerTurnProfiles(attempts, events) {
+  const byId = new Map(attempts.map(attempt=>[attempt.id,attempt]));
+  const profiles = new Map();
+  for (const event of events) {
+    const attempt = byId.get(event.attempt_id);
+    if (event.kind!=='measurement' || !attempt?.session_id || event.session_id!==attempt.session_id ||
+        event.task_id!==attempt.task_id || event.revision!==attempt.revision || event.repository!==attempt.repository) continue;
+    const metrics = (event.measurements??[]).filter(metric=>metric?.source===appServerProfileSource &&
+      metric.method==='observed_turn_notifications' && typeof metric.name==='string' && metric.name.startsWith('app_server_'));
+    if (!metrics.length) continue;
+    // A worker emits one profile per attempt. Withhold conflicting receipts.
+    if (profiles.has(attempt.id)) { profiles.set(attempt.id,null); continue; }
+    const value = (name, unit) => {
+      const fields = metrics.filter(metric=>metric.name==='app_server_'+name);
+      const metric = fields.length===1?fields[0]:null;
+      return metric?.availability==='observed' && metric.unit===unit &&
+        Number.isSafeInteger(metric.value) && metric.value>=0 ? metric.value : null;
+    };
+    const input = position => {
+      const tokens = value(position+'_response_input_tokens','tokens');
+      const cached = value(position+'_response_cached_input_tokens','tokens');
+      return {tokens,cached,uncached:tokens!==null && cached!==null && cached<=tokens ? tokens-cached : null};
+    };
+    const samples = [...new Set(metrics.flatMap(({name})=>
+      name.match(/^app_server_interval_(\d+)_response_input_tokens$/)?.[1]??[]))].slice(0,8).map(interval=>({
+      interval:Number(interval), ...input('interval_'+interval),
+      output:value('interval_'+interval+'_response_output_tokens','tokens'),
+      commands:value('interval_'+interval+'_command_count','count'),
+    })).sort((a,b)=>a.interval-b.interval);
+    profiles.set(attempt.id,{taskId:attempt.task_id, attemptId:attempt.id, attemptNumber:attempt.attempt_number,
+      revision:attempt.revision, receiptId:event.event_id, completed:value('turn_completed','boolean')===1,
+      notifications:value('usage_notification_count','count'), intervals:value('observed_interval_count','count'),
+      reconciled:value('reconciled_response_count','count'), first:input('first'), latest:input('latest'), samples,
+      peakInput:value('peak_response_input_tokens','tokens'), promptBytes:value('submitted_task_prompt_bytes','bytes'),
+      commands:value('command_count','count'), repeated:value('repeated_command_count','count'),
+      failedCommands:value('failed_command_count','count'), mcpCalls:value('mcp_tool_count','count'),
+      commandOutputs:value('command_output_sample_count','count'), outputBytes:value('command_event_output_bytes','bytes'),
+      toolLimited:value('tool_observation_limit_reached','boolean')===1});
+  }
+  return [...profiles.values()].filter(Boolean);
 }
 
 function appServerTokenRow(taskId, repository, attempt, events, progress = false) {

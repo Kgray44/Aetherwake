@@ -310,6 +310,20 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(detail.lifecycle.max_attempt_minutes,7);
   assert.equal(detail.lifecycle.start_at, await page.evaluate(() => new Date('2050-01-01T13:00').getTime()));
 
+  const admittedEditor = page.getByRole('form', { name: 'Edit Task specification' });
+  await admittedEditor.getByLabel('Task title').fill('Canonical schedule amended after admission');
+  await admittedEditor.getByRole('button', { name: 'Save Task revision' }).click();
+  await admittedEditor.getByText('Task saved.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Add owner instructions', exact: true }).click();
+  const addendum = page.getByRole('form', { name: 'Add owner instructions' });
+  await addendum.getByLabel('Supplemental instructions').fill('Keep the schedule receipt with the candidate.');
+  await addendum.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await page.getByRole('region', { name: 'Owner addendum delivery' }).getByText('pending', { exact: true }).waitFor();
+  detail = await send({ op: 'get', task_id: id });
+  assert.equal(detail.task.title, 'Canonical schedule amended after admission');
+  assert.equal(detail.lifecycle.addenda[0].target, 'next_attempt');
+  assert.deepEqual(detail.attempts, []);
+
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await page.getByText(/Stored state paused/).waitFor();
   await page.getByRole('button',{name:'Edit execution settings',exact:true}).click();
@@ -329,7 +343,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByText(/Stored state cancelled/).waitFor();
   await page.getByText('9 min',{exact:true}).waitFor();
   detail = await send({ op: 'get', task_id: id });
-  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'pause', 'configure_execution', 'resume', 'cancel']);
+  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'edit', 'admit', 'edit', 'addendum', 'pause', 'configure_execution', 'resume', 'cancel']);
   assert.equal(detail.task.owner_acceptance, 'not_reviewed');
 
   const execution = await send({ op: 'register', operation_id: crypto.randomUUID(), fields: {
@@ -742,7 +756,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('link',{name:/Candidate review verification.*Manage/}).waitFor();
   await page.getByRole('button',{name:'Engineering analytics',exact:true}).click();
   await page.getByRole('heading',{name:'Codex token accounting',exact:true}).waitFor();
-  const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output total'});
+  const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output from final receipts'});
   await attemptTotal.getByText('90',{exact:true}).waitFor();
   await page.locator('.analytics-counts > div').filter({hasText:'App Server receipts'}).getByText('1',{exact:true}).waitFor();
   await page.getByText('Attempt breakdown',{exact:true}).click();

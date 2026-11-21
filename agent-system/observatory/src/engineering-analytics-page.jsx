@@ -135,23 +135,27 @@ function TokenAccounting({ accounting, receipts, ready, headers }) {
   const [taskId, setTaskId] = useState('');
   const selected = receipts.byTask.find(row => row.taskId === taskId);
   const totals = selected?.totals ?? receipts.totals;
+  const observed = selected?.observed ?? receipts.observed;
   const usage = totals.tokens;
   const turnUsage = accounting.byTask.find(row=>row.taskId===selected?.taskId)?.observed ?? accounting.observed;
   const attempts = selected
-    ? selected.rows
-    : receipts.byTask.flatMap(row=>row.rows.filter(attempt=>attempt.coverage!=='unavailable'));
-  const {pricing} = useOpenAIPricing(attempts,ready,headers);
-  const estimates = new Map(estimateOpenAIReference(attempts,pricing,Date.now()).attempts.map(row=>[row.attemptId,row]));
+    ? selected.observedRows
+    : receipts.byTask.flatMap(row=>row.observedRows.filter(attempt=>attempt.coverage!=='unavailable'));
+  const finalAttempts = attempts.filter(row=>['complete','observed'].includes(row.coverage));
+  const {pricing} = useOpenAIPricing(finalAttempts,ready,headers);
+  const estimates = new Map(estimateOpenAIReference(finalAttempts,pricing,Date.now()).attempts.map(row=>[row.attemptId,row]));
   return <>
     <label>Task <select value={selected?.taskId ?? ''} onChange={event => setTaskId(event.target.value)}>
       <option value="">All loaded Tasks</option>
       {accounting.byTask.map(row => <option key={row.taskId} value={row.taskId}>{row.taskId}</option>)}
     </select></label>
     <MetricRows fields={[
-      ['Input and output total', count(usage.totalTokens)], ['Input tokens', count(usage.inputTokens)],
+      ['Input and output from final receipts', count(usage.totalTokens)], ['Input tokens', count(usage.inputTokens)],
       ['Output tokens', count(usage.outputTokens)], ['Cached input tokens', count(usage.cachedInputTokens)],
       ['Uncached input tokens', count(usage.uncachedInputTokens)],
       ['Attempts with token totals',totals.attemptsWithTotals+' of '+totals.attempts],
+      ['Recorded lower bound including partial attempts',count(observed.tokens.totalTokens)],
+      ['Attempts with any token receipt',observed.attemptsWithTotals+' of '+observed.attempts],
       ['App Server receipts',count(totals.appServerReceipts)], ['Actual billing',receipts.billing],
       ['Recorded CLI turns', count(turnUsage.turns)],
       ['Unattributed turns in this projection', count(accounting.unattributedTurns)]
@@ -163,7 +167,8 @@ function TokenAccounting({ accounting, receipts, ready, headers }) {
         <tbody>{attempts.map(row => <tr key={row.attemptId}>
           <th scope="row">{row.attemptNumber === null ? row.attemptId : row.attemptId + ' · #' + row.attemptNumber}</th>
           <td>{label(row.state)}</td><td>{row.model ?? 'Unavailable'}</td>
-          <td>{label(row.coverage)}</td><td>{count(row.observed.totalTokens)}</td>
+        <td>{label(row.coverage)}</td><td>{count(row.observed.totalTokens)}{!['complete','observed'].includes(row.coverage) &&
+          row.observed.totalTokens!=null ? ' or more' : ''}</td>
           <td>{estimates.has(row.attemptId)?<a href={estimates.get(row.attemptId).source} target="_blank" rel="noreferrer">
             {formatReferenceCost(estimates.get(row.attemptId).usd)}</a>:'Unavailable'}</td>
         </tr>)}</tbody></table>
@@ -177,6 +182,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
     records: ready ? records : undefined,
     events: ready && execution ? events : undefined,
     github: ready ? github : undefined,
+    sessionBindings: ready ? execution?.session_bindings : undefined,
     now: Date.now()
   }), [records, events, github, execution, ready]);
   const sessions = useMemo(()=>ready?loadedSessionUsage({records,events,bindings:execution?.session_bindings}):null,
@@ -250,7 +256,19 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
         ]}/>
       </Panel></Rise></StickySectionAside>
     </div>
-    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting} ready={ready} headers={headers}/></Panel></Rise>
+    <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting} ready={ready} headers={headers}/>
+      {data.appServerProfiles.length>0&&<details><summary>App Server turn profiles</summary><div className="analytics-table">
+        <table><caption>Reconciled response inputs and tool observations. See Task Workspace for the revision and receipt.</caption>
+          <thead><tr>{['Task and attempt','Response intervals','First input','Latest input','Latest cached input','Repeated commands','Tool output bytes'].map(title=>
+            <th key={title} scope="col">{title}</th>)}</tr></thead>
+          <tbody>{data.appServerProfiles.map(row=><tr key={row.receiptId}>
+            <th scope="row">{row.taskId} #{row.attemptNumber}</th>
+            <td>{count(row.reconciled)} / {count(row.intervals)}</td><td>{count(row.first.tokens)}</td>
+            <td>{count(row.latest.tokens)}</td><td>{count(row.latest.cached)}</td>
+            <td>{count(row.repeated)}</td><td>{count(row.outputBytes)}</td>
+          </tr>)}</tbody>
+        </table></div></details>}
+    </Panel></Rise>
     <Rise><Panel title="Session-only usage across loaded Tasks">
       {sessions?<><MetricRows fields={[
         ['Observed session-only tokens',count(sessions.observed.totalTokens)],

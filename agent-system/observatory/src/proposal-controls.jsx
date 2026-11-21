@@ -6,7 +6,14 @@ import { PrerequisiteChecks } from './task-workspace.jsx';
 import { TaskScopeFields } from './task-scope.jsx';
 import { dependencyGraph } from './task-workspace.mjs';
 
-const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({ task, version: control.version, priority: control.priority, editable });
+const editorVersion = control => control.lifecycle
+  ? [control.lifecycle.spec_version, control.lifecycle.pending_spec?.version, control.lifecycle.edit_effect,
+    control.lifecycle.can_edit_spec, control.priority].join(':')
+  : control.version;
+const takeSnapshot = (task, control, editable = task.state === 'proposed') => ({
+  task: { ...task, ...control.lifecycle?.pending_spec?.fields },
+  version: editorVersion(control), priority: control.priority, editable,
+});
 
 export function ProposalControls({ task, control, tasks, classes, headers, readFields, refresh, manageable, engineCommand, engineEditable, onHistory, summaries, Status }) {
   const reduce = useReducedMotion();
@@ -22,7 +29,8 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
   const operation = useRef(null);
   const endpoint = '/api/tasks/' + encodeURIComponent(task.id) + '/control';
   const stored = snapshot.task;
-  const changed = control.version > snapshot.version;
+  const changed = editorVersion(control) !== snapshot.version;
+  const admittedEditor = Boolean(control.lifecycle?.executor);
   const graph=dependencyGraph({...task,prerequisites:{
     task_ids:draft?.dependencies??stored.prerequisites.task_ids,
     capabilities:draft?.capabilities??stored.prerequisites.capabilities,
@@ -66,9 +74,9 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     setSaved('');
     try {
       if (engineCommand) {
-        const next = await engineCommand(action, snapshot.version);
-        reset(takeSnapshot(next.task, next, !next.lifecycle.executor && ['proposed', 'blocked'].includes(next.lifecycle.stored_state)));
-        setSaved("Task saved.");
+        const next = await engineCommand(action, control.version);
+        reset(takeSnapshot(next.task, next, next.lifecycle.can_edit_spec));
+        setSaved(next.lifecycle.pending_spec ? 'Revision saved for the next attempt.' : 'Task saved.');
         return;
       }
       const response = await fetch(endpoint, {
@@ -122,24 +130,29 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
   }
 
   return <>
-    <p className="low">Version {snapshot.version} · {snapshot.priority} priority</p>
+    <p className="low">{engineCommand ? 'Current specification v' + (control.lifecycle.spec_version ?? 1) : 'Version ' + snapshot.version} · {snapshot.priority} priority
+      {control.lifecycle?.pending_spec && <> · Next attempt v{control.lifecycle.pending_spec.version}</>}</p>
     {changed && <div className="notice" role="status">
-      <span>Version {control.version} is available. {draft ? 'Loading it clears your unsaved changes.' : 'Load it to continue.'}</span>
+      <span>{engineCommand ? 'The Task editor has newer details.' : 'Version ' + control.version + ' is available.'}
+        {' '}{draft ? 'Loading the latest version clears your unsaved changes.' : 'Load it to continue.'}</span>
       <button className="quiet-button" type="button" disabled={busy} onClick={() => reset(takeSnapshot(task, control, engineEditable))}>Load latest version</button>
     </div>}
     {error && <p role="alert" className="notice error">{error}</p>}
     {engineCommand && !snapshot.editable && <p>Task fields are read-only in the current execution state.</p>}
-    {snapshot.editable && <form key={snapshot.version} aria-label="Edit proposed task" className="form task-editor"
+    {snapshot.editable && <form key={snapshot.version} aria-label={admittedEditor ? 'Edit Task specification' : 'Edit proposed task'} className="form task-editor"
       onSubmit={edit} onChange={event => { setDraft(readFields(event.currentTarget)); setSaved(''); }}>
       <fieldset className="task-editor-fields" disabled={busy}>
+        {engineCommand && <p>{control.lifecycle.edit_effect === 'next_attempt'
+          ? 'Changes apply to the next attempt. The current attempt and its review use the claimed specification.'
+          : 'Changes apply when the worker next claims this Task.'}</p>}
         <label>Task title <input name="title" defaultValue={stored.title} required minLength={4} maxLength={160}/></label>
         <label>Objective <textarea name="objective" defaultValue={stored.objective} required minLength={12} maxLength={6000}/></label>
         <div className="form-grid">
           <label>Category <select name="primary" defaultValue={stored.classification.primary}>{classes.map(value => <option key={value}>{value}</option>)}</select></label>
           <label>Priority <select name="priority" defaultValue={snapshot.priority}>{['low', 'normal', 'high', 'urgent'].map(value => <option key={value}>{value}</option>)}</select></label>
         </div>
-        <label>Prerequisite Task IDs <input name="dependencies" defaultValue={stored.prerequisites.task_ids.join(', ')}/></label>
-        <label>Required capabilities <input name="capabilities" defaultValue={stored.prerequisites.capabilities.join(', ')}/></label>
+        <label>Prerequisite Task IDs <input name="dependencies" readOnly={Boolean(control.lifecycle?.executor)} defaultValue={stored.prerequisites.task_ids.join(', ')}/></label>
+        <label>Required capabilities <input name="capabilities" readOnly={Boolean(control.lifecycle?.executor)} defaultValue={stored.prerequisites.capabilities.join(', ')}/></label>
         <TaskScopeFields task={stored} checks={checks}/>
         <label>Verification profile <input name="profile_id" defaultValue={stored.acceptance.profile_id} required/></label>
         <label>Acceptance criteria, one per line
@@ -157,7 +170,7 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
       <div className="form-actions">
         <motion.button className="primary-button" type="submit" disabled={busy || !draft || changed || missing.length > 0 || selfDependency}
           whileTap={reduce ? undefined : { scale: .97 }}>
-          <Save size={16} aria-hidden="true"/>{busy ? 'Saving…' : 'Save proposal'}
+          <Save size={16} aria-hidden="true"/>{busy ? 'Saving…' : admittedEditor ? 'Save Task revision' : 'Save proposal'}
         </motion.button>
         <span role="status">{draft ? 'Unsaved changes' : saved}</span>
       </div>

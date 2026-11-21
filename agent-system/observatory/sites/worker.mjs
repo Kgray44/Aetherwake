@@ -169,8 +169,10 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       const authoritative = engineRows.flatMap(({task,engine})=>[task,...engine.attempts.map(attempt=>taskAttemptRecord(task,attempt))]);
       const sessionBindings = engineRows.flatMap(({task,engine})=>{
         const links = (engine.links??[]).filter(link=>link.kind==='executor_session');
-        const attempt_sessions = [...new Set(engine.attempts.map(attempt=>attempt.session_id??attempt.resume_session_id).filter(Boolean))];
-        return links.length||attempt_sessions.length ? [{task_id:task.id,links,attempt_sessions}] : [];
+        const attempt_bindings = engine.attempts.filter(attempt=>attempt.session_id||attempt.resume_session_id)
+          .map(({id,revision,session_id,resume_session_id})=>({id,revision,session_id,resume_session_id}));
+        const attempt_sessions = [...new Set(attempt_bindings.map(attempt=>attempt.session_id??attempt.resume_session_id))];
+        return links.length||attempt_sessions.length ? [{task_id:task.id,links,attempt_sessions,attempt_bindings}] : [];
       });
       const authoritativeIds = new Set(authoritative.map(item => item.record_type + ':' + item.id));
       const canProject = item => !authoritativeIds.has(item.record_type + ':' + item.id);

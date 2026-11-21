@@ -6,7 +6,7 @@ import { telemetryTaskId } from '../telemetry-delta.mjs';
 import { mcpOwnerCommands,taskEngineToolSchema } from './task-engine-tool-schema.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const tools=[
- {name:'task_engine_v1',description:'List, inspect, register and edit canonical engineering Tasks. The authenticated owner can schedule, dispatch, pause, resume and cancel. Executor claim and reporting require a worker credential.',
+ {name:'task_engine_v1',description:'List, inspect, register and edit canonical engineering Tasks. The authenticated owner can amend admitted Tasks, append exact-attempt addenda, schedule, dispatch, pause, resume, retry and cancel. Executor claim and reporting require a worker credential.',
   inputSchema:taskEngineToolSchema},
  {name:'project_execution_snapshot',description:'Store a bounded sanitized private execution projection. Does not execute, approve or verify work.',inputSchema:{type:'object',additionalProperties:false,required:['projection'],properties:{projection:{type:'object'},verification:{type:'string',format:'uuid'}}}},
  {name:'read_execution_projection',description:'Read the caller-owned execution projection and its digest. Imported evidence is not independent proof.',inputSchema:{type:'object',additionalProperties:false,properties:{verification:{type:'string',format:'uuid'}}}},
@@ -51,8 +51,9 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
  if(!env.DB)return result({error:'Storage unavailable'},true);
  try{
   if(name==='task_engine_v1'){
-   let access = owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID&&args.request?.op==='command'&&
-    mcpOwnerCommands.has(args.request.action?.type)?'owner':'agent';
+   const isOwnerOperation = ['get','list'].includes(args.request?.op) ||
+    args.request?.op==='command'&&mcpOwnerCommands.has(args.request.action?.type);
+   let access = owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID&&isOwnerOperation?'owner':'agent';
    if(args.worker_key !== undefined) {
     if(owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID || !isTaskWorkerKey(args.worker_key) ||
       !isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY) ||
