@@ -37,6 +37,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reviewAgain, setReviewAgain] = useState(false);
   const pending = useRef(false);
   const formHeading = useRef(null);
   useEffect(() => { if (action) formHeading.current?.focus(); }, [action]);
@@ -79,6 +80,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
       void send({ type });
     } else {
       setAction(type);
+      setReviewAgain(false);
       setActionVersion(detail.version);
       setError('');
       setResult('');
@@ -104,9 +106,13 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
       if (action === 'retry') change.changed_assumption = fields.get('reason');
       if (action === 'reopen') change.feedback = fields.get('feedback');
       if (action === 'reject') change.reason = fields.get('reason');
-      if (action === 'accept') change.evidence = task.acceptance.criteria.map(criterion => ({
-        criterion_id: criterion.id, uri: fields.get(criterion.id), revision: candidateRevision,
-      }));
+      if (action === 'accept') {
+        const notes = fields.get('review_notes');
+        void send(reviewAgain
+          ? { type:'reopen', revision:candidateRevision, feedback:notes }
+          : { type:'accept', revision:candidateRevision, notes });
+        return;
+      }
       if (action === 'supersede') change.successor = fields.get('successor');
       if (action === 'satisfy') change.prerequisite = fields.get('prerequisite');
       if (action === 'associate') change.reference = {
@@ -191,10 +197,10 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         {unsatisfiedCapabilities.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}
       </select></label>}
       {action === 'accept' && <>
-        <p>Record an owner review based on the linked evidence at revision {candidateRevision ?? 'unavailable'}.</p>
-        {task.acceptance.criteria.map(criterion => <label key={criterion.id}>{criterion.description}
-          <input name={criterion.id} type="url" placeholder="https://…" required maxLength={1000}/>
-        </label>)}
+        <label>{reviewAgain?'Notes for the next round':'Links or notes (optional)'}
+          <textarea name="review_notes" maxLength={2000} required={reviewAgain}/>
+        </label>
+        {!reviewAgain&&<p>Mark this task as owner accepted?</p>}
       </>}
       {action === 'associate' && <>
         <label>Reference type <select name="reference_kind">{['branch', 'commit', 'pull_request', 'review', 'ci_run', 'test', 'artifact', 'investigation', 'deployment', 'executor_session']
@@ -203,8 +209,11 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         <label>Revision <input name="revision" pattern="[a-f0-9]{40}" defaultValue={candidateRevision ?? task.revision} required/></label>
       </>}
       <div className="form-actions">
-        <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Submitting…' : 'Confirm'}</button>
-        <button type="button" className="quiet-button" disabled={busy} onClick={() => setAction('')}>Close</button>
+        <button type="submit" className="primary-button" disabled={busy}>{busy?'Submitting…'
+          :action==='accept'?(reviewAgain?'Run again':'Yes'):'Confirm'}</button>
+        {action==='accept'&&!reviewAgain
+          ? <button type="button" className="quiet-button" disabled={busy} onClick={()=>{setReviewAgain(true);setError('');}}>No</button>
+          : <button type="button" className="quiet-button" disabled={busy} onClick={()=>{setAction('');setError('');}}>Close</button>}
       </div>
     </motion.form>}
     {error && <p className="notice error" role="alert">{error}</p>}

@@ -425,6 +425,8 @@
             "type": {
               "const": "accept"
             },
+            "revision": { "$ref": "#/$defs/rid" },
+            "notes": { "type": "string", "maxLength": 2000 },
             "evidence": {
               "type": "array",
               "minItems": 1,
@@ -453,9 +455,10 @@
               }
             }
           },
-          "required": [
-            "type",
-            "evidence"
+          "required": ["type"],
+          "oneOf": [
+            { "required": ["evidence"], "not": { "anyOf": [{ "required": ["revision"] }, { "required": ["notes"] }] } },
+            { "required": ["revision"], "not": { "required": ["evidence"] } }
           ]
         },
         {
@@ -522,6 +525,7 @@
           "type": "object",
           "properties": {
             "type": { "const": "reopen" },
+            "revision": { "$ref": "#/$defs/rid" },
             "feedback": { "type": "string", "minLength": 1, "maxLength": 2000 }
           },
           "required": ["type", "feedback"]
