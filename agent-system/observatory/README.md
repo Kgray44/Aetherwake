@@ -268,8 +268,10 @@ before refreshing the execution feed. A lost response is reconciled against the 
 restart. Directory access is saved per authenticated owner and verification namespace, and may need renewal
 after a browser restart. You can disconnect from the panel at any time.
 
-Automatic delivery is bounded to eight Task projections and 2 MiB of payload per namespace, with at most
-24 Task projections per owner. The foreground session pauses on persistent errors after three scheduled
+Automatic delivery allows up to 500 live Task projections within the existing 2 MiB live payload budget.
+Verification allows eight Task projections and 2 MiB of payload per namespace, with up to 24 verification
+projections per owner. Verification capacity does not consume live projection slots. The foreground
+session pauses on persistent errors after three scheduled
 retries. Previously synchronized events remain immutable. The selected local Task journal remains
 authoritative. A closed tab, unsupported browser, or signed-out session pauses delivery.
 

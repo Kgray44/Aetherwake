@@ -5,7 +5,8 @@ import { codexHistoryMetrics, codexHistorySource, independentCodexTurn } from '.
 const digestPattern = /^[a-f0-9]{64}$/;
 const bytes = new TextEncoder();
 const limit = 2 * MAX_SYNC_BYTES;
-const maxRows = 24;
+const maxLiveRows = 500;
+const maxVerificationRows = 24;
 const maxVerificationNamespaceRows = 8;
 
 export async function sha256(value) {
@@ -105,6 +106,7 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
   const eventCount = projection.events.length;
   const eventReceiptBatches = JSON.stringify(eventCount > previousEventCount
     ? [...batches, [previousEventCount, eventCount, receivedAt]] : batches);
+  const live = namespace === 'live';
   const stored = existing
     ? await db.prepare(`UPDATE task_telemetry SET digest = ?, received_at = ?, payload = ?, event_receipt_batches = ?
         WHERE owner_id = ? AND namespace = ? AND task_id = ? AND digest = ?
@@ -114,12 +116,12 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
         payload, eventReceiptBatches, owner, namespace, id, limit).run()
     : await db.prepare(`INSERT OR IGNORE INTO task_telemetry (owner_id, namespace, task_id, digest, received_at, payload, event_receipt_batches)
         SELECT ?, ?, ?, ?, ?, ?, ? WHERE
-          (SELECT COUNT(*) FROM task_telemetry WHERE owner_id = ?) < ? AND
+          (? OR (SELECT COUNT(*) FROM task_telemetry WHERE owner_id = ? AND namespace <> 'live') < ?) AND
           (SELECT COUNT(*) FROM task_telemetry WHERE owner_id = ? AND namespace = ?) < ? AND
           LENGTH(CAST(? AS BLOB)) + LENGTH(CAST(? AS BLOB)) + COALESCE((SELECT SUM(LENGTH(CAST(payload AS BLOB)) + LENGTH(CAST(event_receipt_batches AS BLOB)))
             FROM task_telemetry WHERE owner_id = ? AND namespace = ?), 0) <= ?`)
-      .bind(owner, namespace, id, digest, receivedAt, payload, eventReceiptBatches, owner, maxRows,
-        owner, namespace, namespace === 'live' ? maxRows : maxVerificationNamespaceRows,
+      .bind(owner, namespace, id, digest, receivedAt, payload, eventReceiptBatches, Number(live), owner, maxVerificationRows,
+        owner, namespace, live ? maxLiveRows : maxVerificationNamespaceRows,
         payload, eventReceiptBatches, owner, namespace, limit).run();
   if (stored.meta.changes !== 1) {
     const after = await readTelemetry(db, owner, namespace, id);

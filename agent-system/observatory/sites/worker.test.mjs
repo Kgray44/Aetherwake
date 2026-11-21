@@ -759,11 +759,12 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
 });
 
 
-test('live telemetry can start after eight Tasks and isolated capacity returns an actionable receipt',async t=>{
+test('verification telemetry cannot exhaust live Task telemetry slots',async t=>{
   const {call}=fixture(t);
   const generated_at=new Date().toISOString();
+  const draft=proposedTask(input,rev);
   async function sync(index,verification) {
-    const record={...proposedTask(input,rev),id:'task_capacity_'+index};
+    const record={...draft,id:'task_capacity_'+index};
     const request={jsonrpc:'2.0',id:index,method:'tools/call',params:{name:'sync_task_telemetry',arguments:{
       task_id:record.id,...(verification?{verification}:{}),change:{base:null,generated_at,records:[record],events:[]},
     }}};
@@ -772,9 +773,14 @@ test('live telemetry can start after eight Tasks and isolated capacity returns a
     assert.equal(data.isError,false);
     return JSON.parse(data.content[0].text);
   }
-  for (let i=1;i<=9;i++) assert.equal((await sync(i)).status,200);
-  for (let i=1;i<=8;i++) assert.equal((await sync(i,namespace)).status,200);
-  assert.deepEqual(await sync(9,namespace),{status:413,error:'Private Task telemetry storage limit reached'});
+  const verificationScopes=[namespace,crypto.randomUUID(),crypto.randomUUID()];
+  for (const scope of verificationScopes) {
+    for (let i=1;i<=8;i++) assert.equal((await sync(i,scope)).status,200);
+    assert.deepEqual(await sync(9,scope),{status:413,error:'Private Task telemetry storage limit reached'});
+  }
+  assert.deepEqual(await sync(1,crypto.randomUUID()),{status:413,error:'Private Task telemetry storage limit reached'});
+  for (let i=1;i<=25;i++) assert.equal((await sync(i)).status,200);
+  assert.equal((await sync(25)).status,200);
 });
 
 test('fabricated passing evidence without an attempt never becomes accepted in the projected UI',async t=>{
