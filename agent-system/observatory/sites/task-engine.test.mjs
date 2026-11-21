@@ -831,6 +831,52 @@ test('hung control report returns at lease expiry without submitting a stale ter
   assert.deepEqual(reports,['heartbeat']);
 });
 
+test('a lost renewal reply is retried inside the lease without interrupting a running turn', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('Transient renewal interruption');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  const workspace=await mkdtemp(join(tmpdir(),'aads-lease-retry-'));
+  claim.attempt.lease_until=Date.now()+3500;
+  t.after(()=>rm(workspace,{force:true,recursive:true}));
+  await mkdir(join(workspace,'.git'));
+  const recovered=Promise.withResolvers();
+  const renewalIds=[];
+  let turns=0;
+  const branch='fixture-lease-retry';
+  const revision='b'.repeat(40);
+  const send=async (request,{signal})=>{
+    if (request.report.type==='heartbeat'&&turns) {
+      renewalIds.push(request.operation_id);
+      if (renewalIds.length===1) return new Promise(()=>{});
+    }
+    signal.throwIfAborted();
+    const result=await call(request,'worker');
+    if (result.status!==200) throw Object.assign(Error(result.body.error),{status:result.status});
+    if (request.report.type==='heartbeat'&&renewalIds.length===2) recovered.resolve();
+    return result.body;
+  };
+  const result=runClaim({claim,send,workspace,interval:15,requestTimeoutMs:60,
+    signal:AbortSignal.timeout(3000),admitStorage:async()=>{},onTelemetryStart:()=>{},
+    identify:async()=>({branch,revision:turns?revision:claim.attempt.revision,dirty:false}),
+    execute:async ({signal,onSession})=>{
+      await onSession('00000000-0000-4000-8000-000000000003');
+      turns++;
+      await Promise.race([recovered.promise,new Promise((_,reject)=>
+        signal.addEventListener('abort',()=>reject(signal.reason),{once:true}))]);
+      signal.throwIfAborted();
+      return {ok:true};
+    },
+  });
+  await result;
+  assert.equal(turns,1);
+  assert.equal(renewalIds[0],renewalIds[1]);
+  const detail=await get(task);
+  assert.equal(detail.attempts.length,1);
+  assert.equal(detail.attempts[0].state,'verifying');
+  assert.equal(detail.attempts[0].candidate_revision,revision);
+});
+
 test('a report aborted during connector thread startup is not sent when startup completes',
   {skip:process.platform==='win32'?'Requires a POSIX executable fixture':false}, async t => {
   const root=await mkdtemp(join(tmpdir(),'aads-control-startup-'));
