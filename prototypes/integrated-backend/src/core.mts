@@ -295,6 +295,7 @@ export class BackendCore {
   private ordinaryAuth=new Map<string,Promise<void>>();
   private ordinaryRenewal:Promise<ProviderConnectionStatus>|null=null;
   private ordinaryController:AbortController|null=null;
+  private readonly ordinaryProviderTransports=new Map<AbortController,number>();
   private ordinaryTask:Promise<Execution>|null=null;
   private ordinaryStatus:ProviderConnectionStatus={contract:PROVIDER_CONNECTION_CONTRACT,providerId:CHATGPT_PLAN_PROVIDER,billingRoute:'chatgpt-plan',state:'unavailable',storageAvailable:false,pending:false,registrationVersion:null,planUsageEnabled:false,inferenceVerified:false,nativeAccountHistory:false,nativeAccountMemory:false,nativeAccountSync:false};
   private ordinaryCatalog:{version:number;boundaryDigest:string;expiresAt:number;models:{id:string;label:string}[]}|null=null;
@@ -989,10 +990,11 @@ export class BackendCore {
     ensure(this.missionSpecialistsInFlight + Number(this.active?.providerId === CHATGPT_PLAN_PROVIDER) < 2, 'mission_planner_busy');
     const catalog = this.ordinaryCatalog!;
     const prepared = prepareResponsesTurn(turn, 8192).review;
+    const controller=new AbortController(),transportSignal=AbortSignal.any([signal,controller.signal]);
     const fence = () => {
       validatePlanningContext?.();
       const activeScope = this.velaContext();
-      ensure(!signal.aborted && this.missionScopeAllowed(scope) && this.ordinaryAvailable() &&
+      ensure(!transportSignal.aborted && this.missionScopeAllowed(scope) && this.ordinaryAvailable() &&
         (!requireActiveWorkspace || activeScope.currentWorkspaceId === scope.workspaceId && activeScope.currentProjectId === scope.projectId) &&
         this.ordinaryCatalog?.boundaryDigest === catalog.boundaryDigest && this.ordinaryCatalog?.version === catalog.version &&
         this.velaRoutingSettingsStamp(this.velaRoutingProfiles(scope)) === assigned.settingsStamp &&
@@ -1001,6 +1003,7 @@ export class BackendCore {
     };
     let admitted = false;
     this.missionSpecialistsInFlight++;
+    this.ordinaryProviderTransports.set(controller,assigned.connectionVersion);
     try {
       const transport = new ResponsesTransport({ ...(this.ordinaryTest ? { fetch: this.ordinaryTest.fetch } : {}),
         limits: { requestBytes: 8192, outputBytes: 2048, timeoutMs: 40_000, streamBytes: 262144 },
@@ -1037,11 +1040,11 @@ export class BackendCore {
           },
         },
       });
-      const result = await transport.turn(turn, signal);
+      const result = await transport.turn(turn, transportSignal);
       if (result.dispatched) this.providerActivity.providerRequests++;
       if (requireActiveWorkspace) fence();
       return result;
-    } finally { this.missionSpecialistsInFlight--; }
+    } finally { this.ordinaryProviderTransports.delete(controller); this.missionSpecialistsInFlight--; }
   }
   private missionPlanningNotes(scope: MissionScope, ids: readonly string[]) {
     ensure(this.historyContextEnabled && this.missionScopeAllowed(scope) && Array.isArray(ids) && ids.length > 0 &&
@@ -5698,7 +5701,12 @@ export class BackendCore {
     }
     this.ordinaryCatalog=null;
     if(input.type==='cancel')await this.ordinaryConnections.cancel(input.attemptId);
-    else if(input.type==='disconnect')await this.ordinaryConnections.disconnect(input.expectedVersion);
+    else if(input.type==='disconnect'){
+      const activeTask=this.active?.providerId===CHATGPT_PLAN_PROVIDER?this.ordinaryTask:null;
+      for(const [controller,version] of this.ordinaryProviderTransports)if(version===input.expectedVersion)controller.abort();
+      await this.ordinaryConnections.disconnect(input.expectedVersion);
+      await activeTask?.catch(()=>{});
+    }
     else await this.ordinaryConnections.refresh(input.expectedVersion);
     return this.refreshOrdinaryStatus();
   }
@@ -6679,6 +6687,7 @@ export class BackendCore {
     };
     let result:TurnResult|undefined;
     try{
+      this.ordinaryProviderTransports.set(controller,p.connectionVersion);
       authority?.signal.addEventListener('abort', cancel, {once:true});
       if (authority?.signal.aborted) cancel();
       const transport=new ResponsesTransport({...(this.ordinaryTest?{fetch:this.ordinaryTest.fetch}:{}),limits:{outputBytes:65536},onEvent,
@@ -6729,6 +6738,7 @@ export class BackendCore {
         throw error;
       }
     } finally {
+      this.ordinaryProviderTransports.delete(controller);
       authority?.signal.removeEventListener('abort', cancel);
       if (ownsTurn()) {
         this.active = null;

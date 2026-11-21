@@ -86,7 +86,7 @@ test('offline: missing lock/stale revision/host swap denied; transaction throw r
 finally {
     f.close();
 } });
-test('offline real process: holder renews without holding canonical write transaction, contender bounded, subsequent writer succeeds', async () => { const f = fixture(); let a: ReturnType<typeof child> | undefined, b: ReturnType<typeof child> | undefined; try {
+test('offline real process: holder renews without holding canonical write transaction, foreign reads and contenders are bounded, subsequent access succeeds', async () => { const f = fixture(); let a: ReturnType<typeof child> | undefined, b: ReturnType<typeof child> | undefined; try {
     await seed(f);
     a = child(f.path, 'hold');
     const holder = a.process;
@@ -100,6 +100,7 @@ test('offline real process: holder renews without holding canonical write transa
     f.db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('unrelated-canonical-write');
     assert.equal(a.process.exitCode, null);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM synthetic_probe WHERE value='holder'").get()!.n, 0);
+    await assert.rejects(f.vault.read('profile'), /auth_lock_busy/);
     b = child(f.path, 'write');
     const denied = await b.result;
     assert.equal(denied.ok, false);
