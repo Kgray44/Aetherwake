@@ -17,6 +17,29 @@ const terminalStates = new Set(['completed', 'failed', 'interrupted', 'cancelled
 const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event',
   'codex_app_server_token_usage_updated', 'codex_app_server_turn_profile']);
 
+export function processHasExited(pid) {
+  if (!Number.isSafeInteger(pid) || pid<=0 || pid>0x7fff_ffff) return false;
+  try { process.kill(pid,0); return false; }
+  catch (error) { return error.code==='ESRCH'; }
+}
+
+export async function readInterruptedClaim(directory, taskId, attemptId) {
+  if (!directory || !claimMarker.test('active-'+attemptId+'.json')) return null;
+  try {
+    if (!(await lstat(directory)).isDirectory() || await realpath(directory)!==directory) return null;
+  } catch(error) { if(error.code==='ENOENT')return null; throw error; }
+  for (const prefix of ['active-', 'interrupted-']) {
+    const path=join(directory,prefix+attemptId+'.json');
+    try {
+      const info=await lstat(path);
+      if (!info.isFile() || info.size>8192) return null;
+      const marker=JSON.parse(await readFile(path,'utf8'));
+      return marker.host===hostname() && marker.taskId===taskId && marker.attemptId===attemptId ? marker : null;
+    } catch(error) { if(error.code!=='ENOENT')throw error; }
+  }
+  return null;
+}
+
 // The marker carries exact local recovery identities without a lease or source contents.
 export async function retainActiveClaim(directory, { task, attempt, recoveryKey }) {
   if (!claimMarker.test('active-'+attempt.id+'.json')) throw Error('Invalid active claim identity');
@@ -36,9 +59,9 @@ export async function retainActiveClaim(directory, { task, attempt, recoveryKey 
   }
   await write(path,marker);
   return {
-    async update({workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,recoveryOperationId,settled}){
+    async update({workspace,branch,sessionId,turnId,providerPid,candidateRevision,terminalOperationId,recoveryOperationId,settled}){
       const details=Object.fromEntries(Object.entries({
-        workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,recoveryOperationId,settled,
+        workspace,branch,sessionId,turnId,providerPid,candidateRevision,terminalOperationId,recoveryOperationId,settled,
       }).filter(([,value])=>value!==undefined));
       const next={...marker,...details,updatedAt:new Date().toISOString()};
       const temporary=path+'.'+randomUUID()+'.tmp';
@@ -64,10 +87,7 @@ export async function reconcileAbandonedClaim({directory,taskId,readTask,recover
     const marker=JSON.parse(await readFile(path,'utf8'));
     if (marker.host!==hostname() || marker.taskId!==taskId || marker.attemptId!==file.name.match(claimMarker)[1] ||
         !revision.test(marker.revision) || !Number.isSafeInteger(marker.pid) || marker.pid<=0) continue;
-    if (marker.settled!==true) {
-      try { process.kill(marker.pid,0); continue; }
-      catch (error) { if (error.code!=='ESRCH') continue; }
-    }
+    if (marker.settled!==true && !processHasExited(marker.pid)) continue;
     const detail=await readTask(taskId);
     const attempt=detail.attempts?.find(item=>item.id===marker.attemptId);
     if (detail.task?.id!==taskId || detail.task.repository!=='Kgray44/Aetherwake' || attempt?.revision!==marker.revision ||
@@ -79,6 +99,12 @@ export async function reconcileAbandonedClaim({directory,taskId,readTask,recover
         spanId,eventId:spanId,kind:'lifecycle',phase:'other',state:'interrupted',occurredAt:attempt.finished_at});
       if(validateTraceEvent(entry).length)throw Error('Invalid abandoned claim recovery event');
       await appendEvent(join(directory,'claimed-execution.journal'),entry);
+      if (!marker.candidateRevision && marker.workspace && marker.sessionId && marker.providerPid) {
+        await rename(path,join(directory,'interrupted-'+attempt.id+'.json')).catch(error=>{
+          if(error.code!=='ENOENT')throw error;
+        });
+        continue;
+      }
     }
     // Retain a verified local candidate until the canonical attempt records
     // that exact revision. This readback never turns a local result into acceptance.

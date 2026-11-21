@@ -545,6 +545,29 @@ test('only the original worker recovery proof can return an expired candidate to
   assert.equal((await call({...heartbeat,operation_id:crypto.randomUUID()},'worker')).status,409);
 });
 
+test('an owner retry carries exact orphaned checkout custody while retaining the clean-checkout default', async t => {
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('Resume interrupted checkout');
+  await command(task,'admit',{executor:'codex'});
+  const recovery_commitment=createHash('sha256').update('a'.repeat(64)).digest('hex');
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID(),recovery_commitment},'worker');
+  const session_id=crypto.randomUUID(), branch='codex/aads-task-interrupted';
+  const report={op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
+    operation_id:crypto.randomUUID(),lease:claim.lease,report:{type:'heartbeat',session_id,branch}};
+  assert.equal((await call(report,'worker')).status,200);
+  advance(61_000);
+  const orphan=await get(task);
+  assert.equal(orphan.attempts[0].state,'orphaned');
+  const claimAgain=()=>call({op:'claim',operation_id:crypto.randomUUID(),conversation_continuation:true},'worker');
+  assert.equal((await claimAgain()).body.claim,null);
+  assert.equal((await command(orphan,'retry',{changed_assumption:'Verify retained process custody.'})).status,200);
+  const resumed=(await claimAgain()).body.claim;
+  assert.equal(resumed.attempt.resume_requires_clean,true);
+  assert.equal(resumed.attempt.resume_session_id,session_id);
+  assert.deepEqual(resumed.interrupted_checkout,{attempt_id:claim.attempt.id,recovery_commitment,branch});
+  assert.equal((await get(task)).attempts.at(-1).recovery_commitment,undefined);
+});
+
 test('the real worker can be killed before its terminal report and reconcile through the Task Engine on Windows', {timeout:20000}, async t => {
   const {call,register,command,get,pin,advance}=setup(t);
   const root=await realpath(await mkdtemp(join(tmpdir(),'aads-terminal-restart-')));
