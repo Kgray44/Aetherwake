@@ -485,6 +485,26 @@ test('attempt details only include events bound to the Task, attempt and revisio
   assert.deepEqual(attemptEvents(attempt,[event,{...event,revision:'stale'}, {...event,task_id:'other'}, {...event,occurred_at:'1'}]),[{...event,occurred_at:'1'},event]);
 });
 
+test('attempt supervision separates the current lease, provider turn and source progress', () => {
+  const attempt={id:'a',task_id:'t',revision:'v',state:'orphaned',lease_until:Date.parse('2026-11-21T19:24:11Z')};
+  const event={attempt_id:'a',task_id:'t',revision:'v'};
+  const traces=[
+    {...event,kind:'development_note',phase:'implementation',occurred_at:'2026-11-21T19:22:07Z'},
+    {...event,kind:'span_end',phase:'implementation',span_id:'codex-a-codex_turn',state:'interrupted',occurred_at:'2026-11-21T19:24:13Z'},
+    {...event,kind:'span_end',phase:'integration',span_id:'codex-a-terminal_reporting',state:'failed',occurred_at:'2026-11-21T19:24:14Z'},
+  ];
+  const heartbeat={attempt_id:'a',kind:'heartbeat',at:'2026-11-21T19:23:11Z'};
+  const audits=[heartbeat,{...heartbeat,attempt_id:'other',at:'2026-11-21T19:24:14Z'},
+    {...heartbeat,target_id:'another-task',at:'2026-11-21T19:24:15Z'},
+    {attempt_id:'a',kind:'lease_expired',at:'2026-11-21T19:24:19Z'}];
+  const {supervision}=attemptJournal(attempt,traces,audits,[]);
+  assert.equal(supervision.lastRenewal,heartbeat.at);
+  assert.equal(supervision.leaseUntil,attempt.lease_until);
+  assert.deepEqual(supervision.provider,{state:'interrupted',at:traces[1].occurred_at});
+  assert.deepEqual(supervision.progress,{label:'Development note',at:traces[0].occurred_at});
+  assert.equal(supervision.recovery,'Reconciliation required');
+});
+
 test('desktop session counters select the latest observed Task reading without summing or attributing it to an attempt', () => {
   const metric={name:'desktop_total_tokens',unit:'tokens',source:'codex_desktop_session_usage',availability:'observed',value:10};
   const event={task_id:'a',occurred_at:'2',measurements:[metric]};

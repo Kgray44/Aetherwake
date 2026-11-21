@@ -437,6 +437,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const evidence = page.getByRole('region', { name: 'Execution and delivery evidence' });
   const attemptPanel=page.locator('#task-attempts');
   await attemptPanel.getByText('Candidate revision',{exact:true}).waitFor();
+  await attemptPanel.getByText('Last lease deadline',{exact:true}).waitFor();
+  await attemptPanel.getByText('Last successful lease renewal',{exact:true}).waitFor();
   const reviewed = evidence.getByRole('link', { name: 'Review the candidate result' });
   assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
   assert.equal(await evidence.getByText(candidate,{exact:true}).count(),1);

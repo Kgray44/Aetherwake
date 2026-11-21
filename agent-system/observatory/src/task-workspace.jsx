@@ -168,6 +168,7 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
   if (!attempts.length) return <p>No execution attempt has been linked to this Task yet.</p>;
   return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt=>{
     const history=attemptJournal(attempt,events,audits,evidence);
+    const {supervision}=history;
     const elapsed=Date.parse(attempt.finished_at)-Date.parse(attempt.started_at);
     const conversation=codexThreadHref(attempt);
     const count=expanded[attempt.id]??8;
@@ -179,6 +180,15 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         <div><dt>Finished</dt><dd>{displayTime(attempt.finished_at)}</dd></div>
         {Number.isFinite(elapsed)&&elapsed>=0&&<div><dt>Elapsed</dt><dd>{(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:3})} s</dd></div>}
         {Number.isFinite(attempt.deadline)&&<div><dt>Attempt deadline</dt><dd>{displayTime(attempt.deadline)}</dd></div>}
+        {supervision.leaseUntil!==null&&<div><dt>{attempt.state==='running'?'Lease deadline':'Last lease deadline'}</dt>
+          <dd>{displayTime(supervision.leaseUntil)}</dd></div>}
+        {supervision.lastRenewal&&<div><dt>Last successful lease renewal</dt>
+          <dd><time dateTime={supervision.lastRenewal}>{displayTime(supervision.lastRenewal)}</time></dd></div>}
+        {supervision.provider&&<div><dt>Last observed Codex turn state</dt>
+          <dd>{labels(supervision.provider.state)} · <time dateTime={supervision.provider.at}>{displayTime(supervision.provider.at)}</time></dd></div>}
+        {supervision.progress&&<div><dt>Last recorded execution progress</dt>
+          <dd>{supervision.progress.label} · <time dateTime={supervision.progress.at}>{displayTime(supervision.progress.at)}</time></dd></div>}
+        {supervision.recovery&&<div><dt>Recovery</dt><dd>{supervision.recovery}</dd></div>}
         <div><dt>Base revision</dt><dd><code>{attempt.revision}</code></dd></div>
         {attempt.candidate_revision&&<div><dt>Candidate revision</dt><dd><code>{attempt.candidate_revision}</code></dd></div>}
         {attempt.checkpoint_revision&&<div><dt>Checkpoint revision</dt><dd><code>{attempt.checkpoint_revision}</code></dd></div>}
@@ -190,7 +200,8 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         <p>Use the same Codex account and session store after the worker has stopped.</p>
         <code>codex resume --include-non-interactive {attempt.session_id}</code>
       </details>}
-      {attempt.failure_diagnosis&&<div className="notice error"><strong>Failure</strong><span>{attempt.failure_diagnosis}</span></div>}
+      {attempt.failure_diagnosis&&<div className="notice error">
+        <strong>{attempt.state==='orphaned'?'Execution interrupted':'Failure'}</strong><span>{attempt.failure_diagnosis}</span></div>}
       {attempt.checkout_diagnostic&&<dl className="github-facts">
         <div><dt>Checkout ID</dt><dd><code>{attempt.task_id}</code></dd></div>
         <div><dt>Stage</dt><dd>{labels(attempt.checkout_diagnostic.stage)}</dd></div>
