@@ -1,6 +1,6 @@
 import { MIMEType } from 'node:util';
 import type { ApiDispatchBinding, ApiFunctionCall, ApiJsonValue, ApiRecoveryReference, ApiRecoveryResult, ApiResponseItem, DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnHttpDiagnostic, TurnInput, TurnResult, WebCitation } from './contracts.mts';
-import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
+import { abortable, boundedJSON, credentialHeaders, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
 import { supportsOrdinaryReasoning, supportsOrdinaryWebSearch } from './model-controls.ts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
@@ -238,21 +238,6 @@ function webSearchEvidence(output: readonly Record<string, unknown>[], streamedT
         offset += (part.text as string).length;
     }
     return { completed, citations };
-}
-function credentialHeaders(credential: NativeCredential, providerId: ProviderId, now: number): Record<string, string> {
-    requireValue(credential.providerId === providerId && text(credential.bearer, 65536) && typeof credential.boundaryDigest === 'string' && /^[a-f0-9]{64}$/.test(credential.boundaryDigest), 'credential_boundary_mismatch');
-    requireValue(credential.expiresAt === undefined || Number.isFinite(credential.expiresAt) && credential.expiresAt > now, 'credential_expired');
-    if (providerId === 'chatgpt-plan-responses')
-        requireValue(credential.kind === 'chatgpt-plan' && credential.scopes?.includes('chatgpt.tokens.use.direct') && !credential.organization && !credential.project, 'chatgpt_plan_grant_required');
-    else
-        requireValue(credential.kind === 'openai-api-key', 'api_billing_route_required');
-    const headers: Record<string, string> = { Authorization: 'Bearer ' + credential.bearer };
-    for (const [key, value] of [['OpenAI-Organization', credential.organization], ['OpenAI-Project', credential.project]] as const)
-        if (value !== undefined) {
-            requireValue(text(value), 'invalid_native_header');
-            headers[key] = value;
-        }
-    return headers;
 }
 function usage(value: unknown): ReportedUsage | undefined {
     if (!record(value) || !['input_tokens', 'output_tokens', 'total_tokens'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0))
