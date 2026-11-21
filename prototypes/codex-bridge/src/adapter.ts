@@ -90,16 +90,19 @@ const methods = ["account/read", "model/list", "thread/start", "thread/resume", 
 const allThreadSources = ["cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown"] as const;
 const approvals = new Set(["item/commandExecution/requestApproval", "item/fileChange/requestApproval"]);
 const terminal = new Set(["turn/completed", "turn/failed"]);
+// Twice the transport's 4 MiB line cap keeps one valid envelope retainable while bounding the ring.
+export const CODEX_EVENT_RETENTION_LIMITS = Object.freeze({ events: 512, bytes: 8 * 1024 * 1024 });
 
 export class CodexAdapter extends EventEmitter implements ProviderAdapter {
   readonly provider = "codex-app-server";
   private transport?: JsonlTransport;
   private sequence = 0;
   private droppedEvents = 0;
+  private retainedEventBytes = 0;
   private readonly activeTurns = new Map<string, { threadId: string; started: boolean }>();
   private approvalHandler?: ServerRequestHandler;
   private readonly events: EventEnvelope[] = [];
-  private readonly maxEvents = 512;
+  private readonly eventBytes: number[] = [];
   private readonly executable: string;
   private readonly args: string[];
   private readonly experimentalApi:boolean;
@@ -404,8 +407,15 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     const providerTime = typeof turn?.completedAt === "number" ? turn.completedAt : typeof turn?.startedAt === "number" ? turn.startedAt : null;
     const status = terminal.has(method) && typeof turn?.status === "string" ? turn.status : null;
     const event: EventEnvelope = { schemaVersion: 1, eventId: randomUUID(), sequence: ++this.sequence, provider: "codex-app-server", providerThreadId, providerTurnId, method, observedAt: new Date().toISOString(), observedAtSource: "bridge-clock", providerTime, providerTimeSource: providerTime === null ? null : "turn.timestamp.unix-seconds", evidence, terminalStatus: status, payload: params };
+    const bytes = Buffer.byteLength(JSON.stringify(event));
     this.events.push(event);
-    if (this.events.length > this.maxEvents) { this.events.shift(); this.droppedEvents++; }
+    this.eventBytes.push(bytes);
+    this.retainedEventBytes += bytes;
+    while (this.events.length > CODEX_EVENT_RETENTION_LIMITS.events || this.retainedEventBytes > CODEX_EVENT_RETENTION_LIMITS.bytes) {
+      this.events.shift();
+      this.retainedEventBytes -= this.eventBytes.shift() ?? 0;
+      this.droppedEvents++;
+    }
     if (providerTurnId) {
       const active = this.activeTurns.get(providerTurnId);
       if (active && active.threadId === providerThreadId) {

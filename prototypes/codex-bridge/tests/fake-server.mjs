@@ -11,7 +11,14 @@ const session = (id = "fixture-thread", overrides = {}) => ({ thread: { id, fork
 lines.on("line", line => {
   const message = JSON.parse(line);
   if (message.method === "initialize") { send({ id: message.id, result: { platformFamily: "test" } }); return; }
-  if (message.method === "initialized") { initialized = true; return; }
+  if (message.method === "initialized") {
+    initialized = true;
+    if (mode === "retention-pressure") {
+      const blob = "x".repeat(3 * 1024 * 1024);
+      for (let index = 0; index < 3; index++) send({ method: `fixture/unknown-${index}`, params: { blob } });
+    }
+    return;
+  }
   if (!initialized || typeof message.id !== "number") return;
   if (message.method === "account/read") { send({ id: message.id, result: { account: mode === "no-auth" ? null : { type: "chatgpt" }, requiresOpenaiAuth: true } }); return; }
   if (message.method === "model/list") { send({ id: message.id, result: { data: [{ id: "fixture-model", displayName: "Fixture", hidden: false }], nextCursor: null } }); return; }
