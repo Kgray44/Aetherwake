@@ -9,10 +9,11 @@ const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
 const timeoutMs = 8000;
 const startupTimeoutMs = 180_000;
 
-export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex' } = {}) {
+export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex',
+  spawnProcess = spawn } = {}) {
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
-  const child = spawn(executable, ['app-server','--listen','stdio://',
+  const child = spawnProcess(executable, ['app-server','--listen','stdio://',
     '-c','sandbox_workspace_write.network_access=false','-c','sandbox_workspace_write.writable_roots=[]',
     '-c','sandbox_workspace_write.exclude_tmpdir_env_var=true','-c','sandbox_workspace_write.exclude_slash_tmp=true',
   ], {
@@ -93,9 +94,16 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
     await onSession(id,identity);
     runSignal.throwIfAborted();
-    let turnId, usage, finish, pendingUsage, usageWrite;
+    let turnId, usage, finish, usageWrite, publishedUsage;
+    const earlyTurns = new Map();
     let lastSampleAt = -Infinity, samples = 0;
     let noteWrites=Promise.resolve();
+    async function publishUsage(total) {
+      try {
+        await onUsageSnapshot(total,{sessionId:id,occurredAt:new Date().toISOString()});
+        publishedUsage=total;
+      } catch { /* Telemetry delivery cannot decide the execution result. */ }
+    }
     function observeUsage(params) {
       if (params.turnId!==turnId) return;
       const total=params.tokenUsage?.total;
@@ -107,9 +115,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (!onUsageSnapshot||!changed||usageWrite||samples>=16||now-lastSampleAt<15_000) return;
       lastSampleAt=now;
       samples++;
-      const occurredAt=new Date().toISOString();
-      usageWrite=Promise.resolve().then(()=>onUsageSnapshot(total,{sessionId:id,occurredAt}))
-        .catch(()=>{}).finally(()=>{usageWrite=undefined;});
+      usageWrite=publishUsage(total).finally(()=>{usageWrite=undefined;});
     }
     const completion=new Promise(resolve=>{finish=resolve;});
     const abort=()=>{
@@ -120,9 +126,23 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       }
     };
     threadListeners.set(id,(method,params)=>{
-      if (method==='thread/tokenUsage/updated'&&!resumeSessionId) {
-        if (turnId) observeUsage(params);
-        else pendingUsage=params;
+      const usageUpdate=method==='thread/tokenUsage/updated'&&!resumeSessionId;
+      const completionUpdate=method==='turn/completed';
+      if (usageUpdate||completionUpdate) {
+        const noticeId=usageUpdate?params.turnId:params.turn?.id;
+        if (!identifier(noticeId)) return;
+        if (!turnId) {
+          if (!earlyTurns.has(noticeId)&&earlyTurns.size>=32) return;
+          const early=earlyTurns.get(noticeId)??{};
+          if (usageUpdate) {
+            const value=params.tokenUsage?.total?.totalTokens;
+            if (Number.isSafeInteger(value)&&value>=(early.usage?.tokenUsage.total.totalTokens??0)) early.usage=params;
+          } else early.status=params.turn.status;
+          earlyTurns.set(noticeId,early);
+        } else if (noticeId===turnId) {
+          if (usageUpdate) observeUsage(params);
+          else finish(params.turn.status);
+        }
       }
       if (onDevelopmentNote&&method==='item/completed'&&params.item?.type==='agentMessage'&&
           turnId&&params.turnId===turnId&&typeof params.item.id==='string') {
@@ -133,7 +153,6 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
           noteWrites=noteWrites.then(()=>onDevelopmentNote(itemId,note,observedAt)).catch(()=>{});
         }
       }
-      if (method==='turn/completed') finish(params.turn?.status);
       if (method==='disconnected') finish('disconnected');
     });
     runSignal.addEventListener('abort',abort,{once:true});
@@ -141,13 +160,22 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       runSignal.throwIfAborted();
       const turn=await rpc('turn/start',{threadId:id,input:[{type:'text',text:prompt}]},startupTimeoutMs);
       turnId=turn.turn.id;
+      if (!identifier(turnId)) throw Error('App Server turn identity was not confirmed');
+      const early=earlyTurns.get(turnId);
+      earlyTurns.clear();
+      if (early?.usage) observeUsage(early.usage);
+      if (early?.status) finish(early.status);
       await onTurnStarted?.();
-      if (pendingUsage) observeUsage(pendingUsage);
       if (runSignal.aborted) abort();
       const status=await completion;
       await onTurnFinished?.(status);
       await noteWrites;
       await usageWrite;
+      // Preserve the last observed lower bound on unsuccessful fresh turns even
+      // when the regular progress cadence suppressed their final notice.
+      if (status!=='completed'&&onUsageSnapshot&&usage&&JSON.stringify(usage)!==JSON.stringify(publishedUsage)) {
+        await publishUsage(usage);
+      }
       return {status,usage,sessionId:id};
     } finally {
       runSignal.removeEventListener('abort',abort);

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { createInterface } from 'node:readline';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,37 +15,107 @@ import { reconstructAttempts } from '../scripts/agent/record-journal.mjs';
 import { sanitizeExport } from '../scripts/agent/telemetry-export.mjs';
 import { observeCodexStream } from '../scripts/agent/provider-events.mjs';
 import { openObservatoryConnector } from '../scripts/agent/observatory-connector.mjs';
+import { checkoutIdentity } from '../scripts/agent/observatory-task-worker.mjs';
+import { reconcileAbandonedClaim } from '../scripts/agent/claim-telemetry.mjs';
+import { realpath } from 'node:fs/promises';
+
+test('forced worker termination preserves a recoverable claim until canonical orphan reconciliation', async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'aads-dead-worker-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const task={id:'task_00000000-0000-4000-8000-000000000001',repository:'Kgray44/Aetherwake'};
+  const attempt={id:'attempt_00000000-0000-4000-8000-000000000002',revision:'a'.repeat(40),
+    session_id:'00000000-0000-4000-8000-000000000003',state:'running'};
+  const module=new URL('../scripts/agent/claim-telemetry.mjs',import.meta.url).href;
+  const code='const {retainActiveClaim}=await import('+JSON.stringify(module)+');'+
+    'await retainActiveClaim('+JSON.stringify(directory)+','+JSON.stringify({task,attempt})+');'+
+    'console.log("ready");setInterval(()=>{},1000);';
+  const worker=spawn(process.execPath,['--input-type=module','--eval',code],{stdio:['ignore','pipe','pipe'],windowsHide:true});
+  t.after(()=>{if(worker.exitCode===null&&!worker.signalCode)worker.kill();});
+  const ended=once(worker,'exit');
+  const started=once(worker.stdout,'data').then(([output])=>String(output));
+  assert.match(await Promise.race([started,ended.then(()=>{throw Error('Worker fixture exited before its durable claim');})]),/ready/);
+  let reads=0;
+  const recovery={directory,taskId:task.id,readTask:async()=>{reads++;return {task,attempts:[attempt]};}};
+  await reconcileAbandonedClaim(recovery);
+  assert.equal(reads,0);
+  worker.kill('SIGKILL');
+  await ended;
+  await reconcileAbandonedClaim(recovery);
+  assert.equal(reads,1);
+  attempt.state='orphaned';
+  attempt.finished_at='2026-11-20T23:51:42.040Z';
+  await reconcileAbandonedClaim(recovery);
+  await reconcileAbandonedClaim(recovery);
+  const entries=await readJournal(join(directory,'claimed-execution.journal'));
+  assert.deepEqual(entries.map(entry=>[entry.state,entry.attempt_id,entry.session_id,entry.occurred_at]),
+    [['interrupted',attempt.id,attempt.session_id,attempt.finished_at]]);
+});
 
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
 const stream = chunks => Readable.from(chunks.map(chunk => Buffer.from(chunk)));
 const line = event => JSON.stringify(event) + '\n';
 
-test('App Server delivers a scoped live sample before the turn ends and preserves the newest cumulative total',async t=>{
-  const cwd=await mkdtemp(join(tmpdir(),'aads-app-server-usage-'));
-  t.after(()=>rm(cwd,{recursive:true,force:true,maxRetries:10,retryDelay:50}));
+test('checkout readback batches compatible queries and falls back on ambiguous records',async()=>{
+  const cwd=await realpath(process.cwd());
+  const root=join(cwd,'.git');
+  const base='0'.repeat(40), revision='1'.repeat(40);
+  const branch='codex/aads-task-fixture';
+  const answers=new Map([
+    ['rev-parse --show-toplevel',cwd],['rev-parse HEAD',revision],['rev-parse --absolute-git-dir',root],
+    ['remote get-url origin','https://github.com/Kgray44/Aetherwake.git'],['symbolic-ref --short HEAD',branch],
+    ['status --porcelain --untracked-files=normal','?? work'],['merge-base --is-ancestor '+base+' '+revision,''],
+  ]);
+  async function read(fastReadback, batch, override = {}) {
+    let calls=0;
+    const identity=await checkoutIdentity(cwd,base,{fastReadback,readGit:async(path,...args)=>{
+      assert.equal(path,cwd);
+      ++calls;
+      const key=args.join(' ');
+      if (key==='rev-parse --show-toplevel HEAD --absolute-git-dir') return batch;
+      assert.ok(answers.has(key),key);
+      return override[key]??answers.get(key);
+    }});
+    return {identity,calls};
+  }
+  const baseline=await read(false);
+  assert.deepEqual(baseline,{identity:{branch,revision,dirty:true},calls:7});
+  assert.deepEqual(await read(true,[cwd,revision,root].join('\r\n')),{identity:baseline.identity,calls:5});
+  assert.deepEqual(await read(true,'ambiguous'),{identity:baseline.identity,calls:8});
+  await assert.rejects(read(true,[cwd,revision,root].join('\n'),{'remote get-url origin':'https://example.com/other'}),/dedicated Aetherwake/);
+});
+
+function fixtureAppServer(status) {
+  const child = Object.assign(new EventEmitter(),{stdin:new PassThrough(),stdout:new PassThrough()});
+  const requests=createInterface({input:child.stdin});
+  child.kill=()=>{requests.close();child.stdout.end();};
   const session='11111111-1111-4111-8111-111111111111';
-  await writeFile(join(cwd,'app-server'),`
-    const {createInterface}=require('node:readline');
-    const threadId=${JSON.stringify(session)}, turnId='current';
-    const send=value=>console.log(JSON.stringify(value));
+    const threadId=session, turnId='current';
+    const send=value=>child.stdout.write(line(value));
     const notice=(method,params)=>send({method,params:{threadId,...params}});
     const usage=(totalTokens,id=turnId)=>notice('thread/tokenUsage/updated',{turnId:id,tokenUsage:{total:{totalTokens}}});
-    createInterface({input:process.stdin}).on('line',line=>{
+    requests.on('line',line=>{
       const {method,id,params}=JSON.parse(line);
       if (method==='initialize') send({id,result:{}});
       if (method==='thread/start') send({id,result:{thread:{id:threadId},sandbox:{type:'workspaceWrite',
         networkAccess:false,writableRoots:[params.cwd]}}});
       if (method==='turn/start') {
+        notice('turn/completed',{turn:{id:'unrelated',status:'failed'}});
         usage(100);
+        usage(400,'unrelated');
         send({id,result:{turn:{id:turnId}}});
         setTimeout(()=>{
           usage(400,'unrelated'); usage(200); usage(125);
-          notice('turn/completed',{turn:{id:turnId,status:'completed'}});
+          notice('turn/completed',{turn:{id:turnId,status}});
         },30);
       }
     });
-  `);
-  const connector=openObservatoryConnector({executable:process.execPath,cwd});
+  return {session,child};
+}
+
+test('App Server keeps early usage for the exact turn and ignores unrelated completion',async()=>{
+  const {session,child}=fixtureAppServer('completed');
+  const cwd=process.cwd();
+  const connector=openObservatoryConnector({cwd,spawnProcess:()=>child});
   const observations=[];
   try {
     const result=await connector.runWorkspaceTurn({cwd,prompt:'Fixture',signal:AbortSignal.timeout(5000),onSession:()=>{},
@@ -52,8 +123,22 @@ test('App Server delivers a scoped live sample before the turn ends and preserve
       onTurnFinished:()=>observations.push('finished')});
     assert.deepEqual(observations.map(value=>Array.isArray(value)?value.slice(0,2):value),[[100,session],'finished']);
     assert.ok(Number.isFinite(observations[0][2]));
+    assert.equal(result.status,'completed');
     assert.equal(result.usage.totalTokens,200);
     assert.equal(result.sessionId,session);
+  } finally {connector.close();}
+});
+
+test('a failed fresh App Server turn publishes its last observed usage as progress',async()=>{
+  const {child}=fixtureAppServer('failed');
+  const cwd=process.cwd();
+  const connector=openObservatoryConnector({cwd,spawnProcess:()=>child});
+  const observed=[];
+  try {
+    const result=await connector.runWorkspaceTurn({cwd,prompt:'Fixture',signal:AbortSignal.timeout(5000),
+      onSession:()=>{},onUsageSnapshot:usage=>observed.push(usage.totalTokens)});
+    assert.equal(result.status,'failed');
+    assert.deepEqual(observed,[100,200]);
   } finally {connector.close();}
 });
 

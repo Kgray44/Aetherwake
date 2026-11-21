@@ -59,8 +59,8 @@ export function buildGovernanceIndex(config,registry,readFile=read,exists=p=>exi
   return {documents,requirements,registry};
 }
 
-function relevance(section,query) {
-  const q=terms(query);if(!q.length)return 0;
+function relevance(section,query,q=terms(query)) {
+  if(!q.length)return 0;
   const heading=normalize(section.title),body=normalize(section.text);
   let score=0;
   for(const token of q) {
@@ -87,7 +87,8 @@ function unique(arr) {return [...new Set(arr)];}
  */
 export function buildContext(options) {
   if(!options || typeof options!=="object" || Array.isArray(options)) throw new Error("buildContext requires an options object");
-  const {config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false,policies=DEFAULT_POLICIES}=options;
+  const {config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false,
+    policies=DEFAULT_POLICIES,fastAssembly=false}=options;
   if(!config || typeof config!=="object" || Array.isArray(config)) throw new Error("buildContext requires a routing config object");
   if(!(registry instanceof Map)) throw new Error("buildContext requires a governance registry Map");
   if(!index || !Array.isArray(index.documents) || !(index.requirements instanceof Map)) throw new Error("buildContext requires a governance index from buildGovernanceIndex()");
@@ -101,6 +102,7 @@ export function buildContext(options) {
   if(!Number.isSafeInteger(maxSections) || maxSections<1) throw new Error("maxSections must be a positive safe integer");
   if(budgetTokens!==null && (!Number.isSafeInteger(budgetTokens) || budgetTokens<1)) throw new Error("budgetTokens must be a positive safe integer or null");
   if(typeof forceFull!=="boolean") throw new Error("forceFull must be a boolean");
+  if(typeof fastAssembly!=="boolean") throw new Error("fastAssembly must be a boolean");
   if(!policies || typeof policies!=="object" || policies.schemaVersion!==2 || !policies.dependencies || typeof policies.dependencies!=="object") throw new Error("Invalid governance coverage policy");
   if(!task.trim()&&!paths.length&&!requiredIds.length)throw new Error("Provide --task, --path, or --requirement");
   const exists=sourceExists;
@@ -140,6 +142,7 @@ export function buildContext(options) {
   const scopeNeedsReview=primaryDomains.length===0;
   if(scopeNeedsReview)warnings.push("No primary subsystem charter identified. Do not treat the selected context as sufficient without reviewing the task scope and applicable governance.");
 
+  const queryTerms=fastAssembly ? terms(task) : undefined;
   for(const [id,entry] of [...chosen].sort((a,b)=>a[0].localeCompare(b[0]))) {
     const doc=entry.document;
     if(!doc?.available){missing.push({id,path:doc?.path,reason:["source unavailable"]});continue;}
@@ -150,7 +153,7 @@ export function buildContext(options) {
     const pinned=new Set(requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section));
     // Source paths select the charter; only task language ranks its sections.
     // Path category names otherwise create spurious low-confidence matches.
-    const scored=doc.sections.map(s=>({section:s,score:relevance(s,task)}))
+    const scored=doc.sections.map(s=>({section:s,score:relevance(s,task,queryTerms)}))
       .sort((a,b)=>b.score-a.score||a.section.ordinal-b.section.ordinal);
     const positive=scored.filter(x=>x.score>0);
     // Fallback to full charter if no section can be responsibly selected.
@@ -170,8 +173,23 @@ export function buildContext(options) {
   // One-hop normative dependencies. Parse references only in selected normative
   // lines, not introduction prose, metadata lists, or arbitrary hyperlinks.
   const selectedReqIds=new Set();
-  for(const x of selected)for(const req of index.requirements.values()) {
-    if(req.charter===x.id&&(x.mode!=="section"||x.sections.includes(req.section)))selectedReqIds.add(req.id);
+  if(fastAssembly) {
+    const fullCharters=new Set(), selectedSections=new Map();
+    for(const entry of selected) {
+      if(entry.mode!=="section") fullCharters.add(entry.id);
+      else {
+        const sections=selectedSections.get(entry.id) ?? new Set();
+        for(const ordinal of entry.sections) sections.add(ordinal);
+        selectedSections.set(entry.id,sections);
+      }
+    }
+    for(const req of index.requirements.values()) {
+      if(fullCharters.has(req.charter)||selectedSections.get(req.charter)?.has(req.section)) selectedReqIds.add(req.id);
+    }
+  } else {
+    for(const x of selected)for(const req of index.requirements.values()) {
+      if(req.charter===x.id&&(x.mode!=="section"||x.sections.includes(req.section)))selectedReqIds.add(req.id);
+    }
   }
   // GENERAL COVERAGE INVARIANT: an applicable charter's normative rules do
   // not disappear because their section ranked below the top-N. Attach their
@@ -320,7 +338,8 @@ function run(argv) {
     console.log(JSON.stringify({schemaVersion:2,documents:docs,requirementCount:index.requirements.size},null,2));return;
   }
   const {task,paths,requiredIds,maxSections,budgetTokens,forceFull}=a;
-  const result=buildContext({config,registry,index,task,paths,requiredIds,maxSections,budgetTokens,forceFull});
+  const result=buildContext({config,registry,index,task,paths,requiredIds,maxSections,budgetTokens,forceFull,
+    fastAssembly:process.env.AADS_GOVERNANCE_FAST_ASSEMBLY==='1'});
   console.log(a.json ? JSON.stringify(result,null,2) : a.compact ? formatCompactContext(result) : formatContext(result));
   if(result.coverage.missingRequired.length)process.exitCode=3;
 }

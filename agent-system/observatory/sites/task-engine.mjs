@@ -210,7 +210,11 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
       return failure(400, 'A changed assumption is required before retrying');
     }
-    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: action.changed_assumption.trim(),
+    const assumption=action.changed_assumption.trim();
+    if (lifecycle.attempts.at(-1)?.state==='orphaned' && assumption===lifecycle.changed_assumption) {
+      return failure(409, 'This is the previous retry assumption. Reconcile the interrupted attempt and record what changed.');
+    }
+    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: assumption,
       resume_attempt_id:lifecycle.attempts.findLast(item=>item.session_id)?.id } };
   }
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {

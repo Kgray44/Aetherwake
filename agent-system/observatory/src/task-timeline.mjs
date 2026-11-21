@@ -17,7 +17,7 @@ const workerStages = {
   worker_initialization:'Worker initialization', checkout_provisioning:'Checkout preparation',
   checkout_fetch:'Fetch pinned revision', checkout_materialization:'Materialize checkout',
   checkout_validation:'Validate checkout', candidate_git_verification:'Verify candidate revision',
-  codex_turn:'Codex work',
+  codex_turn:'Codex work', worker_exit_recovery:'Abandoned worker recovered',
   candidate_submission:'Submit candidate', terminal_reporting:'Report terminal outcome', checkout_lock_release:'Release checkout lock',
 };
 
@@ -40,14 +40,17 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
 export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) {
   if (!attempt || ['admitted','queued','ready','scheduled','blocked','paused'].includes(state)) return null;
   if (state==='failed'&&(attempt.state==='failed'||attempt.state==='blocked'||attempt.failure||attempt.failure_diagnosis)) {
+    const recovered=events.find(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&event.revision===attempt.revision&&
+      event.kind==='lifecycle'&&event.span_id==='codex-'+attempt.id+'-worker_exit_recovery');
     const interrupted = events.filter(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&
       event.revision===attempt.revision&&event.kind==='span_end'&&event.span_id==='codex-'+attempt.id+'-codex_turn'&&
       event.state==='interrupted').sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at))[0];
     const diagnosis=attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.';
     return {
-      title:interrupted?'Codex turn interrupted':'Attempt '+attempt.attempt_number+' failed',tone:'error',
-      at:interrupted?.occurred_at??attempt.finished_at,
-      description:interrupted?'The execution trace recorded the interruption. Task Engine outcome: '+diagnosis:diagnosis,
+      title:recovered?'Worker exited without a terminal report':interrupted?'Codex turn interrupted':'Attempt '+attempt.attempt_number+' failed',tone:'error',
+      at:recovered?.occurred_at??interrupted?.occurred_at??attempt.finished_at,
+      description:recovered?'A later worker confirmed the original process was gone. The exit trigger is unknown. Reconcile the preserved checkout before retrying.':
+        interrupted?'The execution trace recorded the interruption. Task Engine outcome: '+diagnosis:diagnosis,
     };
   }
   if (!activeExecution.has(state)) {
