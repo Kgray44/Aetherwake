@@ -221,6 +221,101 @@ test('scope denial skips the original body; shared reviewed knowledge never gran
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })); const before = f.calls.decrypted; f.denied.add(JSON.stringify(ordinary)); const context = f.service.previewContext(request({ assistant: 'vela', sharedFactIds: [value.id] })); assert.equal(context.items.length, 0); assert(context.omissions.some(item => item.reason === 'unavailable')); assert.equal(f.calls.decrypted - before, 2, 'only privacy policy and selected fact, never denied original body'); } finally { f.close(); }
 });
 
+test('a current project decision gets scanned before old facts regardless of its ID', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const records = Array.from({ length: 12 }, () => f.service.reviewFact(fact(undefined, { scope })));
+    const laterId = records.sort((a, b) => a.id.localeCompare(b.id)).at(-1)!;
+    const updated = f.service.editFact({ id: laterId.id, expectedVersion: laterId.version,
+      replacement: fact(undefined, { scope, text: 'Current synthetic project decision.', keywords: ['quartz'] }) });
+    f.restart();
+    const preview = f.service.previewContext(request({ projectId: 'p1', query: 'Which quartz?', maxScan: 1 }));
+    assert.deepEqual(preview.items.map(item => [item.factId, item.version]), [[updated.id, updated.version]]);
+    assert.deepEqual(preview.omissions, [{ reason: 'scan-limit', count: 11 }]);
+  } finally { f.close(); }
+});
+
+test('a long-running project can recall an older decision after restart within the bounded miss scan', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const older = f.service.reviewFact(fact(undefined, {
+      scope, text: 'Use the synthetic chalcedony relay in the final prototype.', keywords: ['chalcedony'],
+    }));
+    for (let i = 0; i < 129; i++) f.service.reviewFact(fact(undefined, {
+      scope, text: 'Synthetic maintenance interval for fixture ' + i, keywords: ['maintenance'],
+    }));
+    f.restart();
+    const recentQuery = request({ projectId: 'p1', query: 'Which maintenance interval?' });
+    const before = f.calls.decrypted;
+    const recent = f.service.previewContext(recentQuery);
+    assert(recent.items.length > 0);
+    assert.equal(f.calls.decrypted - before, 129, 'policy and the initial 128 facts only');
+    const query = request({ projectId: 'p1', query: 'Which chalcedony relay?' });
+    assert.deepEqual(f.service.previewContext({ ...query, maxScan: 128 }).items, []);
+    const result = f.service.previewContext(query);
+    assert.deepEqual(result.items.map(item => item.factId), [older.id]);
+    const multipleNeeds = { ...recentQuery, evidenceQueries: ['maintenance interval', 'chalcedony relay'], maxItems: 2 };
+    const expanded = f.service.previewContext(multipleNeeds);
+    assert.equal(expanded.items.length, 2);
+    assert.ok(expanded.items.some(item => item.factId === older.id), 'a recent match must not hide an older evidence need');
+    assert.equal(f.service.previewContext({ ...multipleNeeds, maxScan: 128 }).items.some(item => item.factId === older.id), false);
+    assert.equal(f.service.previewContext({ ...multipleNeeds, projectId: 'p2' }).items.length, 0);
+    assert.equal(f.service.previewContext({ ...query, projectId: 'p2' }).items.length, 0);
+    assert.equal(f.service.previewContext({ ...query, query: 'Unrelated photography' }).items.length, 0);
+    f.service.revoke({ id: older.id, expectedVersion: older.version });
+    assert.deepEqual(f.service.previewContext(query).items, []);
+    assert.throws(() => f.service.validateContext(result, query), /stale_personal_context|personal_record_unavailable/);
+  } finally { f.close(); }
+});
+
+test('reviewed fact text supports bounded recall when search terms omit the wording', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const saved = f.service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' },
+      text: 'Keep the quartz relay as the primary circuit.', keywords: ['hardware'] }));
+    const competing = f.service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' },
+      text: 'Use the graphite relay as the secondary circuit.', keywords: ['graphite'] }));
+    const inProject = { projectId: 'p1', query: 'What did we decide for the quartz relay?' };
+    assert.deepEqual(f.service.previewContext(request(inProject)).items.map(item => item.factId), [saved.id]);
+    assert.equal(f.service.previewContext(request({ ...inProject, projectId: 'p2' })).items.length, 0);
+    assert.equal(f.service.previewContext(request({ ...inProject, query: 'What did we use?' })).items.length, 0);
+    assert.deepEqual(f.service.previewContext(request({ ...inProject, query: 'Compare graphite relay circuit' })).items
+      .map(item => item.factId), [competing.id, saved.id]);
+    f.service.revoke({ id: saved.id, expectedVersion: saved.version });
+    assert.equal(f.service.previewContext(request(inProject)).items.length, 0);
+  } finally { f.close(); }
+});
+
+test('exact source anchors recall a project fact without keyword overlap and cannot cross scope', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const anchor = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1' } as const;
+    const source = { ...anchor, version: '1', contentDigest: 'a'.repeat(64) };
+    const proof = { ...source, projectId: 'p1', role: 'user' as const, sensitive: false };
+    let present = true;
+    const service = new PersonalContextService({ ...f.options, host: { ...f.host, resolveConversationSource: () => present ? proof : null } });
+    const value = service.reviewFact(fact(undefined, { source, scope: { kind: 'project', id: 'p1' } }));
+    for (let index = 0; index < 16; index++) service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' } }));
+    const input = request({ projectId: 'p1', query: 'What did we settle on?', maxScan: 1 });
+    assert.deepEqual(service.previewContext(input).items, []);
+    const anchored = { ...input, sourceAnchors: [anchor] };
+    const preview = service.previewContext(anchored);
+    assert.deepEqual(preview.items.map(item => item.factId), [value.id]);
+    assert.throws(() => service.validateContext(preview, input), /stale_personal_context/);
+    assert.throws(() => service.previewContext({ ...anchored, sourceAnchors: [anchor, anchor] }), /invalid_context_request/);
+    assert.deepEqual(service.previewContext({ ...anchored, projectId: 'p2' }).items, []);
+    present = false;
+    assert.throws(() => service.validateContext(preview, anchored), /stale_personal_context/);
+    assert.deepEqual(service.previewContext(anchored).items, []);
+  } finally { f.close(); }
+});
+
 test('reviewed conversation memory travels within its project and stops recalling a removed source', () => {
   const f = fixture();
   try {
@@ -275,6 +370,44 @@ test('reviewed conversation memory travels within its project and stops recallin
   } finally { f.close(); }
 });
 
+test('erasing a conversation source removes corrections that inherited its memory lineage', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const source = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1', version: '1', contentDigest: 'a'.repeat(64) } as const;
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const host: PersonalContextHost = { ...f.host, resolveConversationSource: () => ({ ...source,
+      role: 'user', sensitive: false, projectId: scope.id }) };
+    const memory = new PersonalContextService({ ...f.options, host });
+    const first = memory.reviewFact(fact(undefined, { scope, source }));
+    const { replacement: second } = memory.correctFact({ id: first.id, expectedVersion: first.version, replacement: fact(undefined, { scope }) });
+    const { replacement: third } = memory.correctFact({ id: second.id, expectedVersion: second.version, replacement: fact(undefined, { scope }) });
+    const independent = memory.reviewFact(fact(undefined, { scope }));
+    const anchor = { kind: source.kind, conversationId: source.conversationId, messageId: source.messageId };
+    const anchored = memory.previewContext(request({ projectId: scope.id, query: 'What was agreed?', sourceAnchors: [anchor] }));
+    assert.deepEqual(anchored.items, []);
+    const query = request({ projectId: scope.id });
+    const preview = memory.previewContext(query);
+    assert.ok(preview.items.some(item => item.factId === third.id));
+    f.denied.add('record.delete');
+    assert.throws(() => memory.eraseConversationSource(anchor), /personal_context_not_authorized/);
+    assert.doesNotThrow(() => memory.validateContext(preview, query));
+    f.denied.delete('record.delete');
+    // Recreate the pre-repair on-disk state without rewriting protected revisions.
+    f.db.prepare('DELETE FROM personal_context_conversation_sources WHERE dependent IN (?,?)').run(second.id, third.id);
+    f.db.exec('DROP TABLE IF EXISTS personal_context_lineage_repair');
+    assert.throws(() => PersonalContextService.eraseExistingConversationSource(f.options, anchor), /personal_context_lineage_repair_required/);
+    const lockedCrypto = { ...f.options.crypto, available: () => false };
+    assert.throws(() => new PersonalContextService({ ...f.options, host, crypto: lockedCrypto }), /private_crypto_unavailable/);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='personal_context_lineage_repair'").get()?.n, 0);
+    const restored = new PersonalContextService({ ...f.options, host });
+    assert.doesNotThrow(() => restored.validateContext(preview, query));
+    f.lock();
+    assert.deepEqual(new Set(restored.eraseConversationSource(anchor).deleted.map(row => row.id)), new Set([first.id, second.id, third.id]));
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM personal_context_revisions WHERE id=?').get(independent.id)?.n, 1);
+  } finally { f.close(); }
+});
+
 test('deletion requires every dependent host authorization and can remove encrypted data while the key is unavailable', () => {
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })), before = f.counts(); f.denied.add(JSON.stringify(shared)); assert.throws(() => f.service.hardDelete({ id: source.id, expectedVersion: 1 }), /personal_context_not_authorized/); assert.deepEqual(f.counts(), before); f.denied.clear(); f.lock(); assert.deepEqual(new Set(f.service.hardDelete({ id: source.id, expectedVersion: 1 }).deleted.map(item => item.id)), new Set([source.id, value.id])); assert.equal(f.counts().revisions, 1); } finally { f.close(); }
 });
@@ -285,4 +418,19 @@ test('repeated reviewed facts reuse one bounded source read, and revision capaci
 
 test('unknown encrypted envelope versions reject without resetting retained data, and read transactions cannot switch databases', () => {
   const f = fixture(), wrong = new DatabaseSync(':memory:'); try { f.enable(); const value = f.service.reviewFact(fact()), purpose = 'aerynth.personal-context/1:' + JSON.stringify(['synthetic:owner', value.id, 1]), row = f.db.prepare('SELECT cipher FROM personal_context_revisions WHERE id=?').get(value.id)!, envelope = JSON.parse(new TextDecoder().decode(f.options.crypto.decrypt(row.cipher as Uint8Array, purpose))); envelope.schemaVersion = 99; const cipher = f.options.crypto.encrypt(new TextEncoder().encode(JSON.stringify(envelope)), purpose); f.db.prepare('UPDATE personal_context_revisions SET cipher=? WHERE id=?').run(cipher, value.id); const before = f.counts(); assert.throws(() => f.service.readFact(value.id), /private_content_binding_mismatch/); f.restart(); assert.deepEqual(f.counts(), before); const service = new PersonalContextService({ ...f.options, readTransaction: work => work(wrong) }); assert.throws(() => service.policy(), /canonical_database_connection_mismatch/); } finally { wrong.close(); f.close(); }
+});
+
+
+test('selective CIE seam preserves reviewed summary certainty and explicit unmatched query receipts',()=>{
+ const f=fixture();try{f.enable();const saved=f.service.reviewFact(fact(undefined,{certainty:'user-reviewed-summary'}));
+ const input=request({evidenceQueries:['hardware processor','missing zephyr'],maxItems:1});const result=f.service.previewContext(input);
+ assert.equal(result.items[0].factId,saved.id);assert.equal(result.items[0].certainty,'user-reviewed-summary');assert.deepEqual(result.omissions.find(o=>o.reason==='unmatched-evidence-query'),{reason:'unmatched-evidence-query',count:1});
+ assert(result.encodedBytes<=input.maxBytes);f.service.validateContext(result,input);
+ f.service.setPolicy({expectedVersion:1,patch:{storageEnabled:false}});assert.deepEqual(f.service.previewContext(input).items,[]);assert.throws(()=>f.service.validateContext(result,input),/personal_disclosure_disabled|stale_personal/);
+ }finally{f.close()}
+});
+test('selective CIE queries reject malformed or authority-bearing input',()=>{
+ const f=fixture();try{f.enable();for(const evidenceQueries of [[],['x','x'],['a','b','c','d','e'],['x'.repeat(513)],[{scope:'foreign'}]])assert.throws(()=>f.service.previewContext({...request(),evidenceQueries} as any),/invalid_context_request/);
+ assert.throws(()=>f.service.previewContext({...request(),evidenceQueries:['quartz'],scope:'foreign'} as any),/invalid_context_request/);
+ }finally{f.close()}
 });

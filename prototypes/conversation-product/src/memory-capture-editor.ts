@@ -1,3 +1,4 @@
+import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 
 export type MemoryCaptureRequest = CaptureRequest;
@@ -12,8 +13,30 @@ interface EditorOptions {
   returnFocus?(): void;
 }
 
+/** Called only after the user chooses Remember message. Keep a single verbatim statement. */
+function explicitMemoryCandidate(content: string): { text: string; category?: 'preferences' | 'decisions' } | undefined {
+  // Leave formatted examples and ambiguous multi-statement messages to manual editing.
+  if (/(?:`{3,}|~{3,})/u.test(content)) return;
+  const tentative = /\b(?:might|maybe|probably|if|unless|today|currently|for now)\b/iu;
+  const marked = content.split(/\r?\n/u).flatMap(line => {
+    const match = /^Remember( decision)?:[ \t]+(\S.*)$/iu.exec(line);
+    return match ? [{ text: match[2].trimEnd(), decision: !!match[1] }] : [];
+  });
+  if (marked.length === 1) {
+    const { text, decision } = marked[0];
+    if (!decision) return { text };
+    if (!tentative.test(text) && /^[^.!?]+[.!]?$/u.test(text)) return { text, category: 'decisions' };
+  }
+  if (marked.length) return;
+  const statement = content.trim();
+  if (/^I prefer [^.\n\r?!]+\.?$/iu.test(statement) &&
+      !tentative.test(statement))
+    return { text: statement, category: 'preferences' };
+}
+
 export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormElement {
   const { content: expectedSourceText, projectId: expectedProjectId } = options;
+  const candidate = explicitMemoryCandidate(options.content);
   const form = document.createElement('form');
   form.className = 'cp-memory-editor';
   form.setAttribute('aria-label', 'Remember message');
@@ -38,7 +61,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     return input;
   };
   const text = document.createElement('textarea');
-  text.value = expectedSourceText;
+  text.value = candidate?.text ?? expectedSourceText;
   text.maxLength = 4096;
   text.rows = 3;
   text.required = true;
@@ -48,8 +71,9 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     : [['conversation', 'This conversation']]);
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
+  if (candidate?.category) category.value = candidate.category;
   const keywords = document.createElement('input');
-  keywords.value = [...new Set(options.content.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].slice(0, 8).join(', ');
+  keywords.value = personalMemorySearchTerms(text.value).filter(term => term !== 'prefer' && term.length <= 64).slice(0, 8).join(', ');
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);

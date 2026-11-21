@@ -252,20 +252,7 @@ export function mountProviderConnections(
     schedule();
     if (!value.pending && connectRequested) {
       connectRequested = false;
-      if (value.state === "ready") {
-        // This discovery belongs to the user's explicit connect action, never
-        // to ordinary history browsing or passive provider-list rendering.
-        const wasBusy = busy;
-        busy = true;
-        paint();
-        try {
-          await update({ type: "refreshModels", providerId: CHATGPT_PLAN_PROVIDER });
-        } finally { busy = wasBusy; paint(); }
-      }
-    }
-    if (input.type === "refreshSession" && value.state === "ready" && !value.pending) {
-      await update({ type: "refreshModels", providerId: CHATGPT_PLAN_PROVIDER });
-      return value;
+      if (value.state === "ready") await notifyChanged(revision);
     }
     if (!disposed && input.type !== "status" && input.type !== "connect")
       await notifyChanged(revision);

@@ -1,3 +1,7 @@
+import { createMemoryCaptureEditor, type MemoryCaptureRequest } from '../../conversation-product/src/memory-capture-editor.ts';
+import { componentDocument, until } from '../../conversation-product/test/component-dom.mts';
+import type { VelaState } from '../../vela-core/src/contracts.ts';
+import type { Execution } from '../src/contracts.mts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -214,12 +218,23 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
       type: 'associateProject', resourceId: chat.resourceId, projectId: project.id, expectedVersion: 1,
     } });
     const detail = await core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as { conversation: { revision: number } };
-    const content = 'The synthetic quartz relay is the approved part.';
+    const content = 'After all that we have said about what we should use, the synthetic quartz relay is the approved part.';
     const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
       content, expectedRevision: detail.conversation.revision, commandId: 'message' });
-    const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
-      conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz'],
-    }));
+    const dom = componentDocument(), restore = dom.install();
+    let submitted: MemoryCaptureRequest | undefined;
+    try {
+      const editor = createMemoryCaptureEditor({content, conversationId:chat.resourceId, messageId:message.id, projectId:project.id,
+        async review(request) {submitted=request;return false;}, report() {}});
+      editor.querySelectorAll('select')[0].value='project';
+      (editor as unknown as {fire(name:string):void}).fire('submit');
+      await until(()=>submitted!==undefined);
+    } finally { restore(); }
+    assert.ok(submitted);
+    assert.equal(submitted.expectedSourceText, content);
+    assert.equal(submitted.expectedProjectId, project.id);
+    assert.ok(submitted.keywords.includes('quartz'));
+    const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', submitted));
     const policy = await core.command('personalMemoryPolicyNative', {});
     assert.equal(policy.velaEnabled, false);
     await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: policy.version });
@@ -233,6 +248,65 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const input = { intent: 'Which quartz relay should I use?', resourceIds: [], adaptive: true,
       providerId: 'openai-api-vela', useMemory: true } as const;
+    const indirect = { ...input, resourceIds: [] as string[], intent: 'What was chosen?', includeRecentHistory: false };
+    await assert.rejects(core.command('velaRequestPreview', indirect), /personal_memory_no_eligible_context/);
+    const base = await core.command('velaRequestPreview', { ...indirect, useMemory: undefined });
+    const searchBinding = { previewId: base.id, signature: base.signature };
+    assert.deepEqual(await core.command('velaMemorySearchNative', searchBinding), { kind: 'unavailable' });
+    const { velaApiRuntime: api } = core as unknown as { velaApiRuntime: VelaApiRuntime };
+    const qualification = Object.freeze({ model: 'gpt-6-luna' }) as NonNullable<ReturnType<VelaApiRuntime['qualifiedStructuredRoute']>>;
+    api.qualifiedStructuredRoute = () => qualification;
+    api.isStructuredQualificationCurrent = proof => proof === qualification;
+    let calls = 0;
+    api.structuredProposal = async ({ payload, validate }) => {
+      calls++;
+      validate();
+      assert.deepEqual(payload, { stage: 'interpret', request: indirect.intent });
+      if (calls === 1) {
+        await assert.rejects(core.command('velaNativeReview', searchBinding), /personal_memory_disclosure_review_required/);
+        await assert.rejects(core.command('authorizeVelaRequest', searchBinding), /personal_memory_disclosure_review_required/);
+      }
+      return { version: 2, objective: 'Recall the decision', clarification: '',
+        perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
+          capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'relay', question: 'Which relay was approved?', query: 'quartz relay' }, { key: 'shipment', question: 'Which shipment date was approved?', query: 'shipment date' }] };
+    };
+    const queryReview = await core.command('velaMemorySearchNative', searchBinding);
+    assert.equal(queryReview.kind, 'review');
+    assert.equal(queryReview.request, indirect.intent);
+    assert.equal(calls, 0);
+    await assert.rejects(core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: '0'.repeat(64) }),
+      /personal_memory_disclosure_review_required/);
+    assert.equal(calls, 0);
+    const raced = await Promise.allSettled([0, 1].map(() => core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: queryReview.digest })));
+    assert.equal(raced[0].status, 'fulfilled'); assert.equal(raced[1].status, 'rejected');
+    const expanded = (raced[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof core.command<'velaMemorySearchNative'>>>>).value;
+    assert.equal(expanded.kind, 'preview');
+    assert.equal(calls, 1);
+    await assert.rejects(core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: queryReview.digest }),
+      /vela_memory_requires_conversation/);
+    const expandedReview = await core.command('velaNativeReview', { previewId: base.id, signature: expanded.signature });
+    assert.match(expandedReview.prompt, new RegExp(saved.id));
+    assert.equal(expandedReview.memory?.partialCoverage, true);
+    assert.match(expandedReview.prompt, /Memory coverage is partial/);
+    assert.doesNotMatch(expandedReview.prompt, /shipment date/);
+    assert.equal(calls, 1);
+    const staleBase = await core.command('velaRequestPreview', { ...indirect, useMemory: undefined });
+    const staleBinding = { previewId: staleBase.id, signature: staleBase.signature };
+    const staleReview = await core.command('velaMemorySearchNative', staleBinding);
+    assert.equal(staleReview.kind, 'review');
+    const syntheticProducer = api.structuredProposal;
+    api.structuredProposal = async (...args) => {
+      const result = await syntheticProducer(...args);
+      const current = await core.command('personalMemoryPolicyNative', {});
+      await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: false, expectedVersion: current.version });
+      return result;
+    };
+    await assert.rejects(core.command('velaMemorySearchNative', { ...staleBinding, reviewDigest: staleReview.digest }), /stale_personal_context/);
+    await assert.rejects(core.command('velaMemorySearchNative', { ...staleBinding, reviewDigest: staleReview.digest }), /vela_memory_requires_conversation/);
+    const paused = await core.command('personalMemoryPolicyNative', {});
+    await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: paused.version });
+    api.structuredProposal = syntheticProducer;
     const recall = () => core.command('velaRequestPreview', { ...input, resourceIds: [] });
     const preview = await recall();
     assert.equal(preview.sendDisposition, 'review-required');
@@ -271,6 +345,56 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await assert.rejects(core.command('velaNativeReview', { previewId: unreviewed.id, signature: unreviewed.signature }),
       /stale_personal_context|personal_record_unavailable/);
     await assert.rejects(recall(), /personal_memory_no_eligible_context/);
+  } finally {
+    await core.command('close', {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+for (const legacyDisclosure of [false, true]) test('Vela memory-derived replies remain readable locally and stay out of voice and attached conversation context' + (legacyDisclosure ? ' (legacy disclosure)' : ''), async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-derived-'));
+  const core = new BackendCore({ path: join(root, 'profile.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only' });
+  try {
+    const opened = await core.command('vela', { name: 'open', input: {} }) as VelaState;
+    const conversationId = opened.conversation!.resourceId;
+    const input = await core.command('addMessage', { resourceId: conversationId, role: 'user',
+      content: 'Synthetic reviewed question', expectedRevision: opened.conversation!.revision });
+    const reply = await core.command('addMessage', { resourceId: conversationId, role: 'assistant',
+      content: 'Synthetic reply containing a private memory', expectedRevision: input.revision });
+    const owner = core as unknown as {
+      state: { executions: Record<string, Execution>; messageEvidence: Record<string, { executionId: string }> };
+      velaHost: import('../../vela-core/src/canonical-host.mts').CanonicalVelaHost;
+      voiceContext(id: string, purpose: 'conversation'): Promise<{ contextRef: string; contextDigest: string; history: unknown[] }>;
+      validateVoiceContext(ref: string, digest: string): void;
+    };
+    const branchInput = { resourceId: conversationId, messageId: reply.id, includeMessageIds: [reply.id],
+      providerId: 'local', title: 'Synthetic branch', commandId: 'branch', tokenBudget: 8192, expectedRevision: reply.revision };
+    const branch = await core.command('branch', branchInput);
+    const publish = { name: 'publish' as const, input: { sourceResourceId: conversationId, sourceMessageId: reply.id, evidence: 'excerpt' as const } };
+    const share = await core.command('conversation', publish) as { id: string };
+    await core.command('conversation', { name: 'inspectShare', input: { shareId: share.id, resourceId: branch.conversation.resourceId } });
+    const before = await owner.voiceContext(conversationId, 'conversation');
+    assert.match(JSON.stringify(before.history), /containing a private memory/);
+    owner.state.executions['memory-execution'] = (legacyDisclosure ? { memoryDisclosure: { receipt: 'synthetic-legacy' } } : { reviewedMemory: true }) as Execution;
+    owner.state.messageEvidence[reply.id] = { executionId: 'memory-execution' };
+    await assert.rejects(core.command('branch', branchInput), /source_unavailable/);
+    await assert.rejects(core.command('branch', { ...branchInput, commandId: 'second-branch' }), /source_unavailable/);
+    await assert.rejects(core.command('review', { handoffId: branch.handoff.id, fingerprint: branch.handoff.fingerprint,
+      approve: true }), /source_unavailable/);
+    await assert.rejects(core.command('conversation', publish), /source_unavailable/);
+    await assert.rejects(core.command('conversation', { name: 'inspectShare',
+      input: { shareId: share.id, resourceId: branch.conversation.resourceId } }), /source_unavailable/);
+    assert.throws(() => owner.validateVoiceContext(before.contextRef, before.contextDigest), /live_context_changed/);
+    const after = await owner.voiceContext(conversationId, 'conversation');
+    assert.doesNotMatch(JSON.stringify(after.history), /containing a private memory/);
+    assert.match(JSON.stringify(after.history), /Synthetic reviewed question/);
+    const attached = owner.velaHost.readContent(conversationId, owner.velaHost.scope());
+    assert.ok(attached);
+    assert.doesNotMatch(attached.content, /containing a private memory/);
+    assert.match(attached.content, /Synthetic reviewed question/);
+    const local = await core.command('vela', { name: 'state', input: {} }) as VelaState;
+    assert(local.conversation?.messages.some(message => message.id === reply.id));
   } finally {
     await core.command('close', {});
     rmSync(root, { recursive: true, force: true });
