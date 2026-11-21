@@ -475,3 +475,39 @@ Record capabilities actually tested. No "looks Apple-like" acceptance criterion 
 - [Current implementation inventory](../engineering/CURRENT-STATE-OF-AERYNTH.md) and [desktop-test admission](../engineering/AERYNTH-DESKTOP-TEST-ADMISSION.md).
 
 **Next step:** reconcile proposed contracts with current exported APIs, document any conflicts in an ADR, prepare visual prototypes on a scoped branch, benchmark, and seek explicit owner evaluation before freezing visual tokens or calling the design implemented. This docs PR makes no runtime, CI, repository-policy or desktop-test changes.
+
+
+## November 15, 2026: One experience runtime, explicit engine boundaries
+
+**Status:** owner-confirmed technical direction, pending implementation/verification. This extends existing §1–10; it does not establish new governance or replace Charter 02, the Materials specification, the Motion specification or the Vela Presence rendering contract.
+
+**Design doctrine:** *Aerynth owns its experience. External projects inspire and inform it. Vela intelligently operates it. ARIE and AEP keep it efficient.*
+
+| Concern | One canonical design owner | Contract output | Forbidden duplication |
+| --- | --- | --- | --- |
+| Optical glass material and roles | [Materials AML-001](../design/AERYNTH-MATERIALS-AND-LIGHTING-SPECIFICATION.md) | Validated, versioned material recipe | Per-component custom material authority |
+| Material experiments and benchmark evidence | [Glass Laboratory](AERYNTH-GLASS-LABORATORY.md) | Experiment/reproduction and promotion record | Lab data silently becoming production configuration |
+| Spatial and temporal motion | [Motion AMI-001](../design/AERYNTH-MOTION-AND-INTERACTION-SPECIFICATION.md) | Coordinator-scheduled, cancelable transition tracks | Multiple physics clocks or animators fighting over properties |
+| Volumetric Vela Presence | [Vela GPU contract](../architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md) | Presence scene/semantic projection | Flat 2D glass replacing required 3D Mind |
+| Shared composition | This document + platform authority | Backend capability matrix and frame resources | Undocumented cross-window pixel access |
+| GPU/CPU contention and budgets | [ARIE](ARIE-RESOURCE-AND-SCHEDULER-CONTRACT.md) | Enforced visual budget and leases | Renderer inventing its own global resource policy |
+| Performance evidence | [AEP](AEP-ADAPTIVE-OPTIMIZATION-AND-EXPERIMENTS.md) | Provenance-bearing observations and comparison results | Component self-certification |
+
+**Engine boundary proposal (illustrative, not a committed module path):**
+
+~~~typescript
+type OpticalMaterialRef = { id: string; revision: string };
+type MaterialCapability = "css-frost" | "svg-displacement" | "gpu-screen-space" | "reference-ray-model";
+type SceneSurface = { surfaceId: string; material?: OpticalMaterialRef; zOrder: number; privacyScope: string };
+type MotionTrackRef = { transitionId: string; coordinatorRevision: string };
+type FrameBudget = { policyVersion: string; maxGpuMs: number | null; maxCpuMs: number | null; qualityTier: string };
+type RenderEvidence = { sceneRevision: string; backend: MaterialCapability; provenance: "observed" | "derived" | "unavailable"; captureRef?: string };
+~~~
+
+These are candidate shapes only; owners must ratify schemas and identify binding implementations through the normal interface/ADR process. Rendering choices are capability-driven; cross-platform parity is not presumed. Runtime selection must preserve focus, semantics, approvals and stable editing before decorative fidelity.
+
+**Selected external source policy:** investigate component libraries and optical demos for visual ideas, algorithms and small licensed code fragments. Maintain a source ledger for URL, pinned revision, license/attribution, copied/modified paths, security review, browser compatibility and performance findings. Do not install twenty preset libraries as architectural dependencies, and do not conflate public inspiration with permission to copy proprietary implementations.
+
+**Shared scene scheduler:** coordinate frame preparation and reusable background/lighting/depth assets where physically and platform-technically feasible. Support independent DOM/native fallback composition where unavoidable. Device loss, window occlusion, DPI/refresh changes and reduced-motion/reduced-transparency requirements must be handled without semantic state loss.
+
+**Explicitly deferred:** webcam/XR hand tracking is a future project. Keep input event interfaces extensible but do not create a current dependency, acceptance gate or workstream for hand gestures.

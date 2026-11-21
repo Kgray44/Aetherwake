@@ -167,3 +167,14 @@ No one gate can be substituted for another. Clean compilation, a static screensh
 7. GPU profiler availability and artifact-based performance verification.
 
 Unresolved choices require measured prototype evidence, a written ADR, owner review and clean fallback behavior. An implementation agent is not authorized to weaken this specification merely because the first pass looks difficult.
+
+
+## November 15, 2026: Shared Scene Renderer boundary
+
+**Status:** owner-confirmed architecture direction; proposed technical boundaries and evaluation, not a verified runtime. This document continues to own the genuinely GPU-native volumetric Vela Presence. The proposed **Shared Scene Renderer** is supporting scene infrastructure, not an alternate Mind, agent state source, or independent semantic system.
+
+One host-controlled frame scheduler should coordinate Vela presence, celestial environment, shared scene lighting, particle resources and refractive materials where backend capabilities permit. The Optical Glass Engine owns material parameters and optical sampling policy; the Motion Coordinator owns temporal transition intent; this contract owns Vela's volumetric art/render guarantees; the design-engineering specification owns cross-surface compositing adapters. Background buffers, depth/occlusion information, light descriptors and device context may be shared behind explicit typed contracts without merging canonical domain state or violating privacy boundaries.
+
+Prefer shared device/context ownership, pooled offscreen buffers, lifecycle-controlled shader pipelines, culling, explicit lost-device/reinitialization behavior, and per-surface fallback. Do not assume browser DOM, GPU canvases, native OS backdrop or foreign windows can read one another's pixels. Preserve layering, focus, semantic truth and the volumetric tendril contract even when glass is rendered using a separate fallback backend. ARIE chooses authorized visual budgets; AEP records attributable rendering measurements; neither may fabricate measurements or promote a renderer to tool authority.
+
+**Evidence gates:** reference scene parity, material/backend feature matrix, multi-window and multi-display lifecycle, frame latency and jitter, interaction latency, shader compilation, context loss, memory pressure, accessibility fallback and gaming contention. State unsupported conditions and data gaps explicitly.

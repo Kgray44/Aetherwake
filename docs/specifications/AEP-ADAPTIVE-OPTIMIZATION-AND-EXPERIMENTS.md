@@ -314,3 +314,12 @@ Unsettled until evaluated: cohort sizes, effect/confidence thresholds, statistic
 - Security/retention/permission: Charter 14 and Constitution 00.
 
 **This document specifies an adaptive profiler; it does not claim current Aerynth already conducts experiments, learns policies, or has an accepted native workspace.**
+
+
+## November 15, 2026: visual materials and motion evaluation cohorts
+
+**Status:** proposed measurement detail under the existing AEP owner, not a separate visual profiler. AEP remains the single provenance and experiment authority for Glass Laboratory and shared-scene/motion performance observations.
+
+Visual cohorts should preserve scene ID/revision, material ID/revision, renderer backend/version, GPU/driver/display configuration, frame budget and ARIE policy version; report P50/P95/P99 frame time, input-to-visible delay, shader compilation stalls, GPU and CPU utilization, memory/VRAM, dropped frames, device-loss recovery and instrumentation overhead where observable. Differentiate observed, estimated, derived and unavailable signals. Cumulative GPU time from overlapping work cannot be assumed to equal wall-clock frame time.
+
+Compare identical-scene baseline/fallback pairs on cold and warm paths. For optical quality, capture reproducible screenshots and explicit visual assessment criteria rather than assigning invented numerical truth to refraction. Promotion needs quality, accessibility and regression gates, not simply higher frame rate. Lab evidence is not release acceptance until independently reproduced in production-representative conditions.
