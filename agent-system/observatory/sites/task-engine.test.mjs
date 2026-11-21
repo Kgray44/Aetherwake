@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { EventEmitter, once } from 'node:events';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
@@ -545,19 +545,48 @@ test('only the original worker recovery proof can return an expired candidate to
   assert.equal((await call({...heartbeat,operation_id:crypto.randomUUID()},'worker')).status,409);
 });
 
-test('an owner retry carries exact orphaned checkout custody while retaining the clean-checkout default', async t => {
-  const {call,register,command,get,advance}=setup(t);
+test('an owner retry resumes the exact dirty checkout after the recorded processes exit', {timeout:20000}, async t => {
+  const {call,register,command,get,advance,pin}=setup(t);
+  const temp=await realpath(tmpdir());
+  const root=await realpath(await mkdtemp(join(temp,'aads-dirty-retry-')));
+  assert.equal(dirname(root),temp);
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const workspace=join(root,'checkout'), telemetryDirectory=join(root,'journal');
+  await mkdir(workspace);
+  await mkdir(telemetryDirectory);
+  const branch='codex/aads-task-interrupted';
+  const git=async (...args)=>(await promisify(execFile)('git',args,{cwd:workspace,windowsHide:true})).stdout.trim();
+  await git('init','-b',branch);
+  await git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  await git('config','user.name','Fixture');
+  await git('config','user.email','worker@example.test');
+  await git('-c','commit.gpgsign=false','commit','--allow-empty','-m','Pinned source');
+  const revision=await git('rev-parse','HEAD');
+  pin(revision);
   const task=await register('Resume interrupted checkout');
   await command(task,'admit',{executor:'codex'});
-  const recovery_commitment=createHash('sha256').update('a'.repeat(64)).digest('hex');
+  const recoveryKey='a'.repeat(64);
+  const recovery_commitment=createHash('sha256').update(recoveryKey).digest('hex');
   const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID(),recovery_commitment},'worker');
-  const session_id=crypto.randomUUID(), branch='codex/aads-task-interrupted';
+  const session_id=crypto.randomUUID();
   const report={op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
     operation_id:crypto.randomUUID(),lease:claim.lease,report:{type:'heartbeat',session_id,branch}};
   assert.equal((await call(report,'worker')).status,200);
+  const previous=[0,1].map(()=>spawn(process.execPath,['-e',''],{windowsHide:true}));
+  await Promise.all(previous.map(child=>once(child,'exit')));
+  const lock=join(workspace,'.git','aads-task-worker.lock');
+  await mkdir(lock);
+  await writeFile(join(lock,createHash('sha256').update(claim.attempt.id).digest('hex')),'');
+  await writeFile(join(workspace,'retained.txt'),'Saved before the interruption.');
+  await writeFile(join(telemetryDirectory,'active-'+claim.attempt.id+'.json'),JSON.stringify({
+    host:hostname(),taskId:task.task.id,attemptId:claim.attempt.id,revision,workspace,branch,
+    sessionId:session_id,turnId:crypto.randomUUID(),recoveryKey,pid:previous[0].pid,providerPid:previous[1].pid,
+  }));
   advance(61_000);
   const orphan=await get(task);
   assert.equal(orphan.attempts[0].state,'orphaned');
+  await reconcileAbandonedClaim({directory:telemetryDirectory,taskId:task.task.id,readTask:()=>get(task)});
+  assert.ok(existsSync(join(telemetryDirectory,'interrupted-'+claim.attempt.id+'.json')));
   const claimAgain=()=>call({op:'claim',operation_id:crypto.randomUUID(),conversation_continuation:true},'worker');
   assert.equal((await claimAgain()).body.claim,null);
   assert.equal((await command(orphan,'retry',{changed_assumption:'Verify retained process custody.'})).status,200);
@@ -566,6 +595,21 @@ test('an owner retry carries exact orphaned checkout custody while retaining the
   assert.equal(resumed.attempt.resume_session_id,session_id);
   assert.deepEqual(resumed.interrupted_checkout,{attempt_id:claim.attempt.id,recovery_commitment,branch});
   assert.equal((await get(task)).attempts.at(-1).recovery_commitment,undefined);
+  let executions=0;
+  await runClaim({claim:resumed,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
+    send:async request=>(await call(request,'worker')).body,
+    execute:async ({onSession})=>{
+      executions++;
+      await onSession(session_id);
+      assert.equal(readFileSync(join(workspace,'retained.txt'),'utf8'),'Saved before the interruption.');
+      return {ok:true};
+    }});
+  assert.equal(executions,1);
+  const saved=await get(task);
+  assert.equal(saved.lifecycle.stored_state,'verifying');
+  assert.equal(saved.task.owner_acceptance,'not_reviewed');
+  assert.equal((await call({...report,operation_id:crypto.randomUUID()},'worker')).status,409);
+  assert.equal(await git('show','HEAD:retained.txt'),'Saved before the interruption.');
 });
 
 test('the real worker can be killed before its terminal report and reconcile through the Task Engine on Windows', {timeout:20000}, async t => {
