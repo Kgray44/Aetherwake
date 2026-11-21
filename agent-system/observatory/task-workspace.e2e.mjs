@@ -496,7 +496,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await attemptPanel.getByText('Candidate submitted for review',{exact:true}).waitFor();
   await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
   await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
-  await page.getByText('Task complete',{exact:true}).waitFor();
+  await page.getByText('Implementation complete',{exact:true}).waitFor();
+  await page.getByText('Merge not requested',{exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Open in Codex',exact:true}).getAttribute('href'),'codex://threads/'+conversationId);
   const matrix=page.getByRole('region',{name:'Task acceptance criteria'});
   await matrix.getByText('owner accepted',{exact:true}).waitFor();
