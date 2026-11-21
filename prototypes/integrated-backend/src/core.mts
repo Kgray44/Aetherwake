@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { NativePersonalMemory } from './personal-memory.mts';
 import { defaultPersonalMemoryPolicy } from '../../personal-context/src/service.mts';
-import { createPersonalMemoryReview } from './personal-memory-review.mts';
+import { createPersonalMemoryReview, isPartialMemoryCoverage } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
@@ -66,7 +66,7 @@ import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contr
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { VelaApiConnection } from './vela-api-connection.mts';
-import { investigateReviewedVelaEvidence, investigateVelaHistoryWithApi, qualifyVelaHistoryModelWithApi, type SemanticHistoryAdmission, type SemanticHistoryProbeAdmission } from './vela-semantic-history.mts';
+import { interpretVelaMemoryQuery, qualifiedVelaMemoryQueryRoute, investigateReviewedVelaEvidence, investigateVelaHistoryWithApi, qualifyVelaHistoryModelWithApi, type SemanticHistoryAdmission, type SemanticHistoryProbeAdmission } from './vela-semantic-history.mts';
 import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRun, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
@@ -207,6 +207,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   evaluationClaim?: VelaApiRun['evaluationClaim'];
   explicitSourceSelection?: true;
   memoryRecall?: VelaMemoryRecall;
+  memorySearchStarted?: true;
   memoryBasePrompt?: string;
   projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
@@ -2411,11 +2412,16 @@ export class BackendCore {
     if(!this.state.vela!.conversationId)this.state.vela!.conversationId=this.create('Vela','local').resourceId;
     const id=this.state.vela!.conversationId;this.requireVelaConversation(id);return id;
   }
+  private isMemoryDerivedOutput(messageId: string): boolean {
+    const evidence = this.state.messageEvidence[messageId];
+    const execution = evidence && this.state.executions[evidence.executionId];
+    return !!(execution?.reviewedMemory || (execution && 'memoryDisclosure' in execution && execution.memoryDisclosure));
+  }
   private async voiceContext(conversationId:string,purpose:Parameters<CanonicalVelaRuntimePort['context']>[0]['purpose']):Promise<LiveCanonicalContext> {
     return this.kernel.withTransaction(()=>{
       this.requireVelaConversation(conversationId);
       const interactive = purpose === 'conversation' || purpose === 'delegation';
-      const selected = interactive ? this.readVelaConversation(conversationId).messages.slice(-32).flatMap(({ id, role, content }) =>
+      const selected = interactive ? this.readVelaConversation(conversationId).messages.filter(message => !this.isMemoryDerivedOutput(message.id)).slice(-32).flatMap(({ id, role, content }) =>
         role === 'user' || role === 'assistant' ? [{ id, turn: { role, content } }] : []) : [];
       let history = selected.map(message => message.turn);
       while (Buffer.byteLength(JSON.stringify(history)) > 8192) {
@@ -2445,7 +2451,7 @@ export class BackendCore {
     const entry=this.voiceContexts.get(ref);ensure(entry&&entry.value.contextDigest===digest&&entry.expires>Date.now()&&entry.scopeStamp===this.velaScopeStamp(),'live_context_changed');
     this.requireVelaConversation(entry.value.conversationId);
     for (const source of entry.sources) {
-      ensure(this.conversationAccess.access(entry.value.conversationId, source.id), 'live_context_changed');
+      ensure(this.conversationAccess.access(entry.value.conversationId, source.id) && !this.isMemoryDerivedOutput(source.id), 'live_context_changed');
       const message = this.state.graph.messages.find(message => message.id === source.id);
       ensure(message && planningDigest(message.content) === source.digest, 'live_context_changed');
     }
@@ -2752,7 +2758,9 @@ export class BackendCore {
   private verifyVelaHistoryContribution(contribution:NonNullable<HistoryMessageMetadata['providerContribution']>,message:HistoryMessageMetadata,request:HistoryRequestRecord):boolean {
     const e=contribution.executionId?this.state.executions[contribution.executionId]:undefined,evidence=contribution.sourceMessageId?this.state.messageEvidence[contribution.sourceMessageId]:undefined;
     const planningId = 'vela-plan:'+planningDigest(request.id).slice(0,32)+':execute';
-    if (!e || e.state !== 'provider_completed' || e.providerId !== contribution.providerId ||
+    if (request.reviewedMemory || this.isMemoryDerivedOutput(message.id) ||
+      (contribution.sourceMessageId && this.isMemoryDerivedOutput(contribution.sourceMessageId)) ||
+      !e || e.state !== 'provider_completed' || e.providerId !== contribution.providerId ||
       e.resourceId !== contribution.planningConversationId || message.requestId !== request.id ||
       !evidence || evidence.classification !== 'reported' || evidence.executionId !== e.id || evidence.providerId !== e.providerId) return false;
     const raw=this.state.graph.messages.find(value=>value.id===contribution.sourceMessageId);
@@ -2774,7 +2782,7 @@ export class BackendCore {
     const hostOptions: Parameters<typeof createCanonicalVelaHost>[0] = {db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
-      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readLocalFact'&&action.capabilityId==='system.battery'||action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
+      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),canIncludeInContext:id=>!this.isMemoryDerivedOutput(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readLocalFact'&&action.capabilityId==='system.battery'||action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
@@ -4989,13 +4997,15 @@ export class BackendCore {
         !workflowScope && !context.included.length && !context.activeResourceId && conversationId, 'vela_memory_requires_conversation');
       const projectId = this.velaContext().currentProjectId;
       const sourceAnchors = this.personalMemorySourceAnchors(input.intent);
+      let partialMiss = false;
       const memoryRecall = await this.personalMemoryReview!.prepareVelaRecall({ conversationId,
-        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors });
-      ensure(memoryRecall, 'personal_memory_no_eligible_context');
+        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors }, undefined, () => { partialMiss = true; });
+      ensure(memoryRecall, partialMiss ? 'personal_memory_search_incomplete' : 'personal_memory_no_eligible_context');
       preview.memoryRecall = memoryRecall;
       preview.memoryBasePrompt = preview.prompt;
       preview.prompt = memoryRecall.prompt;
-      preview.memory = publicPreview.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest };
+      preview.memory = publicPreview.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest,
+        ...(memoryRecall.partialCoverage ? { partialCoverage: true } : {}) };
     }
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
@@ -5028,6 +5038,55 @@ export class BackendCore {
     }
     publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
   }
+  private async searchVelaMemory(input: CommandMap['velaMemorySearchNative']['input']): Promise<CommandMap['velaMemorySearchNative']['output']> {
+    const base = this.velaPreviews.get(input?.previewId);
+    const owner = this.personalMemoryReview;
+    ensure(owner && base && base.signature === input.signature && !base.memoryRecall && !base.memorySearchStarted && !base.nativeReviewed &&
+      base.providerId === VELA_API_PROVIDER && base.connectionVersion && base.route?.kind === 'conversational' &&
+      base.route.model && !base.route.nativeMetric && !base.route.nativeLog && !base.nativeStage && !base.semanticContext &&
+      !base.workflowScope && !base.handoff && !base.routingAgent && !base.route.escalation && !base.resourceIds.length &&
+      !base.context.activeResourceId && !base.context.included.length && base.inputAnchor.conversationId &&
+      !base.projectEvidence && !base.workspaceState && !base.missionCheckpoint && !base.voiceInput && !base.evaluationClaim,
+      'vela_memory_requires_conversation');
+    this.validateFrozenVelaPreview(base, { nativeReview: true });
+    if (!this.missionStorageAdmitted || !this.personalMemory?.hasStorage()) return { kind: 'unavailable' };
+    const policyFence = await owner.velaPolicyFence();
+    this.validateFrozenVelaPreview(base, { nativeReview: true });
+    if (!policyFence || Buffer.byteLength(base.intent) > 4000) return { kind: 'unavailable' };
+    const { intent: request, connectionVersion: configurationVersion, route: { model } } = base;
+    if (!qualifiedVelaMemoryQueryRoute(this.velaApiRuntime, configurationVersion, model)) return { kind: 'unavailable' };
+    const digest = planningDigest({ purpose: 'private-memory-query-interpretation', signature: base.signature, model,
+      configurationVersion, policyVersion: policyFence.version, providerId: base.providerId, request });
+    if (input.reviewDigest === undefined) return { kind: 'review', request, model, digest };
+    ensure(input.reviewDigest === digest && !base.memorySearchStarted && !base.nativeReviewed, 'personal_memory_disclosure_review_required');
+    base.memorySearchStarted = true;
+    const validate = () => {
+      ensure(!this.closed && this.missionStorageAdmitted && this.velaPreviews.get(base.id) === base &&
+        !base.nativeReviewed && base.signature === input.signature, 'stale_vela_preview');
+      this.validateFrozenVelaPreview(base, { nativeReview: true });
+      policyFence.validate();
+    };
+    const proposal = await interpretVelaMemoryQuery(this.velaApiRuntime, { request, model, configurationVersion,
+      reviewDigest: digest }, validate, AbortSignal.timeout(20_000));
+    if (!proposal?.needs.length) return { kind: 'unavailable' };
+    validate();
+    const projectId = this.velaContext().currentProjectId;
+    const memoryRecall = await owner.prepareVelaRecall({ conversationId: base.inputAnchor.conversationId,
+      projectId, requestId: base.id, intent: request, prompt: base.prompt }, proposal);
+    validate();
+    if (!memoryRecall) return { kind: 'unavailable' };
+    base.memoryRecall = memoryRecall;
+    base.memoryBasePrompt = base.prompt;
+    base.prompt = memoryRecall.prompt;
+    base.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest,
+        ...(memoryRecall.partialCoverage ? { partialCoverage: true } : {}) };
+    base.sendDisposition = 'review-required';
+    base.nativeReviewed = false;
+    base.reviewDigest = undefined;
+    base.signature = this.velaEgress(base.intent, base.frozenContext, base.discovery, base);
+    return { kind: 'preview', signature: base.signature, memory: structuredClone(base.memory) };
+  }
+
   private async reviewVelaWorkflow(input: CommandMap['velaWorkflowReview']['input']): Promise<CommandMap['velaWorkflowReview']['output']> {
     this.pruneVelaGrants();
     const analysis = this.velaPreviews.get(input.previewId);
@@ -5136,6 +5195,7 @@ export class BackendCore {
   }
   private nativeVelaReview(input:CommandMap['velaNativeReview']['input']):VelaNativeReview {
     const preview=this.velaPreviews.get(input?.previewId);ensure(preview&&input.signature===preview.signature,'approval_scope_mismatch');this.validateFrozenVelaPreview(preview,{nativeReview:true});
+    ensure(!preview.memorySearchStarted || preview.memoryRecall, 'personal_memory_disclosure_review_required');
     preview.memoryRecall?.validatePreview();
     const checkpoint = preview.missionCheckpoint && this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection);
     const {history}=preview.frozenContext,review={previewId:preview.id,signature:preview.signature,providerId:preview.providerId,prompt:preview.prompt,promptDigest:planningDigest(preview.prompt),context:preview.context,...(preview.semanticContext?{semanticContext:true as const}:{}),...(preview.route?{route:preview.route}:{}),...(history?{history}:{}),historyOmissions:preview.historyOmissions.map(item=>({reason:item.reason,...(item.count!==undefined?{count:item.count}:item.messageIds?{count:item.messageIds.length}:{})})),
@@ -5212,6 +5272,7 @@ export class BackendCore {
   }
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
     this.pruneVelaGrants();const preview=this.velaPreviews.get(input.previewId);ensure(preview,'vela_preview_expired');ensure(preview.signature===input.signature,'approval_scope_mismatch');
+    ensure(!preview.memorySearchStarted || preview.memoryRecall, 'personal_memory_disclosure_review_required');
     this.validateFrozenVelaPreview(preview);ensure(this.velaGrants.size<64,'approval_backpressure');
     if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition !== 'review-required' &&
       preview.sendDisposition === this.velaSendDisposition(preview), 'vela_attached_context_review_required');
@@ -5498,6 +5559,7 @@ export class BackendCore {
       snapshot:()=>this.command('snapshot',{}),desktop:()=>this.command('desktop',{type:'snapshot'}),command:(name,input)=>this.command(name,input),
       canonicalReadView:async()=>this.conversationReadView(),
       canonicalReadBatch:read=>this.canonicalConversationReadBatch(read),
+      canShareMessage: id => !this.isMemoryDerivedOutput(id),
       organize,access:(id,messageId)=>this.conversationReadAccess(id,messageId),capabilitySnapshot:this.capabilityCache.snapshot,providerRegistrySnapshot:()=>this.ordinaryRegistry(),
       sendWithContext:async()=>{throw new ServiceError('native_send_approval_required');},
       commitShareRevocation: revoke => this.withEventTransaction(() => {
@@ -6182,7 +6244,7 @@ export class BackendCore {
       // The clock writes both messages atomically. Keep past device-local turns out of automatic egress.
       if (message.provenance === 'device_clock' || (message.role === 'user' && ownMessages.get(conversation.ownMessageIds[index + 1])?.provenance === 'device_clock')) continue;
       const evidence = this.state.messageEvidence[id];
-      if (evidence && this.state.executions[evidence.executionId]?.reviewedMemory) continue;
+      if (this.isMemoryDerivedOutput(id)) continue;
       if (evidence?.outputState === 'partial' || unavailable.has(id) || !this.conversationReadAccess(input.resourceId, id)) continue;
       ensure(message.role === 'user' || message.role === 'assistant', 'ordinary_history_role_unsupported');
       const item = { role: message.role, content: message.content };
@@ -6200,13 +6262,14 @@ export class BackendCore {
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
     const baseTurn = { ...turn, messages, contextDigest };
+    let partialMiss = false;
     const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn,
-      this.personalMemorySourceAnchors(input.content)) : null;
-    if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
+      this.personalMemorySourceAnchors(input.content),()=>{partialMiss=true;}) : null;
+    if (input.useMemory) ensure(memory, partialMiss ? 'personal_memory_search_incomplete' : 'personal_memory_no_eligible_context');
     if (memory) captureMemory?.(memory);
     const exact = memory?.turn ?? baseTurn;
     const prepared = prepareResponsesTurn(exact);
-    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
+    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest, ...(isPartialMemoryCoverage(memory.manifest)?{memoryPartialCoverage:true as const}:{}) } : {}) };
   }
   private personalMemorySourceAnchors(intent: string) {
     const query = canonicalRetrievalQuery(intent);
@@ -6533,7 +6596,8 @@ export class BackendCore {
       this.conversationAccess.resource(r.sourceResourceId, 'read'), 'source_unavailable');
     ensure(this.state.revisions[r.sourceResourceId] === r.sourceRevision, 'stale_source_revision');
     const h = this.graph.inspectHandoff(r.id);
-    ensure(h.items.every(item => this.conversationAccess.access(this.publicId(item.sourceConversationId), item.sourceMessageId)), 'source_unavailable');
+    ensure(h.items.every(item => this.conversationAccess.access(this.publicId(item.sourceConversationId), item.sourceMessageId) &&
+      !this.isMemoryDerivedOutput(item.sourceMessageId)), 'source_unavailable');
     ensure(h.staleMessageIds.length === 0, 'stale_context');
     ensure(h.items.every(i => !['sensitive','restricted'].includes((i as any).sensitivity)), 'sensitive_content_excluded');
     ensure(r.estimatedTokens <= r.tokenBudget, 'context_budget_exceeded');
@@ -7239,6 +7303,7 @@ export class BackendCore {
       case 'velaRequestPreview':
         if (a?.adaptive !== true && a?.providerId === CHATGPT_PLAN_PROVIDER) await this.maintainOrdinarySession();
         return await this.previewVelaRequest(a) as any;
+      case 'velaMemorySearchNative':return await this.searchVelaMemory(a) as any;
       case 'velaWorkflowReview':return await this.reviewVelaWorkflow(a) as any;
       case 'velaWorkflowRun':return await this.runVelaWorkflow(a?.id) as any;
       case 'velaNextWorkflowStage':return this.nextVelaWorkflowStage(a?.requestId) as any;
@@ -7392,6 +7457,7 @@ export class BackendCore {
         ensure(Number.isInteger(a.tokenBudget) && a.tokenBudget > 0 && a.tokenBudget <= 32768, 'invalid_token_budget');
         ensure(Array.isArray(a.includeMessageIds) && a.includeMessageIds.length > 0 && a.includeMessageIds.length <= 100, 'explicit_source_selection_required');
         ensure([a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
+        ensure(a.includeMessageIds.every((id: string) => !this.isMemoryDerivedOutput(id)), 'source_unavailable');
         const sourceId = this.gid(a.resourceId);
         const result = this.graph.branch({ sourceConversationId: sourceId, sourceMessageId: a.messageId, targetKind: ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId) ? 'ordinary' : 'codex', targetProviderId: a.providerId, title: a.title, includeMessageIds: a.includeMessageIds });
         const resource = this.kernel.createConversationRef(a.title, this.kernel.getResource(a.resourceId).resource.project_id);
@@ -7407,7 +7473,8 @@ export class BackendCore {
         return { conversation: this.conv(resource.id), handoff: review, context: result.handoff, mode: 'application_continuation' };
       }, () => {
         ensure(this.conversationAccess.resource(a.resourceId, 'read') &&
-          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
+          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)) &&
+          a.includeMessageIds.every((id: string) => !this.isMemoryDerivedOutput(id)), 'source_unavailable');
       })) as any;
       case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); if(a.approve === true)this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
       case 'selectProvider': return this.atomic(() => {

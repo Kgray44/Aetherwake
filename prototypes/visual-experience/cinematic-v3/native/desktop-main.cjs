@@ -41,10 +41,11 @@ const {
   conversationCommand,
   isConversationRead,
 } = require("./conversation-broker.cjs");
-const { velaCommand, isVelaRead, ensureVelaMemoryConsent } = require("./vela-broker.cjs");
+const { velaCommand, isVelaRead, ensureVelaMemoryConsent, reviewVelaMemorySearch } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
+const {managePersonalMemory}=require('./personal-memory-management.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -442,10 +443,6 @@ app.whenReady().then(async () => {
     htmlPath: path.join(__dirname, 'voice-media.html'),
     syntheticInput: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input'),
   });
-  providerConnections = createProviderConnectionBroker({
-    call,
-    openExternal: (url) => shell.openExternal(url),
-  });
   velaApiSetup = createVelaApiSetup({ BrowserWindow, ipcMain,
     storageAllowed: () => storage.allowWrite(),
     status: async () => safeApiStatus(await call('velaApiConnection', { type: 'status' })),
@@ -551,6 +548,34 @@ app.whenReady().then(async () => {
     ipcMain.off("application-resource-timing", observeResourceTiming);
   });
   let lastMissionActivity = -Infinity;
+  let providerNativeActivation = null;
+  let providerDocument = {};
+  let providerFocusEpoch = 0;
+  let providerActivationSerials = new WeakMap();
+  const authorizedProviderContexts = new WeakSet();
+  const invalidateProviderDocument = () => {
+    providerNativeActivation = null;
+    providerDocument = {};
+    providerActivationSerials = new WeakMap();
+  };
+  owner.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument)
+      invalidateProviderDocument();
+  });
+  owner.on("render-process-gone", invalidateProviderDocument);
+  win.on("blur", () => {
+    providerNativeActivation = null;
+    providerFocusEpoch++;
+  });
+  const observeProviderNativeActivation = () => {
+    if (!win.isFocused() || owner.getURL() !== localURL) return;
+    providerNativeActivation = Object.freeze({
+      frame: owner.mainFrame,
+      document: providerDocument,
+      focusEpoch: providerFocusEpoch,
+      observedAt: performance.now(),
+    });
+  };
   const observeMissionActivity = () => {
     const at = performance.now();
     if (!win.isFocused() || owner.getURL() !== localURL || at - lastMissionActivity < 1000) return;
@@ -558,10 +583,16 @@ app.whenReady().then(async () => {
     sendMissionHostSignal({ foregroundInput: true });
   };
   owner.on("before-input-event", (_event, input) => {
-    if (input.type === "keyDown") observeMissionActivity();
+    if (input.type === "keyDown") {
+      observeMissionActivity();
+      if (input.isAutoRepeat !== true) observeProviderNativeActivation();
+    }
   });
   owner.on("before-mouse-event", (_event, input) => {
-    if (input.type === "mouseDown") observeMissionActivity();
+    if (input.type === "mouseDown") {
+      observeMissionActivity();
+      if (input.button === "left") observeProviderNativeActivation();
+    }
   });
   const mediaOwnerAlive = () => !owner.isDestroyed() && owner.getURL() === localURL;
   const playback = createMediaPlayback({ call, ownerAlive: mediaOwnerAlive });
@@ -623,10 +654,75 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  const providerActivationIsFresh = (activation) => {
+    const age = performance.now() - activation?.observedAt;
+    return Number.isFinite(age) && age >= 0 && age <= 5000;
+  };
+  const providerFrameIsCurrent = (context, afterExternal = false) =>
+    !closing &&
+    backendWritable() &&
+    context?.activation?.document === providerDocument &&
+    context.activation.frame === context.event.senderFrame &&
+    (afterExternal
+      ? trustedApplicationFrame(context.event) && win.isVisible() && !win.isMinimized()
+      : trustedActiveFrame(context.event));
   let nativeReviewBusy=false;
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  providerConnections = createProviderConnectionBroker({
+    call,
+    openExternal: (url) => shell.openExternal(url),
+    authorize: (context, binding) => {
+      if (
+        !providerFrameIsCurrent(context) ||
+        context.activation.focusEpoch !== providerFocusEpoch ||
+        !providerActivationIsFresh(context.activation) ||
+        context.type !== binding.type ||
+        context.providerId !== binding.providerId ||
+        context.expectedVersion !== binding.expectedVersion ||
+        authorizedProviderContexts.has(context)
+      )
+        return null;
+      authorizedProviderContexts.add(context);
+      return Object.freeze({ context, binding });
+    },
+    revalidate: async (authority, binding, { phase } = {}) => {
+      // Shell handoff can move focus to the browser. A confirmed native
+      // disconnect can resume after its dialog only once the owner has focus.
+      const afterExternal = phase === "after-external" && binding.type === "connect";
+      const afterReview = phase === "after-review" && binding.type === "disconnect";
+      const current = () => providerFrameIsCurrent(authority.context, afterExternal) &&
+        (afterExternal || afterReview ||
+          authority.context.activation.focusEpoch === providerFocusEpoch);
+      return authority?.binding === binding &&
+        current() && await storage.allowWrite() && current();
+    },
+    reviewDisconnect: async (authority, binding, current) => {
+      if (
+        authority?.binding !== binding ||
+        binding?.type !== "disconnect" ||
+        binding.providerId !== "chatgpt-plan-responses" ||
+        binding.expectedVersion !== current?.registrationVersion ||
+        current.providerId !== binding.providerId
+      )
+        throw Error("provider_connection_changed");
+      const choice = await reviewDialogs.showMessageBox(win, {
+        type: "warning",
+        message: "Disconnect ChatGPT plan from Aerynth?",
+        detail:
+          `Account boundary: the signed-in ChatGPT plan account authorized for Aerynth.\n` +
+          `Provider: OpenAI (${binding.providerId})\n` +
+          `Connection version: ${binding.expectedVersion}\n\n` +
+          "This removes the saved provider authorization from Aerynth.",
+        buttons: ["Keep connected", "Disconnect"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return choice.response === 1;
+    },
+  });
   const policyReady = () => !closing && backendWritable() && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
   const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
     call, show: options => reviewDialogs.showMessageBox(win, options),
@@ -696,8 +792,10 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
+      if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
+          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "personalMemoryRevokeSourceNative", "velaMemorySearchNative"].includes(command)))
         throw Error("unauthorized_private_command");
+      if (command === "providerAuth") throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
@@ -714,9 +812,70 @@ app.whenReady().then(async () => {
             : 200000)
       )
         throw new Error("command_too_large");
+      let providerActivation = null;
+      if (command === "providerConnection") {
+        if (
+          !input ||
+          typeof input !== "object" ||
+          Array.isArray(input) ||
+          Reflect.ownKeys(input).length !== 3 ||
+          input.contract !== "aerynth.provider-command-envelope@1" ||
+          !Object.hasOwn(input, "request") ||
+          !Object.hasOwn(input, "activation")
+        )
+          throw Error("invalid_provider_connection_transport");
+        providerActivation = input.activation;
+        input = input.request;
+      }
       let apiGesture = false;
       let voiceGesture = false;
       let wakeGesture = false;
+      let providerContext = null;
+      if (command === "providerConnection" && input?.type !== "status") {
+        const expectedVersion = input?.expectedVersion ?? null;
+        const activation = providerNativeActivation;
+        const frame = event.senderFrame;
+        if (
+          !providerActivation ||
+          typeof providerActivation !== "object" ||
+          Array.isArray(providerActivation) ||
+          Reflect.ownKeys(providerActivation).length !== 5 ||
+          providerActivation.contract !== "aerynth.provider-activation@1" ||
+          !Number.isSafeInteger(providerActivation.serial) ||
+          providerActivation.serial < 1 ||
+          providerActivation.type !== input?.type ||
+          providerActivation.providerId !== input?.providerId ||
+          providerActivation.expectedVersion !== expectedVersion ||
+          !providerActivationIsFresh(activation) ||
+          activation.frame !== frame ||
+          !trustedActiveFrame(event) ||
+          providerActivation.serial <=
+            (providerActivationSerials.get(frame) ?? 0)
+        )
+          throw Error("provider_user_gesture_required");
+        // Claim before observing Blink activation so concurrent IPC cannot
+        // replay one trusted click while this handler is awaiting the frame.
+        providerActivationSerials.set(frame, providerActivation.serial);
+        providerNativeActivation = null;
+        const context = Object.freeze({
+          event, activation, type: input.type, providerId: input.providerId, expectedVersion,
+        });
+        if (
+          (await frame
+            .executeJavaScript(
+              "navigator.userActivation.isActive && document.hasFocus()",
+              false,
+            )
+            .catch(() => false)) !== true ||
+          !providerFrameIsCurrent(context) ||
+          activation.focusEpoch !== providerFocusEpoch ||
+          !providerActivationIsFresh(activation)
+        )
+          throw Error("provider_user_gesture_required");
+        providerContext = context;
+      } else if (command === "providerConnection" && providerActivation !== null) {
+        throw Error("invalid_provider_connection_transport");
+      }
       if(command==='folders'&&input?.type==='openExternal'){
         if(!trustedActiveFrame(event)||await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false).catch(()=>false)!==true||!trustedActiveFrame(event))throw Error('folder_user_gesture_required');
       }
@@ -781,6 +940,7 @@ app.whenReady().then(async () => {
           "folders",
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
+        !(command === "personalMemory" && ["list", "read"].includes(input?.type)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
         !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
@@ -818,7 +978,35 @@ app.whenReady().then(async () => {
           event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
         throw new Error("unauthorized_sender");
       let result;
-      if (command === "personalMemoryCapture") {
+      if (command === "personalMemory") {
+        const currentFrame = () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized();
+        result = await managePersonalMemory({
+          input, trustedFrame: currentFrame,
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(), call,
+          confirm: async review => {
+            const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory", revokeSource: "Revoke original message" };
+            const detail = review.action === "revokeSource"
+              ? "Hide this message from the app and remove all saved memories that depend on it. The original remains in local history storage. Previous exports, backups, and provider copies may still contain it.\n\nOriginal message\n" + review.sourceText
+              : review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text
+              : review.action === "export" ? "Export this fact and its retained revisions to a JSON file you choose. The file contains readable memory text.\n\n" + review.fact.text
+              : (review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
+                : "Keep the record for inspection and exclude it from future recall.")
+                + "\n\nMemory " + review.id + " · revision " + review.version;
+            const choice = await reviewDialogs.showMessageBox(win, { type: "question", title: "Aerynth memory",
+              message: labels[review.action] + "?", detail, buttons: ["Cancel", labels[review.action]], defaultId: 0, cancelId: 0, noLink: true });
+            return choice.response === 1;
+          },
+          chooseExport: async () => {
+            const choice = await reviewDialogs.showSaveDialog(win, { title: "Export memory",
+              defaultPath: "aerynth-memory.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+            return choice.canceled ? null : choice.filePath ?? null;
+          },
+          writeExport: (path, bundle) => writeFileSync(path, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 }),
+        });
+      }
+      else if (command === "personalMemoryCapture") {
         if (input?.expectedProjectId !== null &&
             (typeof input?.expectedProjectId !== "string" || !input.expectedProjectId.trim() || input.expectedProjectId.length > 200))
           throw Error("invalid_personal_memory_capture");
@@ -838,7 +1026,7 @@ app.whenReady().then(async () => {
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
-        result = await providerConnections.command(input);
+        result = await providerConnections.command(input, providerContext);
       else if (command === 'velaApiConnection') {
         result = await velaApiConnections.command(input, { event, observedGesture: apiGesture });
       }
@@ -966,6 +1154,9 @@ app.whenReady().then(async () => {
             input: brokerInput,
             reviewProvider,
             validateMemoryReview: memoryCurrent,
+            reviewMemorySearch: search => reviewVelaMemorySearch({
+              win, dialog: reviewDialogs, search, isCurrent: memoryCurrent, allowWrite: () => storage.allowWrite(),
+            }),
             beforeMemoryPreview: () => ensureVelaMemoryConsent({
               win, call, dialog: reviewDialogs, allowWrite: () => storage.allowWrite(), isCurrent: memoryCurrent,
             }),

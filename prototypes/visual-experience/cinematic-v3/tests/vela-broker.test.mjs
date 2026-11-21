@@ -897,3 +897,57 @@ test("Vela memory consent is versioned and scoped to the current submission", as
       ? [{ assistant: "vela", enable: true, expectedVersion: 7 }] : []);
   }
 });
+
+
+test('query-only consent is distinct from final memory review and fails closed', async () => {
+  for (const scenario of ['approve','cancel-query','cancel-final','retire','bad-request','unavailable']) {
+    let current=true; const calls=[];
+    const prompt='Synthetic memory prompt';
+    const memory={manifestDigest:'a'.repeat(64),promptDigest:createHash('sha256').update(prompt).digest('hex')};
+    const preview={id:'preview',signature:'old',providerId:'openai-api-vela',intent:'Recall preference',resourceIds:[],route:{kind:'conversational',model:'synthetic-model'},sendDisposition:'routine'};
+    const run=velaCommand({win:{isDestroyed:()=>false,webContents:{isDestroyed:()=>false}},directMessageSend:true,
+      beforeMemoryPreview:async()=>{},validateMemoryReview:()=>current,
+      input:{name:'request',input:{intent:preview.intent,resourceIds:[],providerId:preview.providerId,authorizeProvider:true,useMemory:true}},
+      reviewMemorySearch:async search=>{calls.push('query-consent');assert.equal(search.request,preview.intent);if(scenario==='retire')current=false;return scenario!=='cancel-query';},
+      reviewProvider:async()=>{calls.push('final-consent');return scenario!=='cancel-final';},
+      call:async(name,input)=>{
+        calls.push(name);
+        if(name==='velaRequestPreview'){if(input.useMemory)throw Error('personal_memory_no_eligible_context');return preview;}
+        if(name==='velaMemorySearchNative'){
+          if(!input.reviewDigest)return scenario==='unavailable'?{kind:'unavailable'}:{kind:'review',request:scenario==='bad-request'?'substituted':preview.intent,model:'synthetic-model',digest:'d'.repeat(64)};
+          assert.equal(input.reviewDigest,'d'.repeat(64));return {kind:'preview',signature:'new',memory};
+        }
+        if(name==='velaNativeReview'){assert.equal(input.signature,'new');return {previewId:preview.id,signature:'new',providerId:preview.providerId,route:preview.route,context:{included:[]},prompt,promptDigest:createHash('sha256').update(JSON.stringify(prompt)).digest('hex'),reviewDigest:'b'.repeat(64),memory};}
+        if(name==='authorizeVelaRequest'){assert.equal(input.directSend,undefined);assert.equal(input.signature,'new');return {grantId:'reviewed'};}
+        assert.equal(name,'vela');return {state:'responded'};
+      }});
+    if(scenario==='approve') {assert.equal((await run).state,'responded');assert.ok(calls.indexOf('query-consent')<calls.indexOf('final-consent'));}
+    else {await assert.rejects(run);assert.ok(!calls.includes('authorizeVelaRequest'));}
+    assert.equal(calls.filter(x=>x==='velaMemorySearchNative').length,['approve','cancel-final'].includes(scenario)?2:1);
+  }
+});
+test('query dialog defaults to cancel, names recipient and charges, and rechecks write admission/frame',async()=>{
+  const {reviewVelaMemorySearch}=createRequire(import.meta.url)('../native/vela-broker.cjs');
+  for(const scenario of ['approve','cancel','storage','retire-dialog','retire-write']) {
+    let current=true,writes=0;
+    const run=reviewVelaMemorySearch({win:{isDestroyed:()=>false,webContents:{isDestroyed:()=>false}},search:{model:'synthetic-model',request:'Synthetic query'},isCurrent:()=>current,
+      dialog:{showMessageBox:async(_win,options)=>{assert.equal(options.defaultId,0);assert.equal(options.cancelId,0);assert.match(options.detail,/OpenAI API/);assert.match(options.detail,/charges may apply/);assert.match(options.detail,/separate exact-request review/);assert.match(options.detail,/Synthetic query/);if(scenario==='retire-dialog')current=false;return {response:scenario==='cancel'?0:1};}},
+      allowWrite:async()=>{writes++;if(scenario==='retire-write')current=false;return scenario!=='storage';}});
+    if(scenario==='approve'||scenario==='cancel')assert.equal(await run,scenario==='approve');else await assert.rejects(run);
+    if(scenario==='cancel'||scenario==='retire-dialog')assert.equal(writes,0);
+  }
+});
+
+for(const approve of [false,true])test('selected evidence classification cannot substitute for native consent: '+approve,async()=>{
+ const f=fixture(),seen=[];let reviews=0;const ref={id:'note',kind:'resource',resourceKind:'note',title:'Synthetic note',version:3};
+ const options={...f,directMessageSend:true,routeNative:false,input:{name:'request',input:{intent:'Explain selected evidence',resourceIds:['note'],resourceRefs:[ref],providerId:'openai-api-vela',semanticContext:true,authorizeProvider:true}},
+  reviewProvider:async()=>{reviews++;return approve;},call:async(name,input)=>{
+   seen.push({name,input});const result=await f.call(name,input);
+   if(name==='velaRequestPreview')return {...result,providerId:'openai-api-vela',semanticContext:true,sendDisposition:'standing-selected-evidence',resourceIds:['note']};
+   if(name==='velaNativeReview'){const {history,...rest}=result;return {...rest,providerId:'openai-api-vela',semanticContext:true,context:{included:[{...ref,content:'Synthetic content'}]}};}
+   return result;
+  }};
+ if(approve)await velaCommand(options);else await assert.rejects(velaCommand(options),/authorization_cancelled/);
+ assert.equal(reviews,1);const grants=seen.filter(x=>x.name==='authorizeVelaRequest');assert.equal(grants.length,approve?1:0);if(approve)assert.equal(grants[0].input.directSend,undefined);
+ assert.equal(seen.filter(x=>x.name==='vela'&&x.input.name==='request').length,approve?1:0);
+});

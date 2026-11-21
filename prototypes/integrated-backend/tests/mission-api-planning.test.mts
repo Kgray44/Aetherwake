@@ -1479,7 +1479,12 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
       directMessageSend: true, routeNative: true, dialog: {},
       call: f.core.command.bind(f.core),
       reviewProvider: async (reviewed: { review: typeof review }) => {
-        assert.equal(selectedVersion, undefined, 'standing selected evidence must not open the sharing modal');
+        const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+        const currentNote = snapshot.resources.find(item => item.id === note.id)!;
+        assert.equal(reviewed.review.context.included.length, 1);
+        assert.equal(reviewed.review.context.included[0].id, note.id);
+        assert.equal(reviewed.review.context.included[0].content, currentNote.content);
+        assert.match(reviewed.review.reviewDigest, /^[a-f0-9]{64}$/);
         assert.equal(reviewed.review.semanticContext, true);
         assert.match(reviewPage(reviewed.review, intent), /up to six API calls/);
         return allow;
@@ -1535,6 +1540,8 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
       intent, resourceIds: [note.id], authorizeProvider: true, previewId: selectedPreview.id, grantId: grant.grantId,
     } }), /native_vela_grant_expired|vela_preview_expired/);
     assert.equal(f.requests.length, 0);
+    await assert.rejects(send(false, current.version), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0, 'selected refs cannot replace native approval');
     const result = await send(true, current.version) as VelaRequest;
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
@@ -2574,14 +2581,17 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
     assert.match(review.context.included[0].content, /Extracted DOCX body text/);
     const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
-    const send = () => velaCommand({
+    const send = (allow = true) => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
       call: (name: string,input: any) => evaluation&&name==='velaRequestPreview'
         ? f.core.previewVelaEvaluation(input,claim) : (f.core.command as any)(name,input),
-      reviewProvider: async () => {
-        assert.ok(evaluation,'standing file analysis opened the sharing modal');
-        return true;
+      reviewProvider: async ({review: reviewed}: {review: VelaNativeReview}) => {
+        assert.equal(reviewed.context.included.length, 1);
+        assert.equal(reviewed.context.included[0].id, resource.id);
+        assert.equal(reviewed.context.included[0].content, review.context.included[0].content);
+        assert.match(reviewed.reviewDigest, /^[a-f0-9]{64}$/);
+        return allow;
       },
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
         providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
@@ -2611,6 +2621,10 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
         if (interrupted || scenario === 'revoke') await providerReleased;
         return response('The extracted body contains “Table cell.”', body.model);
       });
+    if (!evaluation) {
+      await assert.rejects(send(false), /authorization_cancelled/);
+      assert.equal(f.requests.length, 0, 'selected DOCX requires approval before any provider dispatch');
+    }
     const pending = send();
     if (interrupted || scenario === 'revoke') {
       try {

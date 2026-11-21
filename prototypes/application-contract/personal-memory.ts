@@ -15,3 +15,9 @@ export interface MemoryCaptureRequest {
 export function containsRecognizableMemoryCredential(text: string): boolean {
   return /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{50,}|sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b/u.test(text);
 }
+
+const commonWords = new Set('about after also an and are before been but can could did does for from had has have how into its may more most much need now of on one only or our out over said see should some than that the their them then there these they this those through to under use used was were what when where which who why will with would you your'.split(' '));
+export function personalMemorySearchTerms(text: string, limit = 128): string[] {
+  const words = text.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu) ?? [];
+  return [...new Set(words.filter(word => word.length >= 2 && !commonWords.has(word)).slice(0, limit))];
+}

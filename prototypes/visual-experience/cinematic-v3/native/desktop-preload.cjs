@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require("electron");
 let lastResourceTimingAt = -Infinity;
+let providerActivationSerial = 0;
+let providerClick = null;
+globalThis.addEventListener?.(
+  "click",
+  (event) => {
+    if (event.isTrusted === true) providerClick = event;
+  },
+  true,
+);
 contextBridge.exposeInMainWorld(
   "aerynthHost",
   Object.freeze({
@@ -104,10 +113,12 @@ contextBridge.exposeInMainWorld(
           "workspaceRecovery",
           "firstPartyChat",
           "personalMemoryCapture",
+          "personalMemory",
         ].includes(name)
       )
         throw new Error("unsupported_command");
-      if (name === "personalMemoryCapture" && navigator.userActivation?.isActive !== true)
+      if ((name === "personalMemoryCapture" || name === "personalMemory" && ["manage", "revokeSource", "disableProviderMemory"].includes(input?.type)) &&
+          navigator.userActivation?.isActive !== true)
         throw new Error("personal_memory_user_gesture_required");
       if ((name === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||
            name === 'library' && input?.name === 'createBlock' && input?.input?.kind === 'clock_timer' ||
@@ -117,6 +128,26 @@ contextBridge.exposeInMainWorld(
       if (name === 'velaApiConnection' && !['status','usageStatus'].includes(input?.type) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('api_user_gesture_required');
+      let providerActivation = null;
+      if (name === "providerConnection" && input?.type !== "status") {
+        // Blink activation can outlive a click. Spend it only during this
+        // trusted click's dispatch, then leave the native input check to Main.
+        if (
+          navigator.userActivation?.isActive !== true ||
+          !providerClick ||
+          providerClick.eventPhase === 0 ||
+          providerActivationSerial >= Number.MAX_SAFE_INTEGER
+        )
+          throw new Error("provider_user_gesture_required");
+        providerClick = null;
+        providerActivation = Object.freeze({
+          contract: "aerynth.provider-activation@1",
+          serial: ++providerActivationSerial,
+          type: input?.type,
+          providerId: input?.providerId,
+          expectedVersion: input?.expectedVersion ?? null,
+        });
+      }
       if (name === 'velaVoice' && (['start','reconnect','audition','speak','createVoice','saveVoice'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===true) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('voice_user_gesture_required');
@@ -147,7 +178,13 @@ contextBridge.exposeInMainWorld(
       const reply = await ipcRenderer.invoke(
         "application-command",
         name,
-        input,
+        name === "providerConnection"
+          ? {
+              contract: "aerynth.provider-command-envelope@1",
+              request: input,
+              activation: providerActivation,
+            }
+          : input,
       );
       if (!reply.ok) throw new Error(reply.error);
       return reply.result;
