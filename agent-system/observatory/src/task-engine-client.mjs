@@ -60,6 +60,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   if (state === 'failed' && attempts.at(-1)?.state === 'orphaned') result.push('recover_candidate');
   if (state === 'failed' && attemptsThisCycle > 0 && attemptsThisCycle < 3) result.push('retry');
   if (state === 'verifying') result.push('accept', 'reject');
+  if (lifecycle.can_continue_candidate === true) result.push('continue_candidate');
   if (!['completed', 'failed', 'cancelled', 'superseded', 'archived', 'cancelling'].includes(state)) result.push('cancel');
   if (['completed','proposed','blocked','failed','cancelled','superseded'].includes(state)) result.push('archive');
   if (state === 'completed' || state === 'archived' && lifecycle.evidence?.length) result.unshift('reopen');

@@ -50,6 +50,12 @@ const stateForV1 = {
 };
 const unique = items => [...new Set(items)];
 const cycleAttempts = lifecycle => lifecycle.attempts.length - (lifecycle.cycle_start ?? 0);
+function canContinueCandidate(lifecycle) {
+  const attempt = lifecycle.attempts.at(-1);
+  return Boolean(lifecycle.state === 'verifying' && attempt?.state === 'verifying' &&
+    attempt.finished_at && attempt.session_id && attempt.branch && attempt.candidate_origin !== 'recovered' &&
+    revisionPattern.test(attempt.candidate_revision ?? '') && attempt.candidate_revision !== attempt.revision);
+}
 const validWorkerScope = scope => scope === undefined ||
   (Array.isArray(scope) && scope.length <= scopeLimit && scope.every(taskId));
 const needsContinuation = lifecycle => {
@@ -97,7 +103,7 @@ function exposeAttempt({ lease, ...attempt }) {
 }
 
 export function taskAttemptRecord(task, attempt) {
-  const states = { orphaned: 'failed', interrupted: 'blocked', paused: 'blocked' };
+  const states = { orphaned: 'failed', interrupted: 'blocked', paused: 'blocked', checkpointed: 'blocked' };
   return {
     schema_version: 1, record_type: 'attempt', id: attempt.id,
     repository: task.repository, revision: attempt.revision, task_id: task.id,
@@ -120,7 +126,7 @@ function publicLifecycle(row,rows,now,includePrerequisites=false) {
     can_configure_execution:canConfigureExecution(stored),stored_state:lifecycle.state,
     can_edit_spec: canEditSpec(stored), spec_version: stored.spec_version ?? 1,
     edit_effect: futureSpecStates.has(stored.state) ? 'next_attempt' : 'before_claim',
-    can_addendum: canAddendum(stored),
+    can_addendum: canAddendum(stored), can_continue_candidate: canContinueCandidate(stored),
     ...(includePrerequisites ? { addenda: addenda ?? [], pending_spec } :
       { pending_spec_version: pending_spec?.version }),
     ...waitState(task,lifecycle,rows,now,checks),...(checks?{prerequisite_status:checks}:{})};
@@ -287,6 +293,21 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
     last.state = 'succeeded';
     return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed',
       evidence: action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision })) } };
+  }
+  if (type === 'continue_candidate' && current === 'verifying') {
+    const last = lifecycle.attempts.at(-1);
+    if (!canContinueCandidate(lifecycle) || last.id !== action.attempt_id || last.candidate_revision !== action.revision) {
+      return failure(409, 'Continuation requires the exact completed worker candidate and its retained conversation');
+    }
+    if (typeof action.feedback !== 'string' || !action.feedback.trim() || action.feedback.length > 2000) {
+      return failure(400, 'Owner feedback must contain 1 to 2000 characters');
+    }
+    last.state = 'checkpointed';
+    return { lifecycle:{
+      ...lifecycle, state:'queued', start_at:now, cycle_start:lifecycle.attempts.length,
+      feedback:action.feedback.trim(), changed_assumption:undefined, followup_revision:last.candidate_revision,
+      resume_attempt_id:last.id,
+    } };
   }
   if (type === 'retry' && current === 'failed' && cycleAttempts(lifecycle) > 0 && cycleAttempts(lifecycle) < maxAttempts) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
@@ -717,6 +738,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       attempt.resume_session_id = checkpoint.session_id;
       if (checkpoint.state==='paused'&&checkpoint.checkpoint_revision) attempt.revision = checkpoint.checkpoint_revision;
       else attempt.resume_requires_clean=true;
+      if (checkpoint.state === 'checkpointed') attempt.branch = checkpoint.branch;
     }
     delete lifecycle.resume_attempt_id;
     delete lifecycle.recovered_candidate;
@@ -775,13 +797,14 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     } } : {}),
     ...(action?.type === 'reopen' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision,
       evidence:lifecycle.evidence } : {}),
+    ...(action?.type === 'continue_candidate' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision } : {}),
     ...(action?.type === 'recover_candidate' ? { revision:action.revision, reason:action.reason.trim(),
       previous_failure:change.previousFailure } : {}),
     ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence } : {}),
   };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
     priority: change.priority, kind: action?.type ?? body.report.type, receipt,
-    attemptId:body.attempt_id ?? (['accept','reject','reopen','recover_candidate'].includes(action?.type)?latest?.id:undefined),
+    attemptId:body.attempt_id ?? (['accept','reject','reopen','recover_candidate','continue_candidate'].includes(action?.type)?latest?.id:undefined),
     fenceGraph: body.op !== 'report',
   });
   if (!updated) return conflict();

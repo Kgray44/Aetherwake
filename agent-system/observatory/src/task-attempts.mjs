@@ -18,6 +18,7 @@ export function mergeTaskAttempts(taskId, reported, canonical) {
 const operations = {
   claim:'Executor claimed attempt', heartbeat:'Worker heartbeat', finished:'Candidate submitted for review',
   recover_candidate:'Recovered candidate submitted for review',
+  continue_candidate:'Owner authorized continuation from candidate',
   failed:'Worker reported failure', stopped:'Worker stopped', accept:'Owner accepted result', reject:'Owner rejected candidate',
   lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
 };

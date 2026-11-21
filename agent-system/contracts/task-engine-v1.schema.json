@@ -479,6 +479,16 @@
         {
           "type": "object",
           "properties": {
+            "type": { "const": "continue_candidate" },
+            "attempt_id": { "type": "string", "pattern": "^attempt_[a-f0-9-]{36}$" },
+            "revision": { "$ref": "#/$defs/rid" },
+            "feedback": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          },
+          "required": ["type", "attempt_id", "revision", "feedback"]
+        },
+        {
+          "type": "object",
+          "properties": {
             "type": { "const": "recover_candidate" },
             "attempt_id": { "type": "string", "pattern": "^attempt_[a-f0-9-]{36}$" },
             "revision": { "$ref": "#/$defs/rid" },
@@ -694,6 +704,7 @@
               "required": ["version","fields"]
             },
             "can_addendum": {"type":"boolean"},
+            "can_continue_candidate": {"type":"boolean"},
             "addenda": {"type":"array","items":{"$ref":"#/$defs/addendum"}},
             "prerequisite_status": {
               "type": "array",
@@ -824,6 +835,7 @@
           "enum": [
             "running",
             "verifying",
+            "checkpointed",
             "succeeded",
             "failed",
             "orphaned",
