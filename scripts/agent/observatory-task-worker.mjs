@@ -19,6 +19,8 @@ const taskIdPattern = new RegExp('^task_' + verificationId.source.slice(1));
 const attemptIdPattern = new RegExp('^attempt_' + verificationId.source.slice(1));
 const repoUrl = /^(?:https:\/\/github\.com\/|git@github\.com:)Kgray44\/Aetherwake(?:\.git)?$/i;
 const tool = 'aetherwake_engineering_observatory.task_engine_v1';
+const reportSafetyMarginMs = 1_500;
+const reportTimeoutMs = 5_000;
 
 function storageReceipt(output) {
   try {
@@ -420,7 +422,8 @@ export async function executeAppServer(connector, {cwd,task,attempt,onSession,on
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
   identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart,
   telemetryDirectory, onDevelopmentNote,
-  verificationNamespace, prepareWorkspace, managedConnection, providerStream, interval = 12_000 }) {
+  verificationNamespace, prepareWorkspace, managedConnection, providerStream, interval = 12_000,
+  requestTimeoutMs = reportTimeoutMs }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -431,51 +434,65 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let desired;
   let stopReason;
   let terminalConfirmed = false;
-  let reportDeadlineExpired = false;
+  const wallOrigin = Date.now();
+  const monotonicOrigin = performance.now();
+  const elapsedSinceOrigin = () => performance.now() - monotonicOrigin;
+  let leaseExhausted = false;
   let leaseUntil = attempt.lease_until ?? attempt.deadline;
-  const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
+  const timeUntilLeaseExpiry = () => leaseUntil - wallOrigin - elapsedSinceOrigin();
   const leaseExpired = () => Object.assign(Error('The Task lease expired before the worker could confirm its report.'), {code:'report_lease_expired'});
-  // A control reconnect can outlast the lease even though execution has time left.
   const sendBeforeLeaseExpiry = async request => {
     const remaining = timeUntilLeaseExpiry();
-    if (remaining <= 0) reportDeadlineExpired = true;
-    if (reportDeadlineExpired) throw leaseExpired();
+    if (leaseExhausted || remaining <= 0) throw leaseExpired();
     const reportController = new AbortController();
+    const exhaustsLease = remaining <= requestTimeoutMs;
     let timer;
     const expired = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        // A lost renewal is ambiguous. Keep the lease fenced even if the
-        // wall clock still reads before expiry when another report runs.
-        reportDeadlineExpired = true;
-        const error = leaseExpired();
+        if (exhaustsLease) leaseExhausted = true;
+        const error = exhaustsLease ? leaseExpired() :
+          Object.assign(Error('The Task Engine report did not respond within its request budget.'), {code:'report_timeout'});
         reportController.abort(error);
         reject(error);
-      }, remaining);
+      }, Math.min(remaining,requestTimeoutMs));
     });
     try { return await Promise.race([send(request, {signal:reportController.signal}), expired]); }
     finally { clearTimeout(timer); }
   };
   let reports = Promise.resolve();
-  const report = async (type, fields = {}) => {
+  const report = async (type, fields = {}, operationId = randomUUID()) => {
     let request;
+    let backoff = 250;
+    let retries = 0;
     for (;;) {
       const pending = reports.then(async () => {
         if (type==='heartbeat'&&terminalConfirmed) return null;
         request ??= { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
-          operation_id: randomUUID(), report: { type, ...fields,
+          operation_id: operationId, report: { type, ...fields,
             ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
             ...(identity ? { branch: identity.branch } : {}) } };
         const result = await sendBeforeLeaseExpiry(request);
+        if (type==='heartbeat') {
+          const expiry = result.attempts?.find(item=>item.id===attempt.id)?.lease_until;
+          if (Number.isFinite(expiry)) leaseUntil = Math.min(Math.max(leaseUntil,expiry),attempt.deadline);
+        }
         if (['finished', 'failed', 'stopped'].includes(type)) { terminalConfirmed=true; heartbeats.abort(); }
+        if (retries && type==='heartbeat') {
+          console.info(new Date().toISOString(),attempt.id,'Lease renewal recovered after',retries,'retry attempt(s).');
+        }
         return result;
       });
       reports = pending.catch(()=>{});
       try { return await pending; }
       catch (error) {
-        const retryable = !error.status || error.status >= 500 || error.code === 'task_version_conflict';
-        if (!retryable || error.code==='report_lease_expired' || timeUntilLeaseExpiry() <= 1500) throw error;
+        const retryable = !error.status || error.status === 429 || error.status >= 500 || error.code === 'task_version_conflict';
+        const retryBudget = timeUntilLeaseExpiry() - reportSafetyMarginMs;
+        if (!retryable || error.code==='report_lease_expired' || retryBudget <= 0) throw error;
         // Retry the same immutable operation without blocking a renewal during backoff.
-        await sleep(750);
+        await sleep(Math.min(backoff,retryBudget));
+        if (timeUntilLeaseExpiry() <= reportSafetyMarginMs) throw error;
+        retries++;
+        backoff = Math.min(backoff * 2,2_000);
       }
     }
   };
@@ -483,8 +500,6 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     if (terminalConfirmed) return;
     const result = await report('heartbeat');
     if (!result) return;
-    const expiry = result.attempts?.find(item=>item.id===attempt.id)?.lease_until;
-    if (Number.isFinite(expiry)) leaseUntil = expiry;
     const state = result.lifecycle.state;
     if (state === 'pausing' || state === 'cancelling') {
       desired = state;
@@ -498,7 +513,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let monitoring;
   let storageMonitoring;
   let lock;
-  let clearActiveClaim;
+  let retainedClaim;
   let outcome;
   let executionEnd;
   let provisioning = false;
@@ -548,7 +563,13 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         catch (error) {
           stop(error.code==='lease_rejected'
             ? 'The Task Engine rejected this worker lease.'
-            : 'The worker could not confirm lease renewal with the Task Engine.');
+            : error.code==='report_lease_expired'
+              ? 'The lease expired before the Task Engine confirmed renewal.'
+              : error.code==='report_timeout' || error.code==='connector_tool_timeout'
+                ? 'The Task Engine did not answer lease renewal within the retry window.'
+                : error.code==='connector_disconnected'
+                  ? 'The Task Engine connector disconnected during lease renewal.'
+                  : 'The worker could not confirm lease renewal with the Task Engine.');
           return;
         }
         try { await sleep(interval, undefined, {signal:heartbeats.signal}); }
@@ -557,7 +578,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     })();
     if (telemetryDirectory && !onTelemetryStart && !onUsage && !onTelemetryEnd) {
       await guardStorage();
-      clearActiveClaim=await retainActiveClaim(telemetryDirectory,{task,attempt});
+      retainedClaim=await retainActiveClaim(telemetryDirectory,{task,attempt});
       ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart, onDevelopmentNote } =
         createClaimTelemetryHooks(telemetryDirectory, {managedConnection}, telemetryDirectory));
       telemetryStarted = liveStages = true;
@@ -595,6 +616,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         throw Error('Workspace must match the attempt revision and cleanliness policy');
       }
       await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
+      await retainedClaim?.update({workspace,branch:identity.branch});
     });
     if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
       ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onDevelopmentNote } = createClaimTelemetryHooks(workspace,
@@ -613,6 +635,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         }
         sessionId=value;
         executionIdentity=observedIdentity;
+        await retainedClaim?.update({sessionId});
         try { await confirmControl(); }
         catch (error) {
           stop('The Task Engine could not bind the Codex session to the active attempt.');
@@ -625,8 +648,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         noteItems.add(itemId);
         await telemetry(onDevelopmentNote,{itemId,note,occurredAt,sessionId});
       },
-      onTurnStarted:async()=>{
+      onTurnStarted:async(turnId)=>{
         if (turnStarted) return;
+        if (turnId) await retainedClaim?.update({turnId});
         turnStarted={name:'codex_turn',phase:'implementation',startAt:new Date().toISOString(),monotonic:performance.now()};
         await telemetry(onTelemetryStageStart,turnStarted);
       },
@@ -665,7 +689,11 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     if (telemetryStarted) executionEnd = {at:new Date().toISOString(),monotonic:performance.now()};
   }
   const terminal = async (type, fields) => {
-    const submit = () => report(type,fields);
+    const operationId=randomUUID();
+    if (type==='finished') {
+      await retainedClaim?.update({candidateRevision:fields.revision,terminalOperationId:operationId});
+    }
+    const submit = () => report(type,fields,operationId);
     if (type === 'finished') await submit();
     else await measureStage('terminal_reporting','integration',submit);
   };
@@ -728,14 +756,19 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     }
   } finally {
     heartbeats.abort();
-    if (terminalConfirmed) await clearActiveClaim?.().catch(()=>console.error('Task recovery marker cleanup is pending.'));
-    if (!terminalConfirmed && stopReason) console.error('Task interruption:',stopReason);
+    if (!terminalConfirmed && stopReason) console.error(new Date().toISOString(),attempt.id,'Task interruption:',stopReason);
     await Promise.all([monitoring,storageMonitoring]);
     try {
       if (lock) await measureStage('checkout_lock_release','other',async () => {
         await lock.close();
         await unlink(join(workspace, '.git', 'aads-task-worker.lock'));
       });
+      if (retainedClaim) {
+        try {
+          if (terminalConfirmed) await retainedClaim.clear();
+          else await retainedClaim.update({settled:true});
+        } catch { console.error('Task recovery marker update is pending.'); }
+      }
     } finally {
       if (telemetryStarted) {
         for (const stage of stages) await telemetry(onTelemetryStage,stage);
@@ -808,23 +841,29 @@ async function main(configPath) {
   };
   function connection() {
     let connector;
+    function use(operation) {
+      const current = connector ??= openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
+      return operation(current).catch(error => {
+        if (error.code === 'connector_disconnected' && connector === current) {
+          current.close();
+          connector = undefined;
+        }
+        throw error;
+      });
+    }
     return {
       close: () => connector?.close(),
-      call(args, toolName, options) {
-        const current = connector ??= openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
-        return current.call(args,toolName,options).catch(error => {
-          // A single expired report must not close another Task's shared control transport.
-          if (!error.status && !options?.signal?.aborted && connector === current) { current.close(); connector = undefined; }
-          throw error;
-        });
-      },
+      ready: requestSignal => use(current=>current.ready(requestSignal)),
+      call: (args,toolName,options) => use(current=>current.call(args,toolName,options)),
     };
   }
   const control = connection();
+  const dispatch = connection();
   const delivery = connection();
   const observations = connection();
   const recovery = connection();
-  const send = (request, options) => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
+  const send = (request, options) => (request.op==='claim' ? dispatch : control)
+    .call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
   const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   let nextPulse = 0;
   let lastWorkerState;
@@ -871,6 +910,8 @@ async function main(configPath) {
       if (active.size < taskExecutionCapacity) {
         try {
           await admitStorage();
+          // Do not spend a new claim's lease on local App Server startup.
+          await control.ready(signal);
           const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:appServer,
             live_addenda:appServer, separate_execution_notes:true, ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
@@ -922,6 +963,7 @@ async function main(configPath) {
     recovery.close();
     observations.close();
     delivery.close();
+    dispatch.close();
     control.close();
     await recovering;
   }

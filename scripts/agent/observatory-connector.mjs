@@ -10,6 +10,20 @@ const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
 const timeoutMs = 8000;
 const startupTimeoutMs = 180_000;
 
+const disconnected = () => Object.assign(Error('Codex connector is unavailable'), {code:'connector_disconnected'});
+
+async function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  let abort;
+  const cancelled = new Promise((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, {once:true});
+  });
+  try { return await Promise.race([promise,cancelled]); }
+  finally { signal.removeEventListener('abort',abort); }
+}
+
 export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex',
   spawnProcess = spawn } = {}) {
   const env = { ...process.env };
@@ -29,7 +43,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     if (closed) return;
     closed = true;
     signal?.removeEventListener('abort', close);
-    for (const finish of pending.values()) finish({ error: true });
+    for (const finish of pending.values()) finish(null,disconnected());
     pending.clear();
     for (const listener of threadListeners.values()) listener('disconnected',{});
     threadListeners.clear();
@@ -52,17 +66,29 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     } catch { close(); }
   });
   const send = message => child.stdin.write(JSON.stringify(message) + '\n');
-  function rpc(method, params, timeout = timeoutMs) {
+  function rpc(method, params, timeout = timeoutMs, requestSignal) {
     return new Promise((resolve, reject) => {
-      if (closed || signal?.aborted) { reject(Error('Codex connector is unavailable')); return; }
+      if (closed || signal?.aborted) { reject(disconnected()); return; }
+      requestSignal?.throwIfAborted();
       const id = ++sequence;
-      const deadline = setTimeout(close, timeout);
-      pending.set(id, response => {
+      const abort = () => finish(null,requestSignal.reason);
+      const deadline = setTimeout(() => {
+        if (method === 'mcpServer/tool/call') {
+          // A lost tool reply is ambiguous and confined to this RPC. Other
+          // attempts still need this initialized transport to renew their leases.
+          finish(null,Object.assign(Error('Observatory tool reply timed out'),{code:'connector_tool_timeout'}));
+        } else close();
+      }, timeout);
+      function finish(response, error) {
         pending.delete(id);
         clearTimeout(deadline);
-        if (response.error) reject(Error('Codex connector request failed: ' + method));
+        requestSignal?.removeEventListener('abort',abort);
+        if (error) reject(error);
+        else if (response.error) reject(Error('Codex connector request failed: ' + method));
         else resolve(response.result);
-      });
+      }
+      pending.set(id,finish);
+      requestSignal?.addEventListener('abort',abort,{once:true});
       send({ id, method, params });
     });
   }
@@ -72,6 +98,14 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   })();
   initialized.catch(() => {});
   let opening;
+  function ready() {
+    if (closed || signal?.aborted) return Promise.reject(disconnected());
+    return opening ??= openToolThread().catch(error => {
+      // An unusable tool thread must be reopened with a new transport.
+      close();
+      throw Object.assign(disconnected(),{cause:error});
+    });
+  }
   async function openToolThread() {
     await initialized;
     const started = await rpc('thread/start', { cwd, ephemeral: true }, startupTimeoutMs);
@@ -178,7 +212,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (early?.usage) observeUsage(early.usage);
       if (early?.status) finish(early.status);
       await onTurnAccepted?.(turnId);
-      await onTurnStarted?.();
+      await onTurnStarted?.(turnId);
       if (runSignal.aborted) abort();
       const status=await completion;
       await onTurnFinished?.(status);
@@ -197,6 +231,10 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   return {
     close,
+    async ready(requestSignal) {
+      requestSignal?.throwIfAborted();
+      return untilAborted(ready(),requestSignal);
+    },
     runWorkspaceTurn,
     async readThreadTurns(threadId, cursor = null) {
       if (!identifier(threadId)) throw Error('Invalid Codex thread identity');
@@ -210,9 +248,8 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     },
     async call(args, toolName = tool, {signal:requestSignal} = {}) {
       requestSignal?.throwIfAborted();
-      const threadId = await (opening ??= openToolThread());
-      requestSignal?.throwIfAborted();
-      const result = await rpc('mcpServer/tool/call', { threadId, server, tool:toolName, arguments:args });
+      const threadId = await untilAborted(ready(),requestSignal);
+      const result = await rpc('mcpServer/tool/call', { threadId, server, tool:toolName, arguments:args },timeoutMs,requestSignal);
       requestSignal?.throwIfAborted();
       let value;
       try { value = result.structuredContent ?? JSON.parse(result.content.find(item => item.type === 'text').text); }

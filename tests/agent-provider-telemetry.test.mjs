@@ -4,7 +4,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +26,11 @@ test('forced worker termination preserves a recoverable claim until canonical or
   const attempt={id:'attempt_00000000-0000-4000-8000-000000000002',revision:'a'.repeat(40),
     session_id:'00000000-0000-4000-8000-000000000003',state:'running'};
   const module=new URL('../scripts/agent/claim-telemetry.mjs',import.meta.url).href;
+  const checkpoint={sessionId:attempt.session_id, branch:'codex/task-fixture',
+    candidateRevision:'b'.repeat(40), terminalOperationId:'00000000-0000-4000-8000-000000000004'};
   const code='const {retainActiveClaim}=await import('+JSON.stringify(module)+');'+
-    'await retainActiveClaim('+JSON.stringify(directory)+','+JSON.stringify({task,attempt})+');'+
+    'const claim=await retainActiveClaim('+JSON.stringify(directory)+','+JSON.stringify({task,attempt})+');'+
+    'await claim.update('+JSON.stringify(checkpoint)+');'+
     'console.log("ready");setInterval(()=>{},1000);';
   const worker=spawn(process.execPath,['--input-type=module','--eval',code],{stdio:['ignore','pipe','pipe'],windowsHide:true});
   t.after(()=>{if(worker.exitCode===null&&!worker.signalCode)worker.kill();});
@@ -49,6 +52,15 @@ test('forced worker termination preserves a recoverable claim until canonical or
   const entries=await readJournal(join(directory,'claimed-execution.journal'));
   assert.deepEqual(entries.map(entry=>[entry.state,entry.attempt_id,entry.session_id,entry.occurred_at]),
     [['interrupted',attempt.id,attempt.session_id,attempt.finished_at]]);
+  const markerPath=join(directory,'active-'+attempt.id+'.json');
+  const preserved=JSON.parse(await readFile(markerPath,'utf8'));
+  assert.equal(preserved.candidateRevision,checkpoint.candidateRevision);
+  assert.equal(preserved.terminalOperationId,checkpoint.terminalOperationId);
+  assert.equal(preserved.lease,undefined);
+  attempt.state='verifying';
+  attempt.candidate_revision=checkpoint.candidateRevision;
+  await reconcileAbandonedClaim(recovery);
+  await assert.rejects(readFile(markerPath),{code:'ENOENT'});
 });
 
 const findings = rows => Object.fromEntries(rows.map(row => [row.name, row]));
@@ -155,6 +167,33 @@ function fixtureAppServer(status) {
     });
   return {session,child};
 }
+
+test('aborting a lost Task Engine reply releases the call without closing other RPCs', {timeout:2000}, async t => {
+  const child = Object.assign(new EventEmitter(), {stdin:new PassThrough(),stdout:new PassThrough()});
+  const requests = createInterface({input:child.stdin});
+  child.kill = () => { requests.close(); child.stdout.end(); };
+  const controller = new AbortController();
+  let lostReply;
+  requests.on('line', raw => {
+    const {id,method,params} = JSON.parse(raw);
+    const reply = result => child.stdout.write(line({id,result}));
+    if (method === 'initialize') reply({});
+    if (method === 'thread/start') reply({thread:{id:'control'}});
+    if (method === 'mcpServer/tool/call') {
+      if (params.arguments.operation === 'lost') {
+        lostReply = () => reply({structuredContent:{status:200,result:'late'}});
+        controller.abort(Error('request budget elapsed'));
+      } else {
+        lostReply();
+        reply({structuredContent:{status:200,result:'renewed'}});
+      }
+    }
+  });
+  const connector = openObservatoryConnector({spawnProcess:()=>child});
+  t.after(()=>connector.close());
+  await assert.rejects(connector.call({operation:'lost'},undefined,{signal:controller.signal}),/request budget elapsed/);
+  assert.equal((await connector.call({operation:'heartbeat'})).result,'renewed');
+});
 
 test('App Server keeps early usage for the exact turn and ignores unrelated completion',async()=>{
   const {session,child}=fixtureAppServer('completed');
