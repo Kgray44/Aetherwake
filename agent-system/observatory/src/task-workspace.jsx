@@ -20,6 +20,7 @@ export function TaskRows({ tasks, controls, related, activityFor, Status, overvi
     <AnimatePresence initial={false}>
       {tasks.map(task => {
         const control = Object.hasOwn(controls, task.id) ? controls[task.id] : null;
+        const activity = activityFor(task);
         const result = overviewResults?.get(task.id);
         const attempts = related(task.id, 'attempt').length;
         const reports = related(task.id, 'evidence').length;
@@ -31,9 +32,9 @@ export function TaskRows({ tasks, controls, related, activityFor, Status, overvi
               <strong>{task.title}</strong>
               <small>{task.classification?.primary ?? 'Class unavailable'} · {date(task.created_at)}</small>
             </span>
-            <span className="task-row-state"><small>Task state</small><Status task value={result?.queued ? 'queued' : task.state}/></span>
+            <span className="task-row-state"><small>Task state</small><Status task value={result?.queued ? 'queued' : task.state==='verifying'&&activity.recovered?'candidate_recovered':task.state}/></span>
             <span className="task-priority">{control ? control.priority + ' priority' : 'Priority unavailable'}</span>
-            <span className="task-counts"><TaskActivityLabel activity={activityFor(task)}/><small>{attempts} {attempts === 1 ? 'attempt' : 'attempts'} · {reports} imported {reports === 1 ? 'report' : 'reports'}</small></span>
+            <span className="task-counts"><TaskActivityLabel activity={activity}/><small>{attempts} {attempts === 1 ? 'attempt' : 'attempts'} · {reports} imported {reports === 1 ? 'report' : 'reports'}</small></span>
             <span className="task-row-action">{control ? 'Manage' : 'Inspect'}<ChevronRight size={15} aria-hidden="true"/></span>
           </motion.a>
           {result && (result.artifact || result.observedMs != null || result.observedTokens != null) &&

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
@@ -9,10 +9,12 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
 import { checkWorkspaceTelemetryScope, codexTaskPrompt, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { openObservatoryConnector } from '../../../scripts/agent/observatory-connector.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
 import { buildEngineeringAnalytics } from '../src/engineering-analytics.mjs';
 
@@ -110,6 +112,33 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await claim()).body.claim, null);
   assert.equal((await get(b)).lifecycle.state, 'failed');
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
+});
+
+test('owner can submit a checked recovered candidate without replaying execution or accepting it', async t=>{
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('recover orphan');
+  const dependent=await register('downstream',[task.task.id]);
+  await command(task,'admit',{executor:'codex'});
+  await command(dependent,'admit',{executor:'codex'});
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  advance(65_000);
+  const orphan=await get(task);
+  assert.equal(orphan.attempts[0].state,'orphaned');
+  const decision={attempt_id:claim.attempt.id,revision:'b'.repeat(40),reason:'Verified the preserved checkout against the pinned base.'};
+  assert.equal((await command(orphan,'recover_candidate',decision,'agent')).status,403);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,attempt_id:'different'})).status,409);
+  assert.equal((await command(orphan,'recover_candidate',{...decision,revision:rev})).status,409);
+  const recovered=(await command(orphan,'recover_candidate',decision)).body;
+  assert.equal(recovered.lifecycle.stored_state,'verifying');
+  assert.equal(recovered.lifecycle.recovered_candidate,true);
+  assert.equal(recovered.task.owner_acceptance,'not_reviewed');
+  assert.equal(recovered.attempts[0].candidate_origin,'recovered');
+  assert.equal(recovered.attempts[0].candidate_revision,decision.revision);
+  assert.equal(recovered.events.at(-1).previous_failure,orphan.attempts[0].failure);
+  assert.equal(recovered.events.at(-1).attempt_id,claim.attempt.id);
+  assert.ok(recovered.events.some(event=>event.kind==='lease_expired'));
+  assert.equal((await get(dependent)).lifecycle.state,'blocked');
+  assert.equal((await command(recovered,'recover_candidate',decision)).status,409);
 });
 
 test('archive keeps accepted prerequisites and feedback reopens at the accepted revision', async t => {
@@ -326,14 +355,19 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'aads-automatic-checkout-')));
   t.after(() => rm(parent, { force:true, recursive:true }));
   const source = join(parent, 'source');
-  const root = join(parent, 'worker');
-  await mkdir(source);
+  const root = process.platform==='win32' ? join(parent,'worker-'+'a'.repeat(Math.max(12,170-parent.length))) : join(parent,'worker');
+  const nested = 'evidence-'+'n'.repeat(70);
+  const filename = 'record-'+'v'.repeat(65)+'.txt';
+  await mkdir(join(source,nested),{recursive:true});
+  await writeFile(join(source,nested,filename),'source evidence');
   await mkdir(root);
   const exec = promisify(execFile);
   const git = async (cwd, ...args) => (await exec('git', args, { cwd, windowsHide:true })).stdout.trim();
   await git(source, 'init');
+  if (process.platform==='win32') await git(source,'config','--local','core.longpaths','true');
+  await git(source, 'add', '--', nested+'/'+filename);
   await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
-    'commit', '--allow-empty', '-m', 'pinned');
+    'commit', '-m', 'pinned');
   const baseline = await git(source, 'rev-parse', 'HEAD');
   await git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
     'commit', '--allow-empty', '-m', 'new upstream head');
@@ -356,12 +390,17 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
     execute:async ({ cwd }) => {
       assert.equal(cwd, workspace);
       assert.equal(await git(cwd, 'rev-parse', 'HEAD'), baseline);
+      if(process.platform==='win32') {
+        assert.ok(join(cwd,nested,filename).length>260);
+        assert.equal(await git(cwd,'config','--local','core.longpaths'),'true');
+      }
+      assert.equal(readFileSync(join(cwd,nested,filename),'utf8'),'source evidence');
       await exec(process.execPath, ['-e', 'require("node:fs").writeFileSync("artifact.txt", "worker output")'], { cwd });
       return { ok:true };
     },
   });
   const candidate = await get(task);
-  assert.equal(candidate.lifecycle.state, 'verifying');
+  assert.equal(candidate.lifecycle.state, 'verifying', candidate.attempts.at(-1)?.failure);
   const revision = candidate.attempts[0].candidate_revision;
   assert.notEqual(revision, baseline);
   assert.equal(await git(workspace, 'show', revision + ':artifact.txt'), 'worker output');
@@ -454,6 +493,77 @@ test('lease renewals continue during pending preflight and a lost terminal ackno
   assert.match(report.reason,/provision the pinned Task checkout/);
   assert.equal(result.lifecycle.state,'failed');
   assert.match(result.attempts[0].failure,/provision the pinned Task checkout/);
+});
+
+test('hung control report returns at lease expiry without submitting a stale terminal report', async t => {
+  const {call,register,command}=setup(t);
+  const task=await register('Hung control transport');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  claim.attempt.lease_until=Date.now()+80;
+  const reports=[];
+  const guard=new AbortController();
+  t.after(()=>guard.abort());
+  const watchdog=setTimeout(()=>guard.abort(Error('Lease watchdog exceeded')),1000);
+  t.after(()=>clearTimeout(watchdog));
+  const result=runClaim({claim,signal:guard.signal,
+    send:async (request,options)=>{
+      reports.push(request.report.type);
+      guard.signal.throwIfAborted();
+      return new Promise((_,reject)=>{
+        guard.signal.addEventListener('abort',()=>reject(guard.signal.reason),{once:true});
+        options?.signal?.addEventListener('abort',()=>reject(options.signal.reason),{once:true});
+      });
+    },
+    admitStorage:async()=>{throw Error('Synthetic preflight interruption');},
+    execute:async()=>assert.fail('No executor should start after failed preflight'),
+  });
+  await assert.rejects(result,/lease.*expir/i);
+  assert.deepEqual(reports,['heartbeat']);
+});
+
+test('a report aborted during connector thread startup is not sent when startup completes',
+  {skip:process.platform==='win32'?'Requires a POSIX executable fixture':false}, async t => {
+  const root=await mkdtemp(join(tmpdir(),'aads-control-startup-'));
+  t.after(()=>rm(root,{force:true,recursive:true}));
+  const executable=join(root,'fake-codex');
+  const ready=join(root,'thread-started');
+  const release=join(root,'release-thread');
+  const requests=join(root,'tool-requests');
+  await writeFile(executable,`#!${process.execPath}
+const fs=require('node:fs');
+const rl=require('node:readline').createInterface({input:process.stdin});
+const reply=(id,result)=>process.stdout.write(JSON.stringify({id,result})+'\\n');
+rl.on('line',line=>{
+  const request=JSON.parse(line);
+  if (request.method==='initialize') reply(request.id,{});
+  if (request.method==='thread/start') {
+    fs.writeFileSync('thread-started','');
+    const timer=setInterval(()=>{
+      if (!fs.existsSync('release-thread')) return;
+      clearInterval(timer);
+      reply(request.id,{thread:{id:'fixture-thread'}});
+    },5);
+  }
+  if (request.method==='mcpServer/tool/call') {
+    fs.appendFileSync('tool-requests',request.params.arguments.marker+'\\n');
+    reply(request.id,{structuredContent:{status:200}});
+  }
+});
+`,{mode:0o700});
+  const connector=openObservatoryConnector({cwd:root,executable});
+  try {
+    const controller=new AbortController();
+    const pending=connector.call({marker:'expired'}, undefined,{signal:controller.signal});
+    const watchdog=AbortSignal.timeout(5000);
+    while(!existsSync(ready)) await sleep(5,undefined,{signal:watchdog});
+    controller.abort(Error('Lease expired before the tool thread was ready'));
+    const outcome=assert.rejects(pending,/Lease expired/);
+    await writeFile(release,'');
+    await outcome;
+    assert.equal((await connector.call({marker:'still-valid'})).status,200);
+    assert.equal(readFileSync(requests,'utf8'),'still-valid\n');
+  } finally { connector.close(); }
 });
 
 test('real subprocess demo persists two artifacts before verified A admits B', async t => {

@@ -9,6 +9,7 @@ const receiptTitles = {
   resume:'Task resumed', cancel:'Cancellation requested', archive:'Task archived', reopen:'Task reopened with feedback',
   supersede:'Task superseded', associate:'Delivery reference linked', dependency_cancelled:'Cancelled by dependency',
   failed:'Executor reported failure', finished:'Candidate submitted for review', stopped:'Executor stopped',
+  recover_candidate:'Recovered candidate submitted for review',
   lease_expired:'Executor lease expired', attempt_time_limit_reached:'Attempt time limit reached',
 };
 
@@ -17,7 +18,7 @@ const workerStages = {
   worker_initialization:'Worker initialization', checkout_provisioning:'Checkout preparation',
   checkout_fetch:'Fetch pinned revision', checkout_materialization:'Materialize checkout',
   checkout_validation:'Validate checkout', candidate_git_verification:'Verify candidate revision',
-  codex_turn:'Codex work',
+  codex_turn:'Codex work', worker_exit_recovery:'Abandoned worker recovered',
   candidate_submission:'Submit candidate', terminal_reporting:'Report terminal outcome', checkout_lock_release:'Release checkout lock',
 };
 
@@ -40,17 +41,25 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
 export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) {
   if (!attempt || ['admitted','queued','ready','scheduled','blocked','paused'].includes(state)) return null;
   if (state==='failed'&&(attempt.state==='failed'||attempt.state==='blocked'||attempt.failure||attempt.failure_diagnosis)) {
+    const recovered=events.find(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&event.revision===attempt.revision&&
+      event.kind==='lifecycle'&&event.span_id==='codex-'+attempt.id+'-worker_exit_recovery');
     const interrupted = events.filter(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&
       event.revision===attempt.revision&&event.kind==='span_end'&&event.span_id==='codex-'+attempt.id+'-codex_turn'&&
       event.state==='interrupted').sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at))[0];
     const diagnosis=attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.';
     return {
-      title:interrupted?'Codex turn interrupted':'Attempt '+attempt.attempt_number+' failed',tone:'error',
-      at:interrupted?.occurred_at??attempt.finished_at,
-      description:interrupted?'The execution trace recorded the interruption. Task Engine outcome: '+diagnosis:diagnosis,
+      title:recovered?'Worker exited without a terminal report':interrupted?'Codex turn interrupted':'Attempt '+attempt.attempt_number+' failed',tone:'error',
+      at:recovered?.occurred_at??interrupted?.occurred_at??attempt.finished_at,
+      description:recovered?'A later worker confirmed the original process was gone. The exit trigger is unknown. Reconcile the preserved checkout before retrying.':
+        interrupted?'The execution trace recorded the interruption. Task Engine outcome: '+diagnosis:diagnosis,
     };
   }
   if (!activeExecution.has(state)) {
+    if (state==='verifying'&&attempt.candidate_origin==='recovered') {
+      const recovered=audits.findLast(receipt=>receipt.kind==='recover_candidate'&&receipt.attempt_id===attempt.id);
+      return {title:'Recovered candidate ready for review',tone:'neutral',at:recovered?.at,
+        description:'The original executor stopped. A preserved revision was checked and submitted separately.'};
+    }
     if (!attempt.finished_at||state==='completed'||state==='archived') return null;
     return {title:attempt.session_id?'Codex stopped working':'Execution attempt ended',tone:'neutral',
       at:attempt.finished_at,description:state==='verifying'?'Candidate awaits owner review.':null};
@@ -123,7 +132,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
         ...detail('Owner feedback',receipt.feedback),...detail('Owner review notes',receipt.notes),...detail('Scheduled start',receipt.start_at),
         ...detail('Time limit (minutes)',receipt.max_attempt_minutes),
         ...detail('Cancel with dependency',receipt.cancel_with_dependency===undefined?null:receipt.cancel_with_dependency?'Enabled':'Disabled'),...detail('Fields changed',receipt.fields?.map(humanize).join(', ')),
-        ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),
+        ...detail('Candidate revision',receipt.revision??receipt.reference?.revision),...detail('Original failure',receipt.previous_failure),
         ...detail('Reviewed criteria',receipt.evidence?.length),...detail('Reference type',humanize(receipt.reference?.kind)),
         ...detail('Attempt',receipt.attempt_id),...detail('Operation ID',receipt.operation_id),
       ]});

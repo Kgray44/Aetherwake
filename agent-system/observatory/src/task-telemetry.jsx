@@ -100,8 +100,12 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
     {usage.progressRows.length>0&&<section aria-label="Codex usage snapshots">
       <h3>Codex usage snapshots</h3>
       {usage.progressRows.map(row=><p key={row.receiptId}>
-        Attempt {row.attemptNumber} · <strong>{format.format(row.observed.totalTokens)} tokens observed during the turn</strong>
+        Attempt {row.attemptNumber} · {row.state==='running'?'In progress':'Partial usage'} · <strong>{format.format(row.observed.totalTokens)} tokens observed during the turn</strong>
         {' · '}<time dateTime={row.observedAt}>{new Date(row.observedAt).toLocaleString()}</time>
+        {row.observed.cachedInputTokens!=null&&row.observed.uncachedInputTokens!=null&&
+          <><br/>{format.format(row.observed.cachedInputTokens)} cached · {format.format(row.observed.uncachedInputTokens)} uncached input tokens</>}
+        {row.pace&&<><br/>{format.format(row.pace.inputPerMinute)} input tokens/min over the last {time(row.pace.elapsedMs)} sampled interval</>}
+        {row.pace?.sustained&&<><br/><strong>Sustained input growth.</strong> Review recent tool work and repeated context before starting another run.</>}
       </p>)}
       <p className="low">Task totals use final usage receipts.</p>
     </section>}

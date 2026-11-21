@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
  * Reproducible, source-character benchmark and task-routing fixtures.
- * Results are NOT actual API/model tokens, costs, latency, or agent-quality scores.
+ * The optional comparison measures local assembly only. Provider usage, cost,
+ * and agent quality require separate evidence.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseRegistry } from "./governance-router.mjs";
@@ -46,4 +49,30 @@ const summary={
 };
 assert.ok(summary.totalSelectedCharacters<summary.totalFullCharacters,"Scoped selection must reduce source characters overall");
 assert.ok(summary.compactMarkdownBytes<summary.markdownBytes,"Compact display must reduce serialized Markdown bytes overall");
+
+if(process.argv.includes("--compare-assembly")) {
+ const batches=40,warmup=8;
+ const samples={standard:[],optimized:[]};
+ const payload=createHash("sha256");
+ for(const f of fixtures) {
+  const options={config,registry,index,...f,maxSections:2};
+  const baseline=JSON.stringify(buildContext(options));
+  assert.equal(JSON.stringify(buildContext({...options,fastAssembly:true})),baseline,f.task);
+  payload.update(baseline+"\n");
+ }
+ for(let batch=0;batch<batches+warmup;batch++) {
+  for(const variant of batch%2 ? ["optimized","standard"] : ["standard","optimized"]) {
+   const start=performance.now();
+   for(const f of fixtures) buildContext({config,registry,index,...f,maxSections:2,fastAssembly:variant==="optimized"});
+   if(batch>=warmup) samples[variant].push(performance.now()-start);
+  }
+ }
+ const distribution=values=>{
+  const sorted=[...values].sort((a,b)=>a-b);
+  return {p50:sorted[Math.ceil(0.50*sorted.length)-1],p95:sorted[Math.ceil(0.95*sorted.length)-1]};
+ };
+ summary.assemblyComparison={scope:"local assembly for a seven-fixture batch on the same live index",
+  node:process.version,platform:process.platform,batches,warmup,payloadSha256:payload.digest("hex"),
+  standardMs:distribution(samples.standard),optimizedMs:distribution(samples.optimized)};
+}
 console.log(JSON.stringify(summary,null,2));

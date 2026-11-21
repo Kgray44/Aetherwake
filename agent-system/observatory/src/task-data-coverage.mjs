@@ -28,7 +28,7 @@ export function taskDataCoverage({task,canonical,attempts,usage,diagnostics,even
   if (tokenCoverage.conflicts) add('Token usage','conflicting',tokenBasis+
     ' The source contains conflicting journal or cumulative usage records. The affected readings were excluded.');
   else if (usage.observed.totalTokens!=null) add('Token usage','observed',tokenBasis);
-  else if (usage.progressRows.length) add('Token usage','observed','In-progress usage is available. Final usage receipts supply the Task total.');
+  else if (usage.progressRows.length) add('Token usage','observed','Codex usage snapshots are available. Final usage receipts supply the Task total.');
   else add('Token usage',noAttempts&&!tokenCoverage.sessions?'inapplicable':'unavailable',tokenBasis);
 
   const taskEvents=events.filter(event=>event.task_id===task.id&&event.repository===task.repository);

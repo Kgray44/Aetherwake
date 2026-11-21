@@ -9,16 +9,17 @@ import { useCardMotion } from './card-motion.jsx';
 import { executionActions, reviewRevision } from './task-engine-client.mjs';
 
 const actionLabels = {
+  recover_candidate:'Submit recovered candidate',
   configure_execution:'Edit execution settings', admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
   archive:'Archive Task', reopen:'Reopen with feedback', accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
-const actionIcons = { configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
+const actionIcons = { recover_candidate:CheckCircle2, configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
   archive:Archive, reopen:RotateCcw, reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
-const actionHints = { configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
+const actionHints = { recover_candidate:'Send the checked revision for owner review', configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
   resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
   reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
   archive:'Move the Task out of active views', reopen:'Queue a new attempt with owner feedback', supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
-const featuredActions = ['admit','resume','accept','reopen','retry','pause'];
+const featuredActions = ['admit','resume','accept','reopen','recover_candidate','retry','pause'];
 
 const humanize = value => String(value ?? 'unavailable').replaceAll('_', ' ');
 const stamp = value => value ? new Date(value).toLocaleString() : 'Unavailable';
@@ -104,6 +105,11 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         change.prerequisites=fields.getAll('verified_capability');
       }
       if (action === 'retry') change.changed_assumption = fields.get('reason');
+      if (action === 'recover_candidate') {
+        change.attempt_id = candidate.id;
+        change.revision = fields.get('revision');
+        change.reason = fields.get('reason');
+      }
       if (action === 'reopen') change.feedback = fields.get('feedback');
       if (action === 'reject') change.reason = fields.get('reason');
       if (action === 'accept') {
@@ -128,7 +134,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
     <div className="task-command-shell">
       <div className="task-command-context">
         <header className="task-command-hero"><span className="task-command-signal"><Activity size={19} aria-hidden="true"/></span>
-          <div><Status task value={lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
+          <div><Status task value={lifecycle.recovered_candidate&&lifecycle.state==='verifying'?'candidate_recovered':lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
         <dl className="task-command-facts">
           <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
           {workerAccess&&<div><dt>Codex worker access</dt><dd>{workerAccess==='not_configured'?'Not configured':'Configured'}</dd></div>}
@@ -181,6 +187,10 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
         {action==='admit'&&task.prerequisites.capabilities.map(capability => <label className="task-check" key={capability}>
           <input name="verified_capability" type="checkbox" value={capability}/> Attest {capability} on admission
         </label>)}
+      </>}
+      {action==='recover_candidate'&&<>
+        <label>Recovered Git revision<input name="revision" required pattern="[a-f0-9]{40}"/></label>
+        <label>How did you check the recovered candidate?<textarea name="reason" required maxLength={500}/></label>
       </>}
       {['retry', 'reject'].includes(action) && <label>{action === 'retry' ? 'Changed assumption' : 'Review reason'}
         <textarea name="reason" required maxLength={500}/>

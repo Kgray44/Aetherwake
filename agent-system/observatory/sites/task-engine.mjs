@@ -199,6 +199,22 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     last.failure = action.reason.trim();
     return { lifecycle: { ...lifecycle, state: 'failed' } };
   }
+  if (type === 'recover_candidate' && current === 'failed') {
+    const last = lifecycle.attempts.at(-1);
+    if (last?.state !== 'orphaned' || last.id !== action.attempt_id ||
+        typeof action.revision!=='string' || !revisionPattern.test(action.revision) || action.revision === last.revision) {
+      return failure(409, 'Recovery requires the exact orphaned attempt and a distinct candidate revision');
+    }
+    if (typeof action.reason !== 'string' || !action.reason.trim() || action.reason.length > 500) {
+      return failure(400, 'Describe how the recovered candidate was independently checked');
+    }
+    const previousFailure=last.failure;
+    last.state = 'verifying';
+    last.candidate_revision = action.revision;
+    last.candidate_origin = 'recovered';
+    delete last.failure;
+    return { lifecycle: { ...lifecycle, state: 'verifying', recovered_candidate:true }, previousFailure };
+  }
   if (type === 'accept' && current === 'verifying') {
     const last = lifecycle.attempts.at(-1);
     let evidence;
@@ -229,7 +245,11 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
       return failure(400, 'A changed assumption is required before retrying');
     }
-    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: action.changed_assumption.trim(),
+    const assumption=action.changed_assumption.trim();
+    if (lifecycle.attempts.at(-1)?.state==='orphaned' && assumption===lifecycle.changed_assumption) {
+      return failure(409, 'This is the previous retry assumption. Reconcile the interrupted attempt and record what changed.');
+    }
+    return { lifecycle: { ...lifecycle, state: 'queued', changed_assumption: assumption,
       resume_attempt_id:lifecycle.attempts.findLast(item=>item.session_id)?.id } };
   }
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {
@@ -518,6 +538,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       else attempt.resume_requires_clean=true;
     }
     delete lifecycle.resume_attempt_id;
+    delete lifecycle.recovered_candidate;
     lifecycle.state = 'running';
     lifecycle.attempts.push(attempt);
     if (!await save(candidate, task, lifecycle, { kind: 'claim', attemptId: attempt.id })) return conflict();
@@ -556,12 +577,14 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     } } : {}),
     ...(action?.type === 'reopen' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision,
       evidence:lifecycle.evidence, previous_state:lifecycle.state } : {}),
+    ...(action?.type === 'recover_candidate' ? { revision:action.revision, reason:action.reason.trim(),
+      previous_failure:change.previousFailure } : {}),
     ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence,
       ...(change.lifecycle.review_notes?{notes:change.lifecycle.review_notes}:{}) } : {}),
   };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
     priority: change.priority, kind: action?.type ?? body.report.type, receipt,
-    attemptId:body.attempt_id ?? (['accept','reject','reopen'].includes(action?.type)?latest?.id:undefined),
+    attemptId:body.attempt_id ?? (['accept','reject','reopen','recover_candidate'].includes(action?.type)?latest?.id:undefined),
     fenceGraph: body.op !== 'report',
   });
   return updated ? success(await view(updated)) : conflict();

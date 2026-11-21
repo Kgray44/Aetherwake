@@ -464,6 +464,16 @@
         {
           "type": "object",
           "properties": {
+            "type": { "const": "recover_candidate" },
+            "attempt_id": { "type": "string", "pattern": "^attempt_[a-f0-9-]{36}$" },
+            "revision": { "$ref": "#/$defs/rid" },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+          },
+          "required": ["type", "attempt_id", "revision", "reason"]
+        },
+        {
+          "type": "object",
+          "properties": {
             "type": {
               "const": "reject"
             },
