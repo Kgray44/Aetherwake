@@ -250,7 +250,7 @@ export function TaskAcceptanceMatrix({task,canonical,evidence,attempts,reviewed,
       {review?<div className="task-review-summary">
         <small>Accepted revision <code>{review.revision}</code></small>
         {review.at&&<small>Owner review <time dateTime={review.at}>{displayTime(review.at)}</time></small>}
-        <EvidenceArtifact artifact={{uri:review.uri}}/>
+        {review.uri&&<EvidenceArtifact artifact={{uri:review.uri}}/>}
       </div>:<small>{reports.length} reported {reports.length===1?'record':'records'}{canonical?.lifecycle.state==='verifying'?' · Awaiting owner review':''}</small>}
     </article>;
   })}</section>;
@@ -270,16 +270,26 @@ function EvidenceArtifact({ artifact }) {
   return <details><summary>Private artifact · link unavailable</summary>{uri.startsWith('private-artifact:') && <code>{uri}</code>}</details>;
 }
 
-export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, events, telemetrySource, Status }) {
+export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, reviewNotes, events, telemetrySource, Status }) {
   const criteria = new Map((task.acceptance?.criteria ?? []).map(item => [item.id,item.description]));
   const {verificationReports} = taskEngineeringActivity({task,attempts,events,telemetrySource});
   if (!evidence.length && !reviewed.length && !verificationReports.length) return <p>No verification results have been linked to this Task yet.</p>;
   const ordered = [...evidence].sort((a,b)=>String(b.observed_at??b.created_at).localeCompare(String(a.observed_at??a.created_at)));
   return <>
-    {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3><ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
+    {reviewed.length>0&&<section aria-label="Owner review receipts"><h3>Owner review</h3>
+      {reviewNotes&&<p className="objective">{reviewNotes.split(/(\s+)/).map((part,index)=>{
+        if(!part.startsWith('https://'))return part;
+        try{
+          const url=new URL(part);
+          if(url.username||url.password||url.search)return part;
+          const internal=taskActivityHref(url.href);
+          return <a key={index} href={internal??url.href} target={internal?undefined:'_blank'} rel={internal?undefined:'noreferrer'}>{part}</a>;
+        }catch{return part;}
+      })}</p>}
+      <ul className="task-links">{reviewed.map(item=> <li key={item.criterion_id}>
       <strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><small>Reviewed revision <code>{item.revision}</code></small>
       {item.at&&<small>Owner review <time dateTime={item.at}>{displayTime(item.at)}</time></small>}
-      <EvidenceArtifact artifact={{uri:item.uri}}/>
+      {item.uri&&<EvidenceArtifact artifact={{uri:item.uri}}/>}
     </li>)}</ul></section>}
     {ordered.map(item=>{
       const attempt = attempts.find(run=>attemptMatchesEvidence(run,item));

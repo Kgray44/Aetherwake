@@ -133,7 +133,7 @@ export function taskAttemptRecord(task, attempt) {
 
 function publicLifecycle(row,rows,now,includePrerequisites=false) {
   const stored=details(row);
-  const {attempts,event,cycle_start,addenda,pending_spec,...lifecycle}=stored;
+  const {attempts,event,cycle_start,addenda,pending_spec,review_notes,...lifecycle}=stored;
   const task=record(row);
   const checks=includePrerequisites?prerequisiteStatus(task,lifecycle,rows):undefined;
   return {...lifecycle,cycle_attempts:cycleAttempts(stored),max_attempt_minutes:attemptLimit(stored),
@@ -143,7 +143,7 @@ function publicLifecycle(row,rows,now,includePrerequisites=false) {
     can_addendum: canAddendum(stored), can_continue_candidate: canContinueCandidate(stored),
     ...(includePrerequisites ? { addenda: addenda ?? [], pending_spec } :
       { pending_spec_version: pending_spec?.version }),
-    ...waitState(task,lifecycle,rows,now,checks),...(checks?{prerequisite_status:checks}:{})};
+    ...waitState(task,lifecycle,rows,now,checks),...(checks?{prerequisite_status:checks,...(review_notes?{review_notes}:{})}:{})};
 }
 
 function validateReferenceRevisions(requirements) {
@@ -312,10 +312,29 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
   }
   if (type === 'accept' && current === 'verifying') {
     const last = lifecycle.attempts.at(-1);
-    if (!reviewedEvidence(task, action.evidence, last.candidate_revision)) return failure(409, 'Reviewed evidence is required for every criterion at the attempt revision');
+    let evidence;
+    let notes;
+    if (Object.hasOwn(action,'revision')) {
+      if (!revisionPattern.test(last?.candidate_revision) || action.revision !== last.candidate_revision) {
+        return failure(409, 'The candidate revision changed. Reload the Task and review the latest candidate.');
+      }
+      if (action.evidence !== undefined || (action.notes !== undefined &&
+          (typeof action.notes !== 'string' || action.notes.length > 2000))) {
+        return failure(400, 'Owner review notes must contain at most 2000 characters');
+      }
+      notes = action.notes?.trim();
+      evidence = task.acceptance.criteria.map(criterion => ({
+        criterion_id: criterion.id, revision: last.candidate_revision, attested: true,
+      }));
+    } else {
+      if (!reviewedEvidence(task, action.evidence, last?.candidate_revision)) {
+        return failure(409, 'Reviewed evidence is required for every criterion at the attempt revision');
+      }
+      evidence = action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision }));
+    }
     last.state = 'succeeded';
     return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed', accepted_at: timestamp(now),
-      evidence: action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision })) } };
+      evidence, review_notes: notes || undefined } };
   }
   if (type === 'continue_candidate' && current === 'verifying') {
     const last = lifecycle.attempts.at(-1);
@@ -364,18 +383,27 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
     if (!taskId(action.successor) || action.successor === task.id || !rows.has(action.successor)) return failure(400, 'Unknown replacement Task');
     return { task: { ...task, superseded_by: action.successor }, lifecycle: { ...lifecycle, state: 'superseded' } };
   }
-  if (type === 'reopen' && ['completed','archived'].includes(current) && task.owner_acceptance === 'accepted') {
-    const accepted = lifecycle.attempts.at(-1);
-    if (!accepted || accepted.state !== 'succeeded' || !revisionPattern.test(accepted.candidate_revision)) {
-      return failure(409, 'An accepted candidate revision is required to reopen this Task');
+  if (type === 'reopen' && (current === 'verifying' ||
+      (['completed','archived'].includes(current) && task.owner_acceptance === 'accepted'))) {
+    const candidate = lifecycle.attempts.at(-1);
+    const needsRevision = current === 'verifying';
+    if (!candidate || candidate.state !== (needsRevision ? 'verifying' : 'succeeded') ||
+        !revisionPattern.test(candidate.candidate_revision) ||
+        (needsRevision && (!canContinueCandidate(lifecycle) || action.revision !== candidate.candidate_revision))) {
+      return failure(409, 'The latest candidate revision is required to run this Task again');
+    }
+    if (needsRevision && cycleAttempts(lifecycle) >= maxAttempts) {
+      return failure(409, 'This Task has reached its attempt limit');
     }
     if (typeof action.feedback !== 'string' || !action.feedback.trim() || action.feedback.length > 2000) {
       return failure(400, 'Owner feedback must contain 1 to 2000 characters');
     }
+    if (needsRevision) candidate.state = 'checkpointed';
     return { task:{ ...task, owner_acceptance:'not_reviewed' }, lifecycle:{
-      ...lifecycle, state:'queued', start_at:now, cycle_start:lifecycle.attempts.length,
-      evidence:[], feedback:action.feedback.trim(), changed_assumption:undefined, followup_revision:accepted.candidate_revision,
-      resume_attempt_id:accepted.session_id?accepted.id:undefined,
+      ...lifecycle, state:'queued', start_at:now,
+      cycle_start:needsRevision ? lifecycle.cycle_start : lifecycle.attempts.length,
+      evidence:[], review_notes:undefined, changed_assumption:undefined, feedback:action.feedback.trim(), followup_revision:candidate.candidate_revision,
+      resume_attempt_id:candidate.session_id?candidate.id:undefined,
     } };
   }
   if (type === 'archive' && ['completed','proposed','blocked','failed','cancelled','superseded'].includes(current)) {
@@ -882,13 +910,14 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       kind:action.reference.kind, uri:action.reference.uri, revision:action.reference.revision,
     } } : {}),
     ...(action?.type === 'reopen' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision,
-      evidence:lifecycle.evidence } : {}),
+      evidence:lifecycle.evidence, previous_state:lifecycle.state } : {}),
     ...(action?.type === 'continue_candidate' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision } : {}),
     ...(action?.type === 'recover_candidate' ? { revision:action.revision, reason:action.reason.trim(),
       previous_failure:change.previousFailure, previous_failure_kind:change.previousFailureKind } : {}),
     ...(body.op === 'recover_worker_candidate' ? { revision:latest.candidate_revision,
       previous_failure:change.previousFailure, previous_failure_kind:change.previousFailureKind } : {}),
-    ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence } : {}),
+    ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence,
+      ...(change.lifecycle.review_notes?{notes:change.lifecycle.review_notes}:{}) } : {}),
   };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
     priority: change.priority, kind: action?.type ?? body.report?.type ?? body.op, receipt,

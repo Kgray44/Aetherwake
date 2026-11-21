@@ -457,12 +457,26 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   }
   await page.getByRole('button',{name:'Record owner acceptance',exact:true}).click();
   const review = page.getByRole('form', { name: 'Record owner acceptance' });
-  await review.getByLabel('Review the candidate result').fill('https://example.test/reviewed-artifact');
-  await review.getByRole('button', { name: 'Confirm' }).click();
+  await review.getByText('Mark this task as owner accepted?').waitFor();
+  assert.equal(await review.getByRole('textbox').count(),1);
+  assert.deepEqual(await review.getByRole('button').allTextContents(),['Yes','No']);
+  const before = await send({op:'get',task_id:execution.task.id});
+  const notes = 'Checked the candidate. https://example.test/reviewed-artifact';
+  await review.getByRole('textbox').fill(notes);
+  await review.getByRole('button',{name:'No',exact:true}).click();
+  assert.equal(await review.getByLabel('Notes for the next round').inputValue(),notes);
+  assert.deepEqual(await review.getByRole('button').allTextContents(),['Run again','Close']);
+  await review.getByRole('button',{name:'Close',exact:true}).click();
+  await review.waitFor({state:'hidden'});
+  assert.equal((await send({op:'get',task_id:execution.task.id})).version,before.version);
+  await page.getByRole('button',{name:'Record owner acceptance',exact:true}).click();
+  await review.getByRole('textbox').fill(notes);
+  await review.getByRole('button',{name:'Yes',exact:true}).click();
   await page.getByText(/Stored state completed/).waitFor();
   detail = await send({ op: 'get', task_id: execution.task.id });
   assert.equal(detail.task.owner_acceptance, 'accepted');
   assert.equal(detail.lifecycle.evidence[0].revision, candidate);
+  assert.equal(detail.lifecycle.review_notes,notes);
   const { sha256 } = await import('./sites/task-telemetry.mjs');
   const observed_at = new Date().toISOString();
   const benchmarkRecord = {
@@ -489,19 +503,21 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await attemptPanel.getByText('Candidate revision',{exact:true}).waitFor();
   await attemptPanel.getByText('Last lease deadline',{exact:true}).waitFor();
   await attemptPanel.getByText('Last successful lease renewal',{exact:true}).waitFor();
-  const reviewed = evidence.getByRole('link', { name: 'Review the candidate result' });
-  assert.equal(await reviewed.getAttribute('href'), 'https://example.test/reviewed-artifact');
+  const reviewed = evidence.getByText('Review the candidate result',{exact:true});
+  await reviewed.waitFor();
   assert.equal(await evidence.getByText(candidate,{exact:true}).count(),1);
   assert.equal(await attemptPanel.getByText(candidate,{exact:true}).count(),1);
   await attemptPanel.getByText('Candidate submitted for review',{exact:true}).waitFor();
   await attemptPanel.getByText('Owner accepted result',{exact:true}).waitFor();
-  await page.getByRole('region',{name:'Owner review receipts'}).getByRole('link',{name:'Open evidence artifact'}).waitFor();
+  const ownerNotes=page.getByRole('region',{name:'Owner review receipts'});
+  await ownerNotes.getByText('Checked the candidate.',{exact:false}).waitFor();
+  assert.equal(await ownerNotes.getByRole('link',{name:'https://example.test/reviewed-artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
   await page.getByText('Implementation complete',{exact:true}).waitFor();
   await page.getByText('Merge not requested',{exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Open in Codex',exact:true}).getAttribute('href'),'codex://threads/'+conversationId);
   const matrix=page.getByRole('region',{name:'Task acceptance criteria'});
   await matrix.getByText('owner accepted',{exact:true}).waitFor();
-  assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).getAttribute('href'),'https://example.test/reviewed-artifact');
+  assert.equal(await matrix.getByRole('link',{name:'Open evidence artifact'}).count(),0);
   assert.equal(await page.evaluate(()=>Boolean(document.querySelector('#task-controls')?.compareDocumentPosition(
     document.querySelector('#task-timeline'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
   const sessionId = '10000000-0000-4000-8000-000000000002';
