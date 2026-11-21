@@ -986,6 +986,27 @@ test('a lost renewal reply is retried inside the lease without interrupting a ru
   assert.equal(detail.attempts[0].candidate_revision,revision);
 });
 
+test('preflight retries a transient storage timeout inside the claim and honors a reserve denial', async t => {
+  const {call,register,command,get}=setup(t);
+  for (const failure of ['storage_guard_timeout','storage_reserve_denied']) {
+    const task=await register('Storage preflight '+failure);
+    await command(task,'admit',{executor:'codex'});
+    const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID(),task_ids:[task.task.id]},'worker');
+    let guards=0,provisions=0;
+    const send=async request=>(await call(request,'worker')).body;
+    await runClaim({claim,send,signal:AbortSignal.timeout(5000),
+      admitStorage:async()=>{
+        if (++guards===1) throw Object.assign(Error('Fixture guard failure'),{code:failure});
+      },
+      prepareWorkspace:async()=>{provisions++;throw Error('Fixture checkout end');},
+      execute:async()=>assert.fail('Fixture must stop at checkout preparation'),
+    });
+    assert.equal(guards,failure==='storage_guard_timeout'?2:1);
+    assert.equal(provisions,failure==='storage_guard_timeout'?1:0);
+    assert.equal((await get(task)).attempts.length,1);
+  }
+});
+
 test('a report aborted during connector thread startup is not sent when startup completes', async t => {
   const root=await mkdtemp(join(tmpdir(),'aads-control-startup-'));
   t.after(()=>rm(root,{force:true,recursive:true}));

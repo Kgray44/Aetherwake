@@ -552,17 +552,28 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   const guardStorage = async () => {
-    try { await admitStorage(); }
-    catch (error) {
-      const reserve = error.reserve;
-      const measurements = reserve ?
-        ' C: '+reserve.cFreeBytes+' bytes free, D: '+reserve.dFreeBytes+' bytes free; floor '+reserve.floorBytesEach+' bytes each.' : '';
-      stop(({
-        storage_guard_timeout: 'The worker storage guard timed out before execution.',
-        storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
-        storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
-      }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
-      throw error;
+    for (let retries=0;;retries++) {
+      workerSignal.throwIfAborted();
+      try {
+        await admitStorage();
+      } catch (error) {
+        if (error.code==='storage_guard_timeout' && retries<2) {
+          await sleep(250*2**retries,undefined,{signal:workerSignal});
+          continue;
+        }
+        const reserve = error.reserve;
+        const measurements = reserve ?
+          ' C: '+reserve.cFreeBytes+' bytes free, D: '+reserve.dFreeBytes+' bytes free; floor '+reserve.floorBytesEach+' bytes each.' : '';
+        stop(({
+          storage_guard_timeout: 'The worker storage guard timed out before execution.',
+          storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
+          storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
+        }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
+        throw error;
+      }
+      workerSignal.throwIfAborted();
+      if (retries) console.info(new Date().toISOString(),attempt.id,'Storage preflight recovered after',retries,'retry attempt(s).');
+      return;
     }
   };
   try {
