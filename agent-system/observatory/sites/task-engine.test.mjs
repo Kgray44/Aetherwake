@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { PassThrough, Readable, Writable } from 'node:stream';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -16,7 +16,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, executeAppServer, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, executeAppServer, prepareRecoveredCandidate, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { reconcileAbandonedClaim } from '../../../scripts/agent/claim-telemetry.mjs';
 import { hasLiveTaskWork, workerDispatchStatus } from '../src/task-engine-client.mjs';
 import { openObservatoryConnector } from '../../../scripts/agent/observatory-connector.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
@@ -544,6 +545,111 @@ test('only the original worker recovery proof can return an expired candidate to
   assert.equal((await call({...heartbeat,operation_id:crypto.randomUUID()},'worker')).status,409);
 });
 
+test('the real worker can be killed before its terminal report and reconcile through the Task Engine on Windows', {timeout:20000}, async t => {
+  const {call,register,command,get,pin,advance}=setup(t);
+  const root=await realpath(await mkdtemp(join(tmpdir(),'aads-terminal-restart-')));
+  let child,closed;
+  t.after(async()=>{
+    if (child&&child.exitCode===null&&!child.signalCode) child.kill();
+    await closed;
+    await rm(root,{recursive:true,force:true});
+  });
+  const workspace=join(root,'checkout'), telemetryDirectory=join(root,'worker');
+  await mkdir(workspace);
+  const git=async (...args)=>(await promisify(execFile)('git',args,{cwd:workspace,windowsHide:true})).stdout.trim();
+  await git('init','-b','codex/aads-task-candidate-restart');
+  await git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  await git('config','user.name','Fixture');
+  await git('config','user.email','worker@example.test');
+  await git('-c','commit.gpgsign=false','commit','--allow-empty','-m','Pinned source');
+  const revision=await git('rev-parse','HEAD');
+  pin(revision);
+  const task=await register('Interrupted candidate report');
+  await command(task,'admit',{executor:'codex'});
+  const recoveryKey='b'.repeat(64);
+  const recovery_commitment=createHash('sha256').update(recoveryKey).digest('hex');
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID(),recovery_commitment},'worker');
+  const session=crypto.randomUUID();
+  const workerModule=new URL('../../../scripts/agent/observatory-task-worker.mjs',import.meta.url).href;
+  const fixture=`
+    import {writeFile} from 'node:fs/promises';
+    import {join} from 'node:path';
+    import {runClaim} from ${JSON.stringify(workerModule)};
+    const init=${JSON.stringify({claim,workspace,telemetryDirectory,recoveryKey})};
+    const pending=new Map();
+    process.on('message', ({id,result})=>pending.get(id)?.(result));
+    const send=request=>new Promise(resolve=>{
+      pending.set(request.operation_id,resolve);
+      process.send(request);
+    });
+    await runClaim({...init,send,signal:AbortSignal.timeout(15000),admitStorage:async()=>{},
+      execute:async ({onSession,onTurnStarted,onTurnFinished})=>{
+        await onSession(${JSON.stringify(session)});
+        await onTurnStarted('fixture-turn');
+        await writeFile(join(init.workspace,'result.txt'),'A complete checkpoint.');
+        await onTurnFinished('completed');
+        return {ok:true};
+      }});
+  `;
+  child=spawn(process.execPath,['--input-type=module','--eval',fixture],{
+    cwd:root,stdio:['ignore','ignore','inherit','ipc'],windowsHide:true});
+  closed=once(child,'close');
+  const terminal=Promise.withResolvers();
+  child.on('message',request=>{
+    if (request.report.type==='finished') terminal.resolve(request);
+    else {
+      void call(request,'worker').then(result=>{
+        if (child.connected) child.send({id:request.operation_id,result:result.body},error=>{
+          if (error&&child.connected) terminal.reject(error);
+        });
+      },terminal.reject);
+    }
+  });
+  const missed=await Promise.race([terminal.promise,closed.then(()=>{throw Error('Worker exited before the terminal checkpoint');})]);
+  assert.equal((await get(task)).lifecycle.stored_state,'running');
+  child.kill('SIGKILL');
+  await closed;
+  advance(61_000);
+  assert.equal((await get(task)).attempts[0].state,'orphaned');
+  let recoveries=0;
+  const recovery={directory:telemetryDirectory,taskId:task.task.id,readTask:()=>get(task),recoverCandidate:async marker=>{
+    assert.equal(marker.candidateRevision,missed.report.revision);
+    assert.equal(marker.terminalOperationId,missed.operation_id);
+    const lock=join(workspace,'.git','aads-task-worker.lock');
+    assert.equal(existsSync(lock),true);
+    assert.equal(await prepareRecoveredCandidate(workspace,marker),true);
+    assert.equal(existsSync(lock),false);
+    await mkdir(lock);
+    const otherOwner=join(lock,createHash('sha256').update(crypto.randomUUID()).digest('hex'));
+    await writeFile(otherOwner,'');
+    assert.equal(await prepareRecoveredCandidate(workspace,marker),false);
+    assert.equal(existsSync(otherOwner),true);
+    await unlink(otherOwner);
+    await rmdir(lock);
+    recoveries++;
+    const result=await call({op:'recover_worker_candidate',task_id:task.task.id,attempt_id:marker.attemptId,
+      operation_id:marker.recoveryOperationId,candidate_recovery:{key:marker.recoveryKey,revision:marker.candidateRevision,
+        session_id:marker.sessionId,branch:marker.branch}},'worker');
+    return result.status===200 && result.body.attempts[0].candidate_revision===marker.candidateRevision;
+  }};
+  await reconcileAbandonedClaim(recovery);
+  await reconcileAbandonedClaim(recovery);
+  assert.equal(recoveries,1);
+  const saved=await get(task);
+  assert.equal(saved.lifecycle.stored_state,'verifying');
+  assert.equal(saved.task.owner_acceptance,'not_reviewed');
+  assert.equal(saved.attempts.length,1);
+  assert.equal(await git('rev-parse','HEAD'),missed.report.revision);
+  assert.equal(readFileSync(join(workspace,'result.txt'),'utf8'),'A complete checkpoint.');
+  assert.equal((await call(missed,'worker')).status,409);
+  assert.equal((await command(saved,'continue_candidate',{attempt_id:claim.attempt.id,
+    revision:missed.report.revision,feedback:'Continue from the saved checkpoint.'})).status,200);
+  const {body:{claim:next}}=await call({op:'claim',operation_id:crypto.randomUUID(),conversation_continuation:true},'worker');
+  assert.equal(next.attempt.resume_session_id,session);
+  assert.equal(next.attempt.revision,missed.report.revision);
+  assert.equal(existsSync(join(workspace,'.git','aads-task-worker.lock')),false);
+});
+
 test('candidate recovery respects owner cancellation and a replacement attempt', async t => {
   const {call,register,command,get,advance}=setup(t);
   const recoveryKey='a'.repeat(64);
@@ -587,6 +693,23 @@ test('versioned Task scope reaches the Codex worker with its input references an
   const prompt=codexTaskPrompt(claim.task,claim.attempt);
   assert.ok(prompt.includes(requirements[0].uri));
   assert.ok(deliverables.every(item=>prompt.includes(item)));
+});
+
+test('failure reports retain a known category in the attempt and audit', async t => {
+  const {call,register,command,get}=setup(t);
+  const item=await register('Classified executor failure');
+  await command(item,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  const failure={type:'failed',failure:'The provider reported an interrupted turn.'};
+  const report=failure_kind=>call({op:'report',task_id:item.task.id,attempt_id:claim.attempt.id,
+    operation_id:crypto.randomUUID(),lease:claim.lease,report:{...failure,failure_kind}},'worker');
+  assert.equal((await report('arbitrary_remote_message')).status,400);
+  assert.equal((await report('provider')).status,200);
+  const result=await get(item);
+  const attempt=result.attempts.at(-1);
+  assert.equal(attempt.failure_kind,'provider');
+  assert.equal(result.events.at(-1).failure_kind,'provider');
+  assert.equal(taskAttemptRecord(result.task,attempt).failure_category,'environment');
 });
 
 test('owner time limits constrain the claim deadline and leave a specific receipt at expiry', async t => {
@@ -850,6 +973,7 @@ test('a checkout failure exposes live and terminal telemetry before any Codex th
   assert.equal(checkoutStarted,true);
   const result=await get(task);
   assert.equal(result.lifecycle.state,'failed');
+  assert.equal(result.attempts[0].failure_kind,'checkout');
   assert.equal(result.attempts[0].session_id,undefined);
   assert.ok(projection?.events.some(event=>event.kind==='span_end'&&event.span_id.endsWith('-checkout_fetch')&&event.state==='failed'));
   assert.ok(!projection.events.some(event=>event.phase==='implementation'));
@@ -1197,6 +1321,7 @@ test('an observer reconciles lost workers and persists one fenced lease-expiry r
   for (const readback of [first, second]) {
     assert.equal(readback.lifecycle.state, 'failed');
     assert.equal(readback.attempts[0].state, 'orphaned');
+    assert.equal(readback.attempts[0].failure_kind, 'lease');
     const events = readback.events.filter(event => event.kind === 'lease_expired');
     assert.equal(events.length, 1);
     assert.equal(events[0].actor, 'scheduler');

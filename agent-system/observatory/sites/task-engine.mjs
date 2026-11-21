@@ -1,5 +1,6 @@
 import { proposedTask, validateNewTask } from '../intake.mjs';
 import { validCheckoutDiagnostic } from '../checkout-diagnostic.mjs';
+import { executionFailureCategories } from '../execution-failure.mjs';
 import { taskExecutionCapacity } from '../task-execution-capacity.mjs';
 import { operationId, priorities, proposalControl } from './proposal-controls.mjs';
 import { sha256 } from './task-telemetry.mjs';
@@ -114,7 +115,10 @@ export function taskAttemptRecord(task, attempt) {
     provider: attempt.execution_identity?.provider??attempt.executor,
     ...(attempt.execution_identity ? {model:attempt.execution_identity.model} : {}),
     ...(attempt.finished_at ? { finished_at: attempt.finished_at } : {}),
-    ...(attempt.failure ? { failure_category: 'environment', failure_diagnosis: attempt.failure } : {}),
+    ...(attempt.failure ? {
+      failure_category: executionFailureCategories[attempt.failure_kind] ?? 'environment',
+      failure_diagnosis: attempt.failure,
+    } : {}),
     ...(attempt.branch ? { branch: attempt.branch } : {}),
   };
 }
@@ -271,6 +275,7 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
     const last = lifecycle.attempts.at(-1);
     last.state = 'failed';
     last.failure = action.reason.trim();
+    last.failure_kind = 'verification';
     return { lifecycle: { ...lifecycle, state: 'failed' } };
   }
   if (type === 'recover_candidate' && current === 'failed') {
@@ -283,13 +288,15 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
       return failure(400, 'Describe how the recovered candidate was independently checked');
     }
     const previousFailure=last.failure;
+    const previousFailureKind=last.failure_kind;
     last.state = 'verifying';
     last.candidate_revision = action.revision;
     last.candidate_origin = 'recovered';
     delete last.failure;
+    delete last.failure_kind;
     delete last.recovery_commitment;
     delete last.recovery_until;
-    return { lifecycle: { ...lifecycle, state: 'verifying', recovered_candidate:true }, previousFailure };
+    return { lifecycle: { ...lifecycle, state: 'verifying', recovered_candidate:true }, previousFailure, previousFailureKind };
   }
   if (type === 'accept' && current === 'verifying') {
     const last = lifecycle.attempts.at(-1);
@@ -462,6 +469,12 @@ function workerChange(lifecycle, body, now) {
     return { lifecycle: { ...lifecycle, state }, addenda: deferAddenda(lifecycle, active) };
   }
   if (report.type === 'failed' && typeof report.failure === 'string' && report.failure.trim() && report.failure.length <= 500) {
+    if (report.failure_kind !== undefined) {
+      if (typeof report.failure_kind !== 'string' || !Object.hasOwn(executionFailureCategories,report.failure_kind)) {
+        return failure(400, 'Invalid execution failure category');
+      }
+      active.failure_kind=report.failure_kind;
+    }
     active.state = 'failed';
     if (report.checkout_diagnostic !== undefined) {
       if (!validCheckoutDiagnostic(report.checkout_diagnostic)) return failure(400, 'Invalid checkout diagnostic');
@@ -491,13 +504,15 @@ async function recoverWorkerCandidate(lifecycle, body, now) {
     return failure(409, 'Candidate recovery does not match the current orphaned attempt');
   }
   const previousFailure = attempt.failure;
+  const previousFailureKind = attempt.failure_kind;
   delete attempt.failure;
+  delete attempt.failure_kind;
   delete attempt.recovery_commitment;
   delete attempt.recovery_until;
   attempt.state = 'verifying';
   attempt.candidate_revision = candidate.revision;
   attempt.candidate_origin = 'worker_recovered';
-  return { lifecycle:{...lifecycle,state:'verifying',recovered_candidate:true}, previousFailure };
+  return { lifecycle:{...lifecycle,state:'verifying',recovered_candidate:true}, previousFailure, previousFailureKind };
 }
 
 export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
@@ -514,6 +529,7 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
     if (attempt.recovery_commitment) attempt.recovery_until = now + candidateRecoveryMs;
     attempt.state = 'orphaned';
     const deadlineReached = attempt.lease_until === attempt.deadline;
+    attempt.failure_kind = deadlineReached ? 'time_limit' : 'lease';
     attempt.failure = deadlineReached
       ? 'Attempt time limit reached. Reconcile possible effects before retrying.'
       : 'Executor lease expired. Reconcile possible effects before retrying.';
@@ -523,7 +539,7 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
     const version = row.version + 1;
     lifecycle.event = {
       operation_id: crypto.randomUUID(), digest: 'scheduler', kind: deadlineReached ? 'attempt_time_limit_reached' : 'lease_expired', actor: 'scheduler',
-      reason: attempt.failure,
+      reason: attempt.failure, failure_kind:attempt.failure_kind,
       ...(addenda.length ? {addenda: addenda.map(addendumReceipt)} : {}),
       version, state: 'failed', at: timestamp(now), attempt_id: attempt.id,
     };
@@ -822,9 +838,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     ...(change.addenda?.length ? { addenda: change.addenda.map(addendumReceipt) } : {}),
     ...(['admit','configure_execution'].includes(action?.type) ? { max_attempt_minutes:attemptLimit(change.lifecycle),
       start_at:timestamp(change.lifecycle.start_at),cancel_with_dependency:change.lifecycle.cancel_with_dependency } : {}),
-    ...(action?.type === 'reject' ? { reason:action.reason.trim() } : {}),
+    ...(action?.type === 'reject' ? { reason:action.reason.trim(), failure_kind:latest.failure_kind } : {}),
     ...(action?.type === 'retry' ? { reason:change.lifecycle.changed_assumption } : {}),
     ...(body.report?.type==='failed' && latest?.failure ? {reason:latest.failure,
+      ...(latest.failure_kind ? {failure_kind:latest.failure_kind} : {}),
       ...(latest.checkout_diagnostic ? {checkout_diagnostic:latest.checkout_diagnostic} : {})}:{}),
     ...(change.specification ? { specification: change.specification, fields:[
       ...specFields.filter(key =>
@@ -838,8 +855,9 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       evidence:lifecycle.evidence } : {}),
     ...(action?.type === 'continue_candidate' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision } : {}),
     ...(action?.type === 'recover_candidate' ? { revision:action.revision, reason:action.reason.trim(),
-      previous_failure:change.previousFailure } : {}),
-    ...(body.op === 'recover_worker_candidate' ? { revision:latest.candidate_revision, previous_failure:change.previousFailure } : {}),
+      previous_failure:change.previousFailure, previous_failure_kind:change.previousFailureKind } : {}),
+    ...(body.op === 'recover_worker_candidate' ? { revision:latest.candidate_revision,
+      previous_failure:change.previousFailure, previous_failure_kind:change.previousFailureKind } : {}),
     ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence } : {}),
   };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
