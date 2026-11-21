@@ -92,6 +92,13 @@
       "when": 1795182867000,
       "tag": "0012_task_trace_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1795233600000,
+      "tag": "0013_task_worker_liveness",
+      "breakpoints": true
     }
   ]
 }

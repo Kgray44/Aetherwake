@@ -15,7 +15,7 @@ import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
-import {codexThreadHref,hasLiveTaskWork,taskEngineRequest,taskNextAction} from './task-engine-client.mjs';
+import {codexThreadHref,hasLiveTaskWork,taskEngineRequest,taskNextAction,workerDispatchStatus} from './task-engine-client.mjs';
 import { taskExecutionStatus } from './task-timeline.mjs';
 import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 import {useCardMotion} from './card-motion.jsx';
@@ -136,7 +136,7 @@ const refreshEngine=useCallback(signal=>{
   const read={signal};
   read.request=taskEngineRequest({op:'list',include_archived:true},verificationHeaders,{signal}).then(data=>{
     if(signal?.aborted||engineRequest.current!==read)return;
-    if(Array.isArray(data?.tasks))setEngine({status:'available',tasks:data.tasks,workerAccess:data.executor_access?.codex});
+    if(Array.isArray(data?.tasks))setEngine({status:'available',tasks:data.tasks,workerAccess:data.executor_access?.codex,workerDispatch:data.worker_dispatch});
     else if(data===null)setEngine({status:'absent',tasks:[]});
     else setEngine(previous=>({...previous,status:'error',error:'Unexpected Task registry response.'}));
   }).catch(error=>{
@@ -195,7 +195,7 @@ useEffect(()=>{
 const [legacyHistory,setLegacyHistory]=useState(null);
 const [deployedRevision,setDeployedRevision]=useState(null);
 const watchingTasks=(Boolean(taskRoute)||page==='overview')&&!demo;
-const watchingExecution=watchingTasks&&engine.status==='available'&&hasLiveTaskWork(engine.tasks);
+const watchingExecution=watchingTasks&&engine.status==='available'&&(Boolean(engine.workerDispatch)||hasLiveTaskWork(engine.tasks));
 useEffect(()=>{
   if(!watchingExecution)return;
   const controller=new AbortController();
@@ -276,7 +276,8 @@ const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attem
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
 const {pricing,loadingPrice}=useOpenAIPricing(taskAttempts,page==='detail'&&!demo,verificationHeaders);
 const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
-const nextAction=taskNextAction(canonical,workerAccess);
+const dispatchStatus=workerDispatchStatus(engine.workerDispatch,workerAccess);
+const nextAction=taskNextAction(canonical,workerAccess,engine.workerDispatch);
 const executionStatus=canonical?taskExecutionStatus({taskId:canonical.task.id,state:detailState,
   attempt:canonical.attempts.at(-1),events:taskEvents,audits:taskAudits}):null;
 const statusBanner=executionStatus??nextAction;
@@ -361,7 +362,11 @@ const jumpToTaskSection=id=>{
   panel?.scrollIntoView({block:'start',behavior:reduce?'instant':'smooth'});
 };
 const activityGroup=kind=>demo?null:kind==='pulls'?github?.pulls:github?.ci;
+const dispatchObservation=!demo&&watchingTasks&&engine.status==='available'&&
+  <div className="notice"><Radio size={16}/><span>{dispatchStatus.label}{dispatchStatus.at&&
+    <> · Last verified worker heartbeat <time dateTime={dispatchStatus.at}>{new Date(dispatchStatus.at).toLocaleString()}</time></>}</span></div>;
 return <div className="app-shell"><Ambient/><aside className="sidebar"><div className="brand"><span className="brand-logo"><Layers3 size={21} strokeWidth={1.6}/></span><div><b>AETHERWAKE</b><small>ENGINEERING SYSTEMS</small></div></div><div className="rail-caption">OPERATIONS</div><nav>{nav.map(([id,label,Icon])=><motion.button key={id} className={'nav-link '+((activeNavigation===id)?'selected':'')} onClick={()=>navigate(id)} whileHover={{x:3}} whileTap={{scale:.98}}><Icon size={17} strokeWidth={1.7}/>{label}{(activeNavigation===id)&&<motion.span className="nav-indicator" layoutId="nav-indicator" transition={{type:'spring',stiffness:350,damping:30}}/>}</motion.button>)}</nav><div className="sidebar-bottom"><div className="connect-label"><span className="live-dot"/> {proposals?'PRIVATE SITES HOST':'LOCAL CONTROL PLANE'}</div><div className="mono">{short(revision)}</div><div>CONTRACT v1.0 · PHASE E</div></div></aside><main className="main"><header className="topbar"><div><div className="overline"><span className="overline-line"/>AETHERWAKE / ENGINEERING OBSERVATORY</div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{desc}</p></div><div className="header-actions">{demo&&<span className="demo-flag">SIMULATED DATA</span>}{page==='analytics'?<span className="connect-label"><span className="live-dot"/> Live sources</span>:<div className="mode-toggle">{['Live','Demo'].map(m=><button key={m} className={(demo===(m==='Demo'))?'on':''} onClick={()=>{const v=m==='Demo';setDemo(v);refresh(v)}}>{m}</button>)}</div>}<motion.button className="icon-button" aria-label="Refresh records" title="Refresh" whileTap={reduce?undefined:{rotate:160}} onClick={()=>refresh()}><RefreshCw size={17}/></motion.button>{page==='overview'&&<button className="quiet-button" onClick={()=>navigate('tasks')}>Browse Tasks <ArrowRight size={13}/></button>}<motion.button className="primary-button" whileHover={{y:-2}} whileTap={{scale:.97}} onClick={()=>navigate('create')}><Plus size={16}/> New task</motion.button></div></header>{!demo&&proposals?.verification&&<div className="notice"><ShieldCheck size={16}/>Isolated verification proposals</div>}{error&&<div className="notice error" role="status"><CircleAlert size={17}/>{error}</div>}{loading&&<div className="notice"><Radio size={16}/>Synchronizing engineering record feed…</div>}{watchingTasks&&engine.status==='error'&&engine.tasks.length>0&&<div className="notice" role="status"><Radio size={16}/>Task registry refresh failed. Showing the last known execution state.</div>}<motion.div key={page+(taskRoute?.id?'-'+taskRoute.id:'')+(githubView?.id?'-'+githubView.kind+'-'+githubView.id:'')+(demo?'-demo':'-live')} initial={reduce?false:{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{duration:reduce?.01:.3,ease}} className="view">
+{dispatchObservation}
 {page==='overview'&&<><div className="metrics"><Metric name="Registered tasks" value={tasks.length} meta={usingEngineRegistry?'Engine registry · partial view':'Canonical v1 records'} Icon={Boxes} index={0}/><Metric name="Accepted" href={taskHref(undefined,'accepted')} onClick={resetMetricFilters} value={work.accepted} meta="Explicit task outcomes" Icon={CheckCircle2} index={1}/><Metric name="Executing" href={taskHref(undefined,'active')} onClick={resetMetricFilters} value={engine.status==='available'?work.active:'Unavailable'} meta={work.reportedRunning?work.reportedRunning+' last reported running':workerAccess==='not_configured'&&!work.active?'Codex worker access unavailable':'Engine-confirmed activity'} Icon={Activity} index={2}/><Metric name="At risk" href={taskHref(undefined,'issues')} onClick={resetMetricFilters} value={work.issues} meta="Blocked + failed" Icon={CircleAlert} index={3}/><Metric name="Reported success" href={taskHref(undefined,'succeeded')} onClick={resetMetricFilters} value={work.succeeded} meta="Tasks with a reported successful attempt" Icon={Clock3} index={4}/></div><div className="wide-grid"><Rise delay={.12}><Panel title="Engineering throughput" kicker="01 / ACTIVITY SIGNAL" right={<span className="panel-meta">TASK ARRIVAL · 14D</span>}><Timeline values={chart}/><div className="chart-footer">TASKS CREATED <span>Only observed records shown</span></div></Panel></Rise><StickySectionAside><Rise delay={.19}><Panel title="Delivery integrity" kicker="02 / ACCEPTANCE" right={<ShieldCheck size={18} className="muted-icon"/>}><div className="accept-head"><strong>{tasks.length?Math.round(100*work.accepted/tasks.length)+'%':'—'}</strong><small>ACCEPTED TASKS</small></div><div className="track"><motion.span initial={{width:0}} animate={{width:(tasks.length?100*work.accepted/tasks.length:0)+'%'}} transition={{duration:.9,ease}}/></div><DetailLine name="Execution attempts" value={attempts.length}/><DetailLine name="Awaiting owner review" value={<a className="text-button" aria-label={work.review+' Tasks awaiting owner review'} href={taskHref(undefined,'review')} onClick={resetMetricFilters}>{work.review}</a>}/><DetailLine name="Queued, scheduled, or paused" value={<a className="text-button" aria-label={work.waiting+' queued, scheduled, or paused Tasks'} href={taskHref(undefined,'waiting')} onClick={resetMetricFilters}>{work.waiting}</a>}/><DetailLine name="Tasks with no linked execution" value={work.unlinked}/><DetailLine name="Observed trace time" value={observedTime}/>
 {traceCoverage?.spans>0&&<DetailLine name="Trace timing coverage"
   value={traceCoverage.tasks+' '+(traceCoverage.tasks===1?'Task':'Tasks')+' · '+traceCoverage.spans+' '+(traceCoverage.spans===1?'span':'spans')}/>}

@@ -17,6 +17,15 @@ const taskIdPattern = new RegExp('^task_' + verificationId.source.slice(1));
 const repoUrl = /^(?:https:\/\/github\.com\/|git@github\.com:)Kgray44\/Aetherwake(?:\.git)?$/i;
 const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
+export async function checkWorkerStorage(command, cwd, run = runFile) {
+  try {
+    await run(command[0], command.slice(1), { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 8192 });
+  } catch (error) {
+    const reason = error.killed ? 'storage_guard_timeout' : error.code === 2 ? 'storage_reserve_denied' : 'storage_guard_unavailable';
+    throw Object.assign(Error('The worker storage guard did not confirm safe writes.'), { code: reason });
+  }
+}
+
 function git(cwd, ...args) {
   return runFile('git', ['--no-optional-locks', '-C', cwd, ...args], {
     windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024,
@@ -356,7 +365,14 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   };
   const guardStorage = async () => {
     try { await admitStorage(); }
-    catch (error) { stop('The worker storage check failed before execution.'); throw error; }
+    catch (error) {
+      stop({
+        storage_guard_timeout: 'The worker storage guard timed out before execution.',
+        storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
+        storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
+      }[error.code] ?? 'The worker storage check failed before execution.');
+      throw error;
+    }
   };
   try {
     monitoring = (async () => {
@@ -535,6 +551,8 @@ async function main(configPath) {
   const credential = process.env.AADS_TASK_WORKER_KEY;
   if (!credential || credential.length < 32) throw Error('AADS_TASK_WORKER_KEY is required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const workerId = config.worker_id ?? randomUUID();
+  if (!verificationId.test(workerId)) throw Error('Worker ID must be a UUID v4');
   if (config.executor_transport!==undefined && !['exec','app_server'].includes(config.executor_transport)) {
     throw Error('Invalid worker execution transport');
   }
@@ -574,9 +592,13 @@ async function main(configPath) {
   for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => controller.abort());
   const { signal } = controller;
   const active = new Set();
-  const admitStorage = () => runFile(config.storage_check[0], config.storage_check.slice(1), {
-    cwd: root, windowsHide: true, timeout: 5000, maxBuffer: 8192,
-  });
+  // Serialize local guard processes so concurrent slots cannot contend on WMI.
+  let storageCheck = Promise.resolve();
+  const admitStorage = () => {
+    const pending = storageCheck.then(() => checkWorkerStorage(config.storage_check, root));
+    storageCheck = pending.catch(() => {});
+    return pending;
+  };
   function connection() {
     let connector;
     return {
@@ -595,6 +617,19 @@ async function main(configPath) {
   const delivery = connection();
   const send = (request, options) => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
   const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
+  let nextPulse = 0;
+  let lastWorkerState;
+  let pulseRequest;
+  function pulse(state) {
+    if (pulseRequest || (state === lastWorkerState && Date.now() < nextPulse)) return;
+    lastWorkerState = state;
+    nextPulse = Date.now() + 15_000;
+    pulseRequest = delivery.call({
+      request: { op:'worker_pulse', worker_id:workerId, worker_state:state },
+      worker_key:credential, ...(verification ? { verification } : {}),
+    },tool).catch(() => { /* An unavailable observation must not block claims or leases. */ })
+      .finally(() => { pulseRequest = undefined; });
+  }
   let recoveryCursor = 0;
   let nextRecovery = 0;
   async function recoverIdleTelemetry() {
@@ -650,14 +685,19 @@ async function main(configPath) {
                 console.error('Attempt reporting failed. The Task lease will require reconciliation.');
               }).finally(() => active.delete(job));
             active.add(job);
+            pulse(active.size === 2 ? 'busy' : 'available');
             continue;
           }
+          pulse(result.dispatch_state === 'busy' ? 'busy' : 'available');
           await recoverIdleTelemetry();
         } catch (error) {
+          const detail = error.code?.startsWith?.('storage_') ? error.code :
+            error.status === 409 ? 'claim_rejected' : 'task_connection_unavailable';
+          pulse(detail);
+          console.error('Worker poll deferred (' + detail + ').');
           if (error.status === 403 || error.status === 404) throw Error('Hosted Task worker is not configured or authorized');
-          if (error.status !== 409) console.error('Worker admission or Task connection unavailable. Waiting.');
         }
-      }
+      } else pulse('busy');
       await sleep(3000, undefined, { signal }).catch(() => {});
     }
   } finally {
