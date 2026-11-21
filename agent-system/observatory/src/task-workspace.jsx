@@ -191,6 +191,13 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         <code>codex resume --include-non-interactive {attempt.session_id}</code>
       </details>}
       {attempt.failure_diagnosis&&<div className="notice error"><strong>Failure</strong><span>{attempt.failure_diagnosis}</span></div>}
+      {attempt.checkout_diagnostic&&<dl className="github-facts">
+        <div><dt>Checkout ID</dt><dd><code>{attempt.task_id}</code></dd></div>
+        <div><dt>Stage</dt><dd>{labels(attempt.checkout_diagnostic.stage)}</dd></div>
+        <div><dt>Provisioning duration</dt><dd>{attempt.checkout_diagnostic.duration_ms.toLocaleString()} ms</dd></div>
+        <div><dt>Retryable failure</dt><dd>{attempt.checkout_diagnostic.retryable?'Yes':'No'}</dd></div>
+        <div><dt>Recovery required</dt><dd>{attempt.checkout_diagnostic.recovery_required?'Yes':'No'}</dd></div>
+      </dl>}
       <details className="task-attempt-log" open={attempt===attempts.at(-1)}>
         <summary>Execution log · {history.events.length} recorded events</summary>
         {history.events.length>0?<ol>{history.events.slice(0,count).map(event=>

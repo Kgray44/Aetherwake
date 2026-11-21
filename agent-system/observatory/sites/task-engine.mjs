@@ -1,4 +1,5 @@
 import { proposedTask, validateNewTask } from '../intake.mjs';
+import { validCheckoutDiagnostic } from '../checkout-diagnostic.mjs';
 import { taskExecutionCapacity } from '../task-execution-capacity.mjs';
 import { operationId, priorities, proposalControl } from './proposal-controls.mjs';
 import { sha256 } from './task-telemetry.mjs';
@@ -435,6 +436,10 @@ function workerChange(lifecycle, body, now) {
   }
   if (report.type === 'failed' && typeof report.failure === 'string' && report.failure.trim() && report.failure.length <= 500) {
     active.state = 'failed';
+    if (report.checkout_diagnostic !== undefined) {
+      if (!validCheckoutDiagnostic(report.checkout_diagnostic)) return failure(400, 'Invalid checkout diagnostic');
+      active.checkout_diagnostic = report.checkout_diagnostic;
+    }
     active.failure = report.failure.trim();
     active.finished_at = timestamp(now);
     return { lifecycle: { ...lifecycle, state: 'failed' }, addenda: deferAddenda(lifecycle, active) };
@@ -479,12 +484,16 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
   }));
 }
 
-function taskForExecution(task,lifecycle,attempt) {
+function claimPayload(task,lifecycle,attempt,separateNotes) {
   const feedback = [
     lifecycle.feedback && 'Owner feedback for this follow-up attempt\n' + lifecycle.feedback,
     attempt.changed_assumption && 'Owner retry diagnosis and changed assumption\n' + attempt.changed_assumption,
   ].filter(Boolean);
-  return feedback.length ? {...task, objective:[task.objective, ...feedback].join('\n\n')} : task;
+  return {
+    task: separateNotes || !feedback.length ? task : {...task, objective:[task.objective, ...feedback].join('\n\n')},
+    attempt:exposeAttempt(attempt), lease:attempt.lease,
+    ...(separateNotes && feedback.length ? { execution_notes:feedback } : {}),
+  };
 }
 
 const workerOperations = new Set(['claim', 'report', 'worker_pulse']);
@@ -586,7 +595,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     if (body.op === 'claim') {
       const attempt = details(row).attempts.at(-1);
       if (attempt?.id !== previous.attempt_id || !activeStates.has(details(row).state) || attempt.lease_until <= now) return success({ claim: null });
-      return success({ claim: { task: taskForExecution(record(row), details(row), attempt), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+      return success({ claim: claimPayload(record(row), details(row), attempt, body.separate_execution_notes === true) });
     }
     if (addendumReports.has(body.report?.type) || body.report?.type === 'heartbeat') {
       const lifecycle = details(row);
@@ -723,7 +732,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       }
     }
     if (!await save(candidate, task, lifecycle, { kind: 'claim', attemptId: attempt.id })) return conflict();
-    return success({ claim: { task: taskForExecution(record(rows.get(candidate.task_id)),lifecycle,attempt), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+    return success({ claim: claimPayload(record(rows.get(candidate.task_id)), lifecycle, attempt, body.separate_execution_notes === true) });
   }
 
   if (!currentRow) return failure(404, 'Task not found');
@@ -754,7 +763,8 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       start_at:timestamp(change.lifecycle.start_at),cancel_with_dependency:change.lifecycle.cancel_with_dependency } : {}),
     ...(action?.type === 'reject' ? { reason:action.reason.trim() } : {}),
     ...(action?.type === 'retry' ? { reason:change.lifecycle.changed_assumption } : {}),
-    ...(body.report?.type==='failed' && latest?.failure ? {reason:latest.failure}:{}),
+    ...(body.report?.type==='failed' && latest?.failure ? {reason:latest.failure,
+      ...(latest.checkout_diagnostic ? {checkout_diagnostic:latest.checkout_diagnostic} : {})}:{}),
     ...(change.specification ? { specification: change.specification, fields:[
       ...specFields.filter(key =>
         JSON.stringify(change.specification.before[key]) !== JSON.stringify(change.specification.after[key])),

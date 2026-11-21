@@ -12,7 +12,7 @@ test('task intake validates bounded contract fields',()=>{
   assert.equal(result.accept.length,1);
   assert.throws(()=>validateNewTask({...base,primary:'mission-11'}),/classification/);
   assert.throws(()=>validateNewTask({...base,criteria:[]}),/criterion/);
-  assert.throws(()=>validateNewTask({...base,objective:''}),/required/);
+  assert.throws(()=>validateNewTask({...base,objective:''}),/12 to 100,000/);
 });
 test('simulation is bounded, labeled and separate from actual data',()=>{
   const result=demoRecords();

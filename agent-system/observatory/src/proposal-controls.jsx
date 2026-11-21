@@ -110,8 +110,9 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     const form = event.currentTarget;
     const data = new FormData(form);
     const fields = readFields(form);
+    if (fields.objective === stored.objective.replace(/\r\n?/g,'\n')) fields.objective = stored.objective;
     if (!Object.values(proposalChecks(fields)).every(Boolean) || fields.dependencies.includes(task.id)) {
-      setError('Complete admission checks and remove any self-dependency.');
+      setError('Complete admission checks, use an objective of 12 to 100,000 characters, and remove any self-dependency.');
       return;
     }
     submit({ type: 'edit', fields: { ...fields, priority: data.get('priority') } });
@@ -146,7 +147,7 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
           ? 'Changes apply to the next attempt. The current attempt and its review use the claimed specification.'
           : 'Changes apply when the worker next claims this Task.'}</p>}
         <label>Task title <input name="title" defaultValue={stored.title} required minLength={4} maxLength={160}/></label>
-        <label>Objective <textarea name="objective" defaultValue={stored.objective} required minLength={12} maxLength={6000}/></label>
+        <label>Objective <textarea name="objective" defaultValue={stored.objective} required/></label>
         <div className="form-grid">
           <label>Category <select name="primary" defaultValue={stored.classification.primary}>{classes.map(value => <option key={value}>{value}</option>)}</select></label>
           <label>Priority <select name="priority" defaultValue={snapshot.priority}>{['low', 'normal', 'high', 'urgent'].map(value => <option key={value}>{value}</option>)}</select></label>

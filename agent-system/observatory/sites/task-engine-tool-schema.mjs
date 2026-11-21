@@ -1,4 +1,5 @@
-import {requirementKinds} from '../intake.mjs';
+import {requirementKinds,TASK_OBJECTIVE_MAX} from '../intake.mjs';
+import {checkoutDiagnosticSchema} from '../checkout-diagnostic.mjs';
 
 const string = (maxLength,description) => ({type:'string',minLength:1,maxLength,...(description?{description}:{})});
 const strings = (count,length) => ({type:'array',maxItems:count,items:string(length)});
@@ -7,7 +8,7 @@ const revision = {type:'string',pattern:'^[a-f0-9]{40}$'};
 const uuid = {type:'string',format:'uuid'};
 const taskId = string(128,'Exact Task ID returned by register or list.');
 const taskFields = object({
-  title:string(160),objective:string(6000),
+  title:string(160),objective:{type:'string',minLength:12,maxLength:TASK_OBJECTIVE_MAX},
   primary:{type:'string',enum:['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration']},
   profile_id:string(100),criteria:strings(50,1000),dependencies:strings(100,128),
   capabilities:strings(100,128),deliverables:strings(30,500),
@@ -46,9 +47,11 @@ export const taskEngineToolSchema = object({
     },['type']),
     task_ids:{type:'array',maxItems:500,items:taskId},
     conversation_continuation:{type:'boolean',description:'Worker supports clean-checkout continuation of stored Codex conversations.'},
+    separate_execution_notes:{type:'boolean',description:'Worker receives owner follow-up notes separately from the canonical objective.'},
     live_addenda:{type:'boolean',description:'Worker supports a fenced addendum checkpoint on the persisted Codex conversation.'},
     attempt_id:string(160),lease:string(256),
     report:object({
+      checkout_diagnostic:checkoutDiagnosticSchema,
       type:{type:'string',enum:['heartbeat','finished','failed','stopped','addenda_take','addenda_delivered','addenda_acknowledged']},
       turn_id:uuid,reservation_id:uuid,
       session_id:uuid,branch:string(200),revision,result:{type:'string',enum:['candidate']},failure:string(500),

@@ -1,6 +1,22 @@
 const validClasses=new Set(['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration']);
 
 function cleanString(v,max=1000){return typeof v==='string'?v.trim().slice(0,max):''}
+export const TASK_OBJECTIVE_MAX = 100_000;
+// The wire limit also covers JSON escapes and the existing scope fields.
+export const TASK_REQUEST_MAX_BYTES = 1024 * 1024;
+export function validTaskObjective(value) {
+  if (typeof value !== 'string' || value.length > 2 * TASK_OBJECTIVE_MAX ||
+      !value.isWellFormed() || value.trim().length < 12) return false;
+  let count = 0;
+  for (const character of value) {
+    if (++count > TASK_OBJECTIVE_MAX) return false;
+  }
+  let meaningfulLength = 0;
+  for (const character of value.trim()) {
+    if (++meaningfulLength >= 12) return true;
+  }
+  return false;
+}
 const list = value => Array.isArray(value) ? value : [];
 export const requirementKinds=['git','requirement','document','artifact','issue','pull_request','url'];
 const validRequirements = refs => refs===undefined || Array.isArray(refs) && refs.length<=50 &&
@@ -11,7 +27,7 @@ const validDeliverables = items => items===undefined || Array.isArray(items) && 
   items.every(item=>typeof item==='string' && item.trim() && item.length<=500);
 export function proposalChecks(body) {
   return {
-    outcome: cleanString(body.title,160).length >= 4 && cleanString(body.objective,6000).length >= 12,
+    outcome: cleanString(body.title,160).length >= 4 && validTaskObjective(body.objective),
     classification: validClasses.has(cleanString(body.primary,32)),
     prerequisites: list(body.dependencies).length <= 100 && list(body.capabilities).length <= 100,
     inputs: validRequirements(body.requirements),
@@ -22,10 +38,11 @@ export function proposalChecks(body) {
 }
 export function validateNewTask(b){
   if(!b||typeof b!=='object'||Array.isArray(b))throw Error('Task body must be an object');
-  const title=cleanString(b.title,160), objective=cleanString(b.objective,6000);
+  const title=cleanString(b.title,160), objective=b.objective;
   const primary=cleanString(b.primary,32),profile=cleanString(b.profile_id,100);
   const checks=proposalChecks(b);
-  if(!checks.outcome)throw Error('Title (4+) and objective (12+) are required');
+  if(!validTaskObjective(objective))throw Error('Objective must contain 12 to 100,000 Unicode characters.');
+  if(!checks.outcome)throw Error('Title must contain at least 4 characters.');
   if(!checks.classification)throw Error('Unsupported task classification');
   if(!profile)throw Error('Verification profile is required');
   const deps=Array.isArray(b.dependencies)?b.dependencies:[];

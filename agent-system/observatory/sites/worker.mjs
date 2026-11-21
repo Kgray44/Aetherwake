@@ -1,7 +1,7 @@
 import { isTaskWorkerKey, readTaskRows, taskAttemptRecord, taskEnginePath, taskOperation } from './task-engine.mjs';
 import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
-import { proposedTask } from '../intake.mjs';
+import { proposedTask, TASK_REQUEST_MAX_BYTES } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub, cachedGitHubDetail, peekGitHub, peekTaskGitHubDetails } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
@@ -70,7 +70,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
 
     if (taskEngine) {
       let body;
-      try { body = JSON.parse(await readBounded(request.body, 64 * 1024)); }
+      try { body = JSON.parse(await readBounded(request.body, TASK_REQUEST_MAX_BYTES)); }
       catch (cause) { return error('Invalid Task request', cause instanceof RangeError ? 413 : 400); }
       const access=owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID?'owner':'agent';
       const result=await taskOperation({
@@ -130,7 +130,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         return row ? json(proposalControl(row)) : error('Private proposal not found', 404);
       }
       let action;
-      try { action = JSON.parse(await readBounded(request.body, 128 * 1024)); }
+      try { action = JSON.parse(await readBounded(request.body, TASK_REQUEST_MAX_BYTES)); }
       catch (cause) { return error('Invalid proposal action payload', cause instanceof RangeError ? 413 : 400); }
       const result = await changeProposal({ db: env.DB, owner, namespace, id, action, validate });
       return json(result.body, result.status);
@@ -212,7 +212,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
 
     let body;
     try {
-      body = JSON.parse(await readBounded(request.body, 64 * 1024));
+      body = JSON.parse(await readBounded(request.body, TASK_REQUEST_MAX_BYTES));
     } catch (cause) {
       return cause instanceof RangeError ? error('Payload too large', 413) : error('Invalid JSON', 400);
     }

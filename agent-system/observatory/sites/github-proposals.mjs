@@ -1,3 +1,4 @@
+import { TASK_REQUEST_MAX_BYTES } from '../intake.mjs';
 import { readBounded } from './github.mjs';
 
 const repository = 'Kgray44/Aetherwake';
@@ -44,7 +45,7 @@ export async function publishProposal(db, fetcher, token, owner, taskId, validat
         await existing.body?.cancel();
         return { state: 'pending', reason: 'GitHub could not confirm the proposal file.' };
       }
-      const file = JSON.parse(await readBounded(existing.body, 128 * 1024));
+      const file = JSON.parse(await readBounded(existing.body, 2 * TASK_REQUEST_MAX_BYTES));
       if (file.encoding !== 'base64' || file.content?.replace(/\s/g, '') !== content) {
         return { state: 'pending', reason: 'The existing GitHub file differs from this proposal.' };
       }

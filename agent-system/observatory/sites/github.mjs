@@ -1,3 +1,5 @@
+import { TASK_REQUEST_MAX_BYTES } from '../intake.mjs';
+
 export const REPO = 'Kgray44/Aetherwake';
 const API_ORIGIN = 'https://api.github.com';
 const API = API_ORIGIN + '/repos/' + REPO;
@@ -222,10 +224,11 @@ async function contractRecords(get, revision, validate) {
   truncated ||= directories.length > 0 || files.length > MAX_RECORD_FILES;
   for (const { path, sha, size } of files.slice(0, MAX_RECORD_FILES)) {
     try {
-      if (!isRevision(sha) || !Number.isFinite(size) || size > 128 * 1024) throw new Error('File exceeds limits');
-      const blob = await get('/git/blobs/' + sha, 256 * 1024);
+      if (!isRevision(sha) || !Number.isFinite(size) || size > TASK_REQUEST_MAX_BYTES) throw new Error('File exceeds limits');
+      const blob = await get('/git/blobs/' + sha, 2 * TASK_REQUEST_MAX_BYTES);
       if (blob.sha !== sha || blob.encoding !== 'base64') throw new Error('Invalid Git blob');
       const bytes = Uint8Array.from(atob(blob.content.replace(/\s/g, '')), x => x.charCodeAt(0));
+      if (bytes.byteLength > TASK_REQUEST_MAX_BYTES) throw new Error('Git blob exceeds limits');
       const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
       for (const record of Array.isArray(data) ? data : [data]) {
         if (records.size >= MAX_RECORDS) {
