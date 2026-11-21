@@ -1,3 +1,4 @@
+import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { PERSONAL_CONTEXT_CONTRACT } from './contracts.ts';
@@ -57,8 +58,14 @@ function draft(input: unknown): asserts input is FactDraft {
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
-  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
+  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors', 'evidenceQueries'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
   check(Number.isSafeInteger(value.maxBytes) && value.maxBytes >= 1024 && value.maxBytes <= LIMITS.contextBytes && Number.isSafeInteger(value.maxItems) && value.maxItems >= 1 && value.maxItems <= 32 && (value.maxScan === undefined || Number.isSafeInteger(value.maxScan) && value.maxScan >= 1 && value.maxScan <= 512), 'invalid_context_budget');
+  if (value.evidenceQueries !== undefined) {
+    const queries = value.evidenceQueries;
+    check(Array.isArray(queries) && queries.length > 0 && queries.length <= 4 &&
+      queries.every(query => typeof query === 'string' && query.trim() && Buffer.byteLength(query) <= 512) &&
+      new Set(queries).size === queries.length, 'invalid_context_request');
+  }
   if (value.sourceAnchors !== undefined) {
     check(Array.isArray(value.sourceAnchors) && value.sourceAnchors.length <= 8 && value.sourceAnchors.every(anchor =>
       record(anchor) && exact(anchor, ['kind', 'conversationId', 'messageId']) && anchor.kind === 'conversation-message' &&
@@ -66,7 +73,7 @@ function request(value: ContextRequest) {
     check(new Set(value.sourceAnchors.map(anchor => encode(anchor))).size === value.sourceAnchors.length, 'invalid_context_request');
   }
 }
-const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
+const words = (value: string) => new Set(personalMemorySearchTerms(value));
 
 const existingSchemaOnly = Symbol('existing personal context schema only');
 
@@ -445,36 +452,72 @@ export class PersonalContextService {
       const base = (reasons = omissions) => this.seal({ contract: PERSONAL_CONTEXT_CONTRACT, id: manifestId, createdAt: created, ownerId: who.userId, hostPolicyVersion: who.policyVersion, policyVersion: policy.version, requestDigest: hash(input), trust: 'untrusted-personalization-data', scopes, items, omissions: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => a.reason.localeCompare(b.reason)) });
       const manifestId = randomUUID(), created = this.now();
       if (!policy.storageEnabled || !(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
-      const heads = this.opts.db.prepare("SELECT id FROM personal_context_heads WHERE owner=? AND kind='fact' ORDER BY id LIMIT ?").all(who.userId, LIMITS.facts + 1); check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
+      // Current revision insertion order prioritizes new reviews within the scan budget.
+      const heads = this.opts.db.prepare(`SELECT h.id,h.kind,h.version,h.scope,h.state
+        FROM personal_context_heads h LEFT JOIN personal_context_revisions r
+          ON r.owner=h.owner AND r.id=h.id AND r.version=h.version
+        WHERE h.owner=? AND h.kind='fact' ORDER BY r.rowid DESC,h.id LIMIT ?`).all(who.userId, LIMITS.facts + 1);
+      check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
       const anchors = this.sourceCandidates(input, who.userId);
       if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
-      const query = words(input.query), candidates: { value: ReviewedFact; score: number; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      const queries = [input.query, ...(input.evidenceQueries ?? [])].map(words);
+      const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[]; needs: number[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      // On a miss or an uncovered evidence query, continue through a bounded older window.
+      // Explicit scan limits are strict and a recent match needs no extra decryption.
+      const evidenceQueryCount = queries.length - 1;
+      const matchedNeeds = new Set<number>();
+      const recentScanLimit = input.maxScan ?? 128;
+      const missScanLimit = input.maxScan ?? 512;
+      let scanLimit = recentScanLimit;
       for (const row of heads) {
-        const head = this.required(String(row.id), 'fact');
+        const head = this.decodeHead(row);
+        check(head.kind === 'fact' && head.scope, 'corrupt_personal_context');
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
-        if (scanned >= (input.maxScan ?? 128)) { omit('scan-limit'); continue; } scanned++;
+        if (scanned === recentScanLimit && (!candidates.length || matchedNeeds.size < evidenceQueryCount))
+          scanLimit = missScanLimit;
+        if (scanned >= scanLimit) { omit('scan-limit'); continue; }
+        scanned++;
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
+          const keywordTerms = words(value.keywords.join(' '));
+          const textTerms = words(value.text);
+          const scores = queries.map(query => {
+            if (value.purpose === 'behavior') return 1000;
+            const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
+            const textMatches = [...textTerms].filter(word => query.has(word)).length;
+            return keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
+          });
+          const score = scores[0] || Math.max(...scores);
           const provenance = value.provenance;
-          const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' &&
-            input.sourceAnchors?.some(anchor => anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
-          const score = anchored ? 2000 : value.purpose === 'behavior' ? 1000 :
-            value.keywords.reduce((sum, key) => sum + [...words(key)].filter(word => query.has(word)).length, 0);
-          if (!score) { omit('irrelevant'); continue; }
-          const proofs = [proof]; if (value.provenance.kind === 'import') proofs.push(this.proof(this.head(value.provenance.id)!.scope!)); candidates.push({ value, score, proofs });
+          const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' && input.sourceAnchors!.some(anchor =>
+            anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
+          if (!score && !anchored) { omit('irrelevant'); continue; }
+          const proofs = [proof]; if (provenance.kind === 'import') proofs.push(this.proof(this.head(provenance.id)!.scope!));
+          const needs = scores.slice(1).flatMap((score, index) => score > 0 && value.purpose === 'knowledge' ? [index] : []);
+          for (const need of needs) matchedNeeds.add(need);
+          candidates.push({ value, score, primary: scores[0] > 0, anchored, proofs, needs });
         } catch (error) { if (error instanceof PersonalContextError && ['canonical_scope_unavailable', 'personal_context_not_authorized', 'private_content_unavailable'].includes(error.code)) { omit('unavailable'); continue; } throw error; }
       }
       // Reserve the bounded omission envelope before packing WHOLE reviewed facts; no text truncation.
-      candidates.sort((a, b) => b.score - a.score || a.value.id.localeCompare(b.value.id));
-      for (const candidate of candidates) {
-        if (items.length >= input.maxItems) { omit('item-budget'); continue; }
+      candidates.sort((a, b) => Number(b.anchored) - Number(a.anchored) || Number(b.primary) - Number(a.primary) || b.score - a.score || a.value.id.localeCompare(b.value.id));
+      const packedNeeds = new Set<number>();
+      const candidateCount = candidates.length;
+      while (candidates.length) {
+        if (items.length >= input.maxItems) { omit('item-budget', candidates.length); break; }
+        // Keep exact anchors first, then prefer a fact that covers a still-unrepresented query.
+        const covering = candidates[0].anchored || packedNeeds.size === matchedNeeds.size ? 0 : candidates.findIndex(candidate =>
+          candidate.needs.some(need => !packedNeeds.has(need)));
+        const [candidate] = candidates.splice(Math.max(0, covering), 1);
         const oldScopes = scopes.length; for (const proof of candidate.proofs) if (!scopes.some(value => same(value, proof))) scopes.push(proof);
         items.push(this.item(candidate.value));
-        const reserved = new Map(omissions); reserved.set('byte-budget', candidates.length); reserved.set('item-budget', candidates.length);
+        const reserved = new Map(omissions); reserved.set('byte-budget', candidateCount); reserved.set('item-budget', candidateCount);
+        if (evidenceQueryCount) reserved.set('unmatched-evidence-query', evidenceQueryCount);
         if (base(reserved).encodedBytes > input.maxBytes) { items.pop(); scopes.splice(oldScopes); omit('byte-budget'); }
+        else for (const need of candidate.needs) packedNeeds.add(need);
       }
+      if (packedNeeds.size < evidenceQueryCount) omit('unmatched-evidence-query', evidenceQueryCount - packedNeeds.size);
       const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return structuredClone(result);
     });
   }

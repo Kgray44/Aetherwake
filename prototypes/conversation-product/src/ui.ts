@@ -46,7 +46,7 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
 export function mountConversationManager(container: HTMLElement, port: ConversationProductPort,
-  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean> } = {}) {
+  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>; memoryView?: HTMLElement } = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
  const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
@@ -59,6 +59,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const switchQuery=el('input'),switchMode=select([{value:'recent',label:'Recent chats'},{value:'favorite',label:'Favorites'},{value:'running',label:'Running chats'}]),switchStatus=el('p','', 'cp-switcher-status'),switchResults=el('div',undefined,'cp-switcher-results');switchQuery.type='search';switchQuery.placeholder='Find a conversation';switchQuery.maxLength=1000;switchQuery.setAttribute('aria-label','Find a conversation to switch to');switchMode.setAttribute('aria-label','Quick conversation group');switchStatus.setAttribute('role','status');switcher.panel.append(switchQuery,switchMode,switchStatus,switchResults);
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  const sort=select([{value:'activity',label:'Recent activity'},{value:'created',label:'Newest created'},{value:'title',label:'Title'},{value:'active',label:'Running first'}],state.query.sort??'activity'),searchMode=select([{value:'all',label:'All matches'},{value:'conversations',label:'Conversations'},{value:'messages',label:'Messages'},{value:'resources',label:'Resources'}],state.query.searchMode??'all');sort.setAttribute('aria-label','Sort conversations');searchMode.setAttribute('aria-label','Search result type');
+ if (options.memoryView) {
+   const memories = disclosure('Saved memories', 'cp-memory');
+   memories.panel.append(options.memoryView);
+   headerActions.insertBefore(memories.node, close);
+ }
  query.type='search';query.placeholder='Search chats';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;
  const clearSearch=button('Clear history search',()=>{clearTimeout(searchTimer);query.value='';filter();query.focus();},{identity:'clear-search'});clearSearch.hidden=!query.value;query.dataset.cpControl='search';clearSearch.setAttribute('aria-label','Clear history search');
  const filters=disclosure('Filters','cp-filters');filters.panel.append(field('Project',project),field('Folder or collection',collection),field('History',archive),field('Favorites',favorite),field('Search result type',searchMode));toolbar.dataset.cpGroup='search';toolbar.append(query,clearSearch,sort,filters.node);

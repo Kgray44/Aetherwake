@@ -132,6 +132,7 @@ exports.conversationCommand = async ({
       !Array.isArray(r.history) ||
       r.history.length >= r.messages.length ||
       r.webSearch !== webSearch ||
+      (r.memoryPartialCoverage !== undefined && (r.memoryPartialCoverage !== true || !useMemory)) ||
       (useMemory ? !/^[a-f0-9]{64}$/u.test(r.memoryDigest ?? "") || r.requiresSourceReview !== true : r.memoryDigest !== undefined) ||
       (webSearch && (r.messages.length !== 1 || r.history.length || r.requiresSourceReview)) ||
       typeof r.requiresSourceReview !== "boolean" ||
@@ -166,7 +167,7 @@ exports.conversationCommand = async ({
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
-          ...(useMemory ? { memory: { manifestDigest: r.memoryDigest } } : {}),
+          ...(useMemory ? { memory: { manifestDigest: r.memoryDigest, ...(r.memoryPartialCoverage === true ? {partialCoverage:true} : {}) } } : {}),
           context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages

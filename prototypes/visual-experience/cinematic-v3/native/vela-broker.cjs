@@ -182,6 +182,7 @@ exports.velaCommand = async ({
   reviewProvider = showVelaReview,
   validateMemoryReview,
   beforeMemoryPreview,
+  reviewMemorySearch,
   offerPlanningByDefault = false,
   directMessageSend = false,
   routeNative = directMessageSend,
@@ -265,7 +266,7 @@ exports.velaCommand = async ({
       (value.reasoningEffort !== undefined && !["none", "low", "medium", "high", "xhigh", "max"].includes(value.reasoningEffort))
     )
       throw Error("invalid_vela_request");
-    const reviewedMemory = value.useMemory === true;
+    let reviewedMemory = value.useMemory === true;
     if (value.useMemory !== undefined && (!reviewedMemory || !directMessageSend || !value.authorizeProvider ||
         value.providerId !== "openai-api-vela" || value.resourceIds.length || value.resourceRefs?.length ||
         value.semanticContext || value.activeCard || value.handoffSourceRequestId ||
@@ -361,11 +362,19 @@ exports.velaCommand = async ({
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
     };
-    const preview = await stage("preview", async () => {
+    let memoryMiss;
+    let preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
-        if (reviewedMemory) throw error;
         const code = error?.code ?? error?.message;
+        if (reviewedMemory) {
+          if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(code) ||
+              typeof reviewMemorySearch !== "function") throw error;
+          if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+          memoryMiss = code;
+          const { useMemory: _memory, ...baseInput } = previewInput;
+          return call("velaRequestPreview", baseInput);
+        }
         if (directMessageSend && requireInspectionDirectory && code === "vela_codex_inspection_target_required") {
           if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
           const selected = await dialog.showOpenDialog(win, {
@@ -384,6 +393,27 @@ exports.velaCommand = async ({
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
+    if (memoryMiss) {
+      reviewedMemory = false;
+      if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+      const binding = { previewId: preview.id, signature: preview.signature };
+      const search = await call("velaMemorySearchNative", binding);
+      if (search?.kind === "review") {
+        if (search.request !== request.intent || typeof search.model !== "string" ||
+            search.model !== preview.route?.model || !/^[a-f0-9]{64}$/.test(search.digest))
+          throw Error("invalid_native_vela_review");
+        if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+        if (await reviewMemorySearch(search) !== true) throw Error("authorization_cancelled");
+        if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+        const result = await call("velaMemorySearchNative", { ...binding, reviewDigest: search.digest });
+        if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+        if (result?.kind === "preview") {
+          preview = { ...preview, signature: result.signature, memory: result.memory, sendDisposition: "review-required" };
+          reviewedMemory = true;
+        }
+      }
+      if (!reviewedMemory) throw Error(memoryMiss);
+    }
     if (!!preview.memory !== reviewedMemory || (reviewedMemory &&
         (preview.providerId !== "openai-api-vela" || preview.route?.kind !== "conversational" || preview.workflowScope ||
           preview.route.nativeMetric || preview.route.nativeLog || preview.route.escalation))) throw Error("invalid_native_vela_review");
@@ -424,20 +454,15 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const standingEvidence = preview.sendDisposition === "standing-selected-evidence" &&
-      preview.providerId === "openai-api-vela" && preview.semanticContext === true &&
-      review.semanticContext === true && !review.handoff && !review.routingAgent &&
-      !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
-      Array.isArray(request.resourceRefs) && request.resourceRefs.length === review.context.included.length &&
-      request.resourceRefs.every(ref => review.context.included.some(source =>
-        source.id === ref?.id && source.version === ref.version));
+    // Renderer selection and a backend disposition do not attest an independent
+    // user gesture. Selected evidence always requires the native exact review.
     if (reviewedMemory && validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
-    const direct = directMessageSend && !reviewedMemory && (standingEvidence || (preview.sendDisposition === "routine" &&
+    const direct = directMessageSend && !reviewedMemory && (preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
       !preview.route?.nativeMetric && !preview.route?.nativeLog &&
       preview.resourceIds?.length === 0 &&
-      !review.context.included.length && !review.handoff && !review.routingAgent));
+      !review.context.included.length && !review.handoff && !review.routingAgent);
     const approved = direct || await reviewProvider({
       parent: win,
       review,
@@ -544,4 +569,22 @@ exports.velaCommand = async ({
     input: input.input,
     ...(presentation ? { presentation } : {}),
   });
+};
+
+
+exports.reviewVelaMemorySearch = async ({win, dialog, search, isCurrent, allowWrite}) => {
+  const validate = () => {
+    if (!isReviewOwnerAlive(win) || isCurrent() !== true) throw Error("personal_memory_frame_changed");
+  };
+  validate();
+  const choice = await dialog.showMessageBox(win, {
+    type: "question", title: "Aerynth memory search", message: "Ask OpenAI to interpret this memory search?",
+    detail: `Only the request below will be sent to the OpenAI API using ${search.model}. Saved memories are not sent in this step. API charges may apply. Any memories found will need a separate exact-request review before sending.\n\n${search.request}`,
+    buttons: ["Cancel", "Interpret search"], defaultId: 0, cancelId: 0, noLink: true,
+  });
+  validate();
+  if (choice.response !== 1) return false;
+  if (await allowWrite() !== true) throw Error("storage_reserve_admission_denied");
+  validate();
+  return true;
 };

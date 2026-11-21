@@ -23,13 +23,16 @@ export interface ContextRequest {
   requestId: string; assistant: 'ordinary' | 'vela'; providerId: string; query: string;
   projectId: string | null; conversationId: string | null;
   sharedFactIds: string[]; includeBehavior: boolean; maxBytes: number; maxItems: number; maxScan?: number;
+  /** Exact source messages resolved by the trusted context owner. */
   sourceAnchors?: ConversationSourceRef[];
+  /** Bounded CIE search hints. These do not grant access or act as exact source anchors. */
+  evidenceQueries?: string[];
 }
 export interface ContextItem {
   factId: string; version: number; scope: PersonalScope; purpose: ReviewedFact['purpose']; category: Category;
   text: string; certainty: Certainty; provenance: Provenance; reviewedAt: string;
 }
-export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'scan-limit' | 'byte-budget' | 'item-budget';
+export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'unmatched-evidence-query' | 'scan-limit' | 'byte-budget' | 'item-budget';
 export interface PersonalContextManifest {
   contract: typeof PERSONAL_CONTEXT_CONTRACT; id: string; createdAt: string;
   ownerId: string; hostPolicyVersion: string; policyVersion: number; requestDigest: string;
