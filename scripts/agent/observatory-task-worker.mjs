@@ -108,6 +108,7 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   });
   try {
     await run('init', '--quiet');
+    if (process.platform==='win32') await run('config','--local','core.longpaths','true');
     await observe('checkout_fetch',async () => {
       const available = gitCache && await git(gitCache,'cat-file','-t',attempt.revision).catch(() => null);
       const origin = available==='commit'?pathToFileURL(gitCache).href:cloneOrigin;
