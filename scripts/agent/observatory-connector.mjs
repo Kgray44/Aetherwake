@@ -270,6 +270,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   return {
     close,
+    processId:child.pid,
     async ready(requestSignal) {
       requestSignal?.throwIfAborted();
       return untilAborted(ready(),requestSignal);

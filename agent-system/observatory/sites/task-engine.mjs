@@ -578,6 +578,7 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
 }
 
 function claimPayload(task,lifecycle,attempt,separateNotes) {
+  const interrupted = lifecycle.attempts.find(item=>item.id===attempt.resume_interrupted_attempt_id);
   const feedback = [
     lifecycle.feedback && 'Owner feedback for this follow-up attempt\n' + lifecycle.feedback,
     attempt.changed_assumption && 'Owner retry diagnosis and changed assumption\n' + attempt.changed_assumption,
@@ -585,6 +586,8 @@ function claimPayload(task,lifecycle,attempt,separateNotes) {
   return {
     task: separateNotes || !feedback.length ? task : {...task, objective:[task.objective, ...feedback].join('\n\n')},
     attempt:exposeAttempt(attempt), lease:attempt.lease,
+    ...(interrupted ? {interrupted_checkout:{attempt_id:interrupted.id,
+      recovery_commitment:interrupted.recovery_commitment,branch:interrupted.branch}} : {}),
     ...(separateNotes && feedback.length ? { execution_notes:feedback } : {}),
   };
 }
@@ -816,6 +819,11 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       if (checkpoint.state==='paused'&&checkpoint.checkpoint_revision) attempt.revision = checkpoint.checkpoint_revision;
       else attempt.resume_requires_clean=true;
       if (checkpoint.state === 'checkpointed') attempt.branch = checkpoint.branch;
+      if (checkpoint===lifecycle.attempts.at(-1) && checkpoint.state==='orphaned' &&
+          checkpoint.recovery_commitment && checkpoint.branch) {
+        attempt.revision=checkpoint.revision;
+        attempt.resume_interrupted_attempt_id=checkpoint.id;
+      }
     }
     delete lifecycle.resume_attempt_id;
     delete lifecycle.recovered_candidate;

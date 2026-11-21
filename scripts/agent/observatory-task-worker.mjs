@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { taskExecutionCapacity } from '../../agent-system/observatory/task-execution-capacity.mjs';
 import { taskDigest, writeSnapshot } from './context.mjs';
-import { createClaimTelemetryHooks, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
+import { createClaimTelemetryHooks, processHasExited, readInterruptedClaim, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openLocalRepairConnector, openObservatoryConnector } from './observatory-connector.mjs';
 import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory-sync.mjs';
@@ -187,6 +187,19 @@ export async function prepareRecoveredCandidate(workspace, marker) {
   return releaseWorkspaceLock(lock);
 }
 
+async function recoverInterruptedCheckout({directory,workspace,task,attempt,checkpoint,identity,confirmLease}) {
+  const marker=await readInterruptedClaim(directory,task.id,checkpoint.attempt_id);
+  if (!marker || marker.candidateRevision || !marker.turnId ||
+      marker.workspace!==workspace || marker.revision!==attempt.revision || identity.revision!==attempt.revision ||
+      marker.branch!==checkpoint.branch || identity.branch!==checkpoint.branch ||
+      marker.sessionId!==attempt.resume_session_id || !/^[a-f0-9]{64}$/.test(marker.recoveryKey ?? '') ||
+      createHash('sha256').update(marker.recoveryKey).digest('hex')!==checkpoint.recovery_commitment ||
+      marker.pid===marker.providerPid || !processHasExited(marker.pid) || !processHasExited(marker.providerPid) ||
+      !await existingPrivateDirectory(workspace) || !await existingPrivateDirectory(join(workspace,'.git'))) return false;
+  await confirmLease();
+  return releaseWorkspaceLock(workspaceLock(workspace,marker.attemptId));
+}
+
 function gitProvisioningIdentity(settings) {
   const { name, email } = settings ?? {};
   if (typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n\0]/.test(name) ||
@@ -198,7 +211,7 @@ function gitProvisioningIdentity(settings) {
 
 // Only worker-approved claims can reach this provisioner. The Task controls the
 // pinned revision; the worker owns the origin and every filesystem destination.
-export async function provisionTaskWorkspace({ root, task, attempt, author, signal,
+export async function provisionTaskWorkspace({ root, task, attempt, interruptedCheckout, author, signal,
   cloneOrigin = provisionOrigin, gitCache, observe = (_name, action) => action() }) {
   if (!taskIdPattern.test(task?.id ?? '') || task.repository !== 'Kgray44/Aetherwake' ||
       !provisionRevision.test(attempt?.revision ?? '')) throw Error('Invalid Task checkout identity');
@@ -218,7 +231,7 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
       }
       const identity = await checkoutIdentity(destination, attempt.revision);
       if (identity.branch !== branch || identity.revision !== attempt.revision ||
-          (identity.dirty && (!attempt.resume_session_id || attempt.resume_requires_clean))) {
+          (identity.dirty && (!attempt.resume_session_id || (attempt.resume_requires_clean && !interruptedCheckout)))) {
         throw Error('Existing Task checkout requires reconciliation');
       }
     } catch (error) {
@@ -668,6 +681,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       desired = state;
       controller.abort();
     }
+    return result;
   };
   const stop = (reason, kind) => {
     stopReason ??= reason;
@@ -775,7 +789,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       provisioning = true;
       provisioningStarted = performance.now();
       workspace = await measureStage('checkout_provisioning','context',
-        () => prepareWorkspace({ task, attempt, signal:workerSignal,
+        () => prepareWorkspace({ task, attempt, interruptedCheckout:claim.interrupted_checkout, signal:workerSignal,
           observe:(name,action) => measureStage(name,'context',action) }));
       provisioning = false;
     }
@@ -786,12 +800,30 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         stop('Git could not confirm the pinned checkout identity.','git');
         workerSignal.throwIfAborted();
       }
+      const checkpoint=claim.interrupted_checkout;
+      let recovered=false;
+      if (checkpoint && attempt.resume_session_id && telemetryDirectory) {
+        recovered=await recoverInterruptedCheckout({directory:telemetryDirectory,workspace,task,attempt,checkpoint,identity,
+          confirmLease:async()=>{
+            const result=await confirmControl();
+            workerSignal.throwIfAborted();
+            const current=result?.attempts?.find(item=>item.id===attempt.id);
+            if(result?.task?.id!==task.id || result.lifecycle?.state!=='running' || current?.state!=='running' ||
+                !Number.isFinite(current.lease_until) || current.lease_until<=Date.now() ||
+                leaseExhausted || timeUntilLeaseExpiry()<=0) {
+              stop('The Task Engine could not confirm the current lease before checkout recovery.','lease');
+              workerSignal.throwIfAborted();
+            }
+          }});
+      }
       try { lock = await takeWorkspaceLock(workspace, attempt.id); }
       catch (error) {
         if (error.code === 'EEXIST') stop('The checkout is still locked. Confirm the previous executor has stopped and reconcile its files before retrying.','checkout');
         throw error;
       }
-      if (identity.revision !== attempt.revision || ((!attempt.resume_session_id||attempt.resume_requires_clean)&&identity.dirty)) {
+      if (recovered) identity=await identify(workspace,attempt.revision);
+      if (identity.revision !== attempt.revision || (recovered && identity.branch!==checkpoint.branch) ||
+          ((!attempt.resume_session_id || (attempt.resume_requires_clean && !recovered)) && identity.dirty)) {
         stop('Workspace must match the attempt revision and cleanliness policy.','verification');
         workerSignal.throwIfAborted();
       }
@@ -808,6 +840,10 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     workerSignal.throwIfAborted();
     outcome = await execute({ executable, cwd: workspace, task, attempt, objectiveSource,
       executionNotes:claim.execution_notes,
+      onProviderProcess:async providerPid=>{
+        if (!Number.isSafeInteger(providerPid)||providerPid<=0) throw Error('App Server process identity could not be retained');
+        await retainedClaim?.update({providerPid});
+      },
       onSession: async (value,observedIdentity) => {
         if (attempt.resume_session_id&&value!==attempt.resume_session_id) {
           controller.abort();
@@ -1203,7 +1239,10 @@ async function main(configPath) {
                     // The persistent conversation belongs to this attempt process.
                     // Release its Desktop session when the turn exits.
                     const executor=openObservatoryConnector({cwd:options.cwd,executable:config.codex_bin});
-                    try { return await executeAppServer(executor,options); }
+                    try {
+                      await options.onProviderProcess(executor.processId);
+                      return await executeAppServer(executor,options);
+                    }
                     finally { executor.close(); }
                   },providerStream:'codex_app_server',
               } : {}),
