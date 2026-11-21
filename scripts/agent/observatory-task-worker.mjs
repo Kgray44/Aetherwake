@@ -255,6 +255,23 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let terminalConfirmed = false;
   let leaseUntil = attempt.lease_until ?? attempt.deadline;
   const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
+  const leaseExpired = () => Object.assign(Error('The Task lease expired before the worker could confirm its report.'), {code:'report_lease_expired'});
+  // A control reconnect can outlast the lease even though execution has time left.
+  const sendBeforeLeaseExpiry = async request => {
+    const remaining = timeUntilLeaseExpiry();
+    if (remaining <= 0) throw leaseExpired();
+    const reportController = new AbortController();
+    let timer;
+    const expired = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = leaseExpired();
+        reportController.abort(error);
+        reject(error);
+      }, remaining);
+    });
+    try { return await Promise.race([send(request, {signal:reportController.signal}), expired]); }
+    finally { clearTimeout(timer); }
+  };
   let reports = Promise.resolve();
   const report = async (type, fields = {}) => {
     let request;
@@ -265,7 +282,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           operation_id: randomUUID(), report: { type, ...fields,
             ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
             ...(identity ? { branch: identity.branch } : {}) } };
-        const result = await send(request);
+        const result = await sendBeforeLeaseExpiry(request);
         if (type!=='heartbeat') { terminalConfirmed=true; heartbeats.abort(); }
         return result;
       });
@@ -273,7 +290,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       try { return await pending; }
       catch (error) {
         const retryable = !error.status || error.status >= 500 || error.code === 'task_version_conflict';
-        if (!retryable || timeUntilLeaseExpiry() <= 1500) throw error;
+        if (!retryable || error.code==='report_lease_expired' || timeUntilLeaseExpiry() <= 1500) throw error;
         // Retry the same immutable operation without blocking a renewal during backoff.
         await sleep(750);
       }
@@ -550,10 +567,11 @@ async function main(configPath) {
     let connector;
     return {
       close: () => connector?.close(),
-      call(args, toolName) {
+      call(args, toolName, options) {
         const current = connector ??= openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
-        return current.call(args,toolName).catch(error => {
-          if (!error.status && connector === current) { current.close(); connector = undefined; }
+        return current.call(args,toolName,options).catch(error => {
+          // A single expired report must not close another Task's shared control transport.
+          if (!error.status && !options?.signal?.aborted && connector === current) { current.close(); connector = undefined; }
           throw error;
         });
       },
@@ -561,7 +579,7 @@ async function main(configPath) {
   }
   const control = connection();
   const delivery = connection();
-  const send = request => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
+  const send = (request, options) => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
   const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   let recoveryCursor = 0;
   let nextRecovery = 0;
