@@ -55,7 +55,7 @@ export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) 
     };
   }
   if (!activeExecution.has(state)) {
-    if (state==='verifying'&&attempt.candidate_origin==='recovered') {
+    if (state==='verifying'&&['recovered','worker_recovered'].includes(attempt.candidate_origin)) {
       const recovered=audits.findLast(receipt=>receipt.kind==='recover_candidate'&&receipt.attempt_id===attempt.id);
       return {title:'Recovered candidate ready for review',tone:'neutral',at:recovered?.at,
         description:'The original executor stopped. A preserved revision was checked and submitted separately.'};

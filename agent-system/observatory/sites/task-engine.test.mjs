@@ -4,6 +4,7 @@ import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -507,6 +508,66 @@ test('the owner can continue a partial candidate at the cycle limit without acce
   assert.equal((await claim(true)).body.claim,null);
   assert.equal((await report(old,{type:'heartbeat'})).status,409);
   assert.equal((await report(next,{type:'heartbeat',session_id:session,branch:'codex/other'})).status,400);
+});
+
+test('only the original worker recovery proof can return an expired candidate to verification', async t => {
+  const {call,register,command,get,advance}=setup(t);
+  const task=await register('Restart after candidate checkpoint');
+  await command(task,'admit',{executor:'codex'});
+  const recoveryKey='a'.repeat(64);
+  const recovery_commitment=createHash('sha256').update(recoveryKey).digest('hex');
+  const claim=(await call({op:'claim',operation_id:crypto.randomUUID(),recovery_commitment},'worker')).body.claim;
+  assert.equal(claim.attempt.recovery_commitment,undefined);
+  const session=crypto.randomUUID(), branch='codex/aads-task-fixture';
+  const heartbeat={op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,
+    operation_id:crypto.randomUUID(),lease:claim.lease,report:{type:'heartbeat',session_id:session,branch}};
+  assert.equal((await call(heartbeat,'worker')).status,200);
+  const body={op:'recover_worker_candidate',task_id:task.task.id,attempt_id:claim.attempt.id,
+    operation_id:crypto.randomUUID(),candidate_recovery:{key:recoveryKey,revision:'b'.repeat(40),session_id:session,branch}};
+  assert.equal((await call(body,'worker')).status,409);
+  advance(61_000);
+  const orphan=await get(task);
+  assert.equal(orphan.attempts.at(-1).state,'orphaned');
+  assert.equal(orphan.attempts.at(-1).recovery_commitment,undefined);
+  assert.equal((await call(body)).status,403);
+  assert.equal((await call({...body,candidate_recovery:{...body.candidate_recovery,key:'c'.repeat(64)}},'worker')).status,409);
+  assert.equal((await call({...body,candidate_recovery:{...body.candidate_recovery,branch:'codex/other'}},'worker')).status,409);
+  const results=await Promise.all([call(body,'worker'),call(body,'worker')]);
+  assert.ok(results.some(result=>result.status===200));
+  assert.equal((await call(body,'worker')).status,200);
+  const recovered=await get(task);
+  assert.equal(recovered.lifecycle.stored_state,'verifying');
+  assert.equal(recovered.task.owner_acceptance,'not_reviewed');
+  assert.equal(recovered.attempts.length,1);
+  assert.equal(recovered.attempts[0].candidate_revision,body.candidate_recovery.revision);
+  assert.equal(recovered.events.filter(event=>event.kind===body.op).length,1);
+  assert.equal((await call({...heartbeat,operation_id:crypto.randomUUID()},'worker')).status,409);
+});
+
+test('candidate recovery respects owner cancellation and a replacement attempt', async t => {
+  const {call,register,command,get,advance}=setup(t);
+  const recoveryKey='a'.repeat(64);
+  const recovery_commitment=createHash('sha256').update(recoveryKey).digest('hex');
+  for (const ownerAction of ['cancel','retry']) {
+    const task=await register('Recovery fence '+ownerAction);
+    await command(task,'admit',{executor:'codex'});
+    const next=()=>call({op:'claim',operation_id:crypto.randomUUID(),recovery_commitment,task_ids:[task.task.id]},'worker');
+    const claim=(await next()).body.claim;
+    const session=crypto.randomUUID(),branch='codex/aads-task-fixture';
+    await call({op:'report',task_id:task.task.id,attempt_id:claim.attempt.id,operation_id:crypto.randomUUID(),
+      lease:claim.lease,report:{type:'heartbeat',session_id:session,branch}},'worker');
+    if (ownerAction==='cancel') assert.equal((await command(await get(task),'cancel')).status,200);
+    advance(61_000);
+    const orphan=await get(task);
+    if (ownerAction==='retry') {
+      assert.equal((await command(orphan,'retry',{changed_assumption:'Use the owner-approved replacement execution'})).status,200);
+      assert.notEqual((await call({op:'claim',operation_id:crypto.randomUUID(),conversation_continuation:true,
+        task_ids:[task.task.id]},'worker')).body.claim.attempt.id,claim.attempt.id);
+    }
+    const recovered=await call({op:'recover_worker_candidate',task_id:task.task.id,attempt_id:claim.attempt.id,
+      operation_id:crypto.randomUUID(),candidate_recovery:{key:recoveryKey,revision:'b'.repeat(40),session_id:session,branch}},'worker');
+    assert.equal(recovered.status,409);
+  }
 });
 
 test('versioned Task scope reaches the Codex worker with its input references and outcomes', async t => {

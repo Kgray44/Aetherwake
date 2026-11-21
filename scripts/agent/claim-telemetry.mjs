@@ -1,7 +1,7 @@
 import { isAbsolute, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { hostname } from 'node:os';
-import { lstat, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendEvent, traceEvent } from './journal.mjs';
 import { startObservatorySync } from './observatory-sync.mjs';
@@ -10,18 +10,23 @@ import { validateRecord, validateTraceEvent } from './validate-record.mjs';
 
 const identity = /^[A-Za-z0-9_.:-]{1,160}$/;
 const revision = /^[a-f0-9]{40}$/;
+const recoveryKeyPattern = /^[a-f0-9]{64}$/;
+const recoveryOperationPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const claimMarker = /^active-(attempt_[a-f0-9-]{36})\.json$/;
 const terminalStates = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
 const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event',
   'codex_app_server_token_usage_updated', 'codex_app_server_turn_profile']);
 
 // The marker carries exact local recovery identities without a lease or source contents.
-export async function retainActiveClaim(directory, { task, attempt }) {
+export async function retainActiveClaim(directory, { task, attempt, recoveryKey }) {
   if (!claimMarker.test('active-'+attempt.id+'.json')) throw Error('Invalid active claim identity');
   await mkdir(directory,{recursive:true,mode:0o700});
-  if (!(await lstat(directory)).isDirectory()) throw Error('Claim telemetry directory must be local');
+  if (!(await lstat(directory)).isDirectory() || await realpath(directory)!==directory) {
+    throw Error('Claim telemetry directory must be local');
+  }
   const path=join(directory,'active-'+attempt.id+'.json');
-  let marker={taskId:task.id,attemptId:attempt.id,revision:attempt.revision,pid:process.pid,host:hostname()};
+  let marker={taskId:task.id,attemptId:attempt.id,revision:attempt.revision,pid:process.pid,host:hostname(),
+    ...(recoveryKeyPattern.test(recoveryKey ?? '')?{recoveryKey}: {})};
   async function write(destination, value) {
     const file=await open(destination,'wx',0o600);
     try {
@@ -31,9 +36,9 @@ export async function retainActiveClaim(directory, { task, attempt }) {
   }
   await write(path,marker);
   return {
-    async update({workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,settled}){
+    async update({workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,recoveryOperationId,settled}){
       const details=Object.fromEntries(Object.entries({
-        workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,settled,
+        workspace,branch,sessionId,turnId,candidateRevision,terminalOperationId,recoveryOperationId,settled,
       }).filter(([,value])=>value!==undefined));
       const next={...marker,...details,updatedAt:new Date().toISOString()};
       const temporary=path+'.'+randomUUID()+'.tmp';
@@ -47,8 +52,8 @@ export async function retainActiveClaim(directory, { task, attempt }) {
   };
 }
 
-export async function reconcileAbandonedClaim({directory,taskId,readTask}) {
-  try { if (!(await lstat(directory)).isDirectory()) return; }
+export async function reconcileAbandonedClaim({directory,taskId,readTask,recoverCandidate}) {
+  try { if (!(await lstat(directory)).isDirectory() || await realpath(directory)!==directory) return; }
   catch(error) { if(error.code==='ENOENT')return; throw error; }
   const entries=await readdir(directory,{withFileTypes:true}).catch(error=>{
     if(error.code==='ENOENT')return [];
@@ -77,7 +82,15 @@ export async function reconcileAbandonedClaim({directory,taskId,readTask}) {
     }
     // Retain a verified local candidate until the canonical attempt records
     // that exact revision. This readback never turns a local result into acceptance.
-    if (revision.test(marker.candidateRevision ?? '') && marker.candidateRevision!==attempt.candidate_revision) continue;
+    if (revision.test(marker.candidateRevision ?? '') && marker.candidateRevision!==attempt.candidate_revision) {
+      if (!recoverCandidate || detail.lifecycle?.stored_state!=='failed' || detail.attempts.at(-1)?.id!==attempt.id ||
+          attempt.state!=='orphaned' || !recoveryKeyPattern.test(marker.recoveryKey ?? '') ||
+          !recoveryOperationPattern.test(marker.recoveryOperationId ?? '') ||
+          !recoveryOperationPattern.test(marker.terminalOperationId ?? '') || !identity.test(marker.turnId ?? '') ||
+          !Number.isFinite(attempt.recovery_until) || Date.now()>=attempt.recovery_until ||
+          marker.branch!==attempt.branch || marker.sessionId!==attempt.session_id ||
+          !await recoverCandidate(marker)) continue;
+    }
     await unlink(path).catch(error=>{if(error.code!=='ENOENT')throw error;});
   }
 }

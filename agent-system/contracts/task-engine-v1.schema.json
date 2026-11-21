@@ -94,6 +94,7 @@
           "type": "boolean"
         },
         "live_addenda": {"type": "boolean"},
+        "recovery_commitment": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "separate_execution_notes": {"type": "boolean"},
         "task_ids": {
           "type": "array",
@@ -107,6 +108,27 @@
         "op",
         "operation_id"
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {"const": "recover_worker_candidate"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "operation_id": {"$ref": "#/$defs/uuid"},
+        "attempt_id": {"type": "string", "pattern": "^attempt_[a-f0-9-]{36}$"},
+        "candidate_recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "revision": {"$ref": "#/$defs/rid"},
+            "session_id": {"$ref": "#/$defs/uuid"},
+            "branch": {"type": "string", "minLength": 1, "maxLength": 200}
+          },
+          "required": ["key", "revision", "session_id", "branch"]
+        }
+      },
+      "required": ["op", "task_id", "operation_id", "attempt_id", "candidate_recovery"]
     },
     {
       "type": "object",
@@ -858,6 +880,7 @@
         "failure": {
           "type": "string"
         },
+        "recovery_until": { "type": "integer", "minimum": 1 },
         "checkpoint_revision": {
           "$ref": "#/$defs/rid"
         }
