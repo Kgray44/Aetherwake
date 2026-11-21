@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
+import { createClaimTelemetryHooks, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
 import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory-sync.mjs';
@@ -23,17 +23,27 @@ function git(cwd, ...args) {
   }).then(({ stdout }) => stdout.trim());
 }
 
-export async function checkoutIdentity(path, base) {
-  const [root, origin, revision, branch, gitDir, dirty] = await Promise.all([
-    git(path, 'rev-parse', '--show-toplevel'), git(path, 'remote', 'get-url', 'origin'),
-    git(path, 'rev-parse', 'HEAD'), git(path, 'symbolic-ref', '--short', 'HEAD'),
-    git(path, 'rev-parse', '--absolute-git-dir'), git(path, 'status', '--porcelain', '--untracked-files=normal'),
+async function checkoutLocation(read, fastReadback) {
+  if (fastReadback) {
+    const lines = (await read('rev-parse', '--show-toplevel', 'HEAD', '--absolute-git-dir')).split(/\r?\n/);
+    if (lines.length===3 && isAbsolute(lines[0]) && /^[a-f0-9]{40}$/.test(lines[1]) && isAbsolute(lines[2])) {
+      return lines;
+    }
+  }
+  return Promise.all(['--show-toplevel','HEAD','--absolute-git-dir'].map(arg=>read('rev-parse',arg)));
+}
+
+export async function checkoutIdentity(path, base, { fastReadback = process.env.AADS_GIT_FAST_READBACK==='1', readGit = git } = {}) {
+  const read = (...args) => readGit(path,...args);
+  const [[root, revision, gitDir], origin, branch, dirty] = await Promise.all([
+    checkoutLocation(read,fastReadback), read('remote', 'get-url', 'origin'),
+    read('symbolic-ref', '--short', 'HEAD'), read('status', '--porcelain', '--untracked-files=normal'),
   ]);
   if (await realpath(root) !== path || !repoUrl.test(origin) || !branch.startsWith('codex/aads-task-') ||
       relative(path, await realpath(gitDir)) !== '.git') {
     throw Error('Executor requires a dedicated Aetherwake checkout and task branch');
   }
-  await git(path, 'merge-base', '--is-ancestor', base, revision);
+  await read('merge-base', '--is-ancestor', base, revision);
   return { branch, revision, dirty: Boolean(dirty) };
 }
 
@@ -98,6 +108,7 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   });
   try {
     await run('init', '--quiet');
+    if (process.platform==='win32') await run('config','--local','core.longpaths','true');
     await observe('checkout_fetch',async () => {
       const available = gitCache && await git(gitCache,'cat-file','-t',attempt.revision).catch(() => null);
       const origin = available==='commit'?pathToFileURL(gitCache).href:cloneOrigin;
@@ -255,6 +266,23 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let terminalConfirmed = false;
   let leaseUntil = attempt.lease_until ?? attempt.deadline;
   const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
+  const leaseExpired = () => Object.assign(Error('The Task lease expired before the worker could confirm its report.'), {code:'report_lease_expired'});
+  // A control reconnect can outlast the lease even though execution has time left.
+  const sendBeforeLeaseExpiry = async request => {
+    const remaining = timeUntilLeaseExpiry();
+    if (remaining <= 0) throw leaseExpired();
+    const reportController = new AbortController();
+    let timer;
+    const expired = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = leaseExpired();
+        reportController.abort(error);
+        reject(error);
+      }, remaining);
+    });
+    try { return await Promise.race([send(request, {signal:reportController.signal}), expired]); }
+    finally { clearTimeout(timer); }
+  };
   let reports = Promise.resolve();
   const report = async (type, fields = {}) => {
     let request;
@@ -265,7 +293,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           operation_id: randomUUID(), report: { type, ...fields,
             ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
             ...(identity ? { branch: identity.branch } : {}) } };
-        const result = await send(request);
+        const result = await sendBeforeLeaseExpiry(request);
         if (type!=='heartbeat') { terminalConfirmed=true; heartbeats.abort(); }
         return result;
       });
@@ -273,7 +301,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       try { return await pending; }
       catch (error) {
         const retryable = !error.status || error.status >= 500 || error.code === 'task_version_conflict';
-        if (!retryable || timeUntilLeaseExpiry() <= 1500) throw error;
+        if (!retryable || error.code==='report_lease_expired' || timeUntilLeaseExpiry() <= 1500) throw error;
         // Retry the same immutable operation without blocking a renewal during backoff.
         await sleep(750);
       }
@@ -298,6 +326,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let monitoring;
   let storageMonitoring;
   let lock;
+  let clearActiveClaim;
   let outcome;
   let executionEnd;
   let provisioning = false;
@@ -345,6 +374,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     })();
     if (telemetryDirectory && !onTelemetryStart && !onUsage && !onTelemetryEnd) {
       await guardStorage();
+      clearActiveClaim=await retainActiveClaim(telemetryDirectory,{task,attempt});
       ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart, onDevelopmentNote } =
         createClaimTelemetryHooks(telemetryDirectory, {managedConnection}, telemetryDirectory));
       telemetryStarted = liveStages = true;
@@ -476,6 +506,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     }
   } finally {
     heartbeats.abort();
+    if (terminalConfirmed) await clearActiveClaim?.().catch(()=>console.error('Task recovery marker cleanup is pending.'));
     if (!terminalConfirmed && stopReason) console.error('Task interruption:',stopReason);
     await Promise.all([monitoring,storageMonitoring]);
     try {
@@ -550,10 +581,11 @@ async function main(configPath) {
     let connector;
     return {
       close: () => connector?.close(),
-      call(args, toolName) {
+      call(args, toolName, options) {
         const current = connector ??= openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
-        return current.call(args,toolName).catch(error => {
-          if (!error.status && connector === current) { current.close(); connector = undefined; }
+        return current.call(args,toolName,options).catch(error => {
+          // A single expired report must not close another Task's shared control transport.
+          if (!error.status && !options?.signal?.aborted && connector === current) { current.close(); connector = undefined; }
           throw error;
         });
       },
@@ -561,7 +593,7 @@ async function main(configPath) {
   }
   const control = connection();
   const delivery = connection();
-  const send = request => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
+  const send = (request, options) => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
   const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   let recoveryCursor = 0;
   let nextRecovery = 0;
@@ -579,6 +611,8 @@ async function main(configPath) {
       const taskId=taskIds[recoveryCursor++%taskIds.length];
       const telemetryDirectory=await workerTelemetryDirectory(root,taskId,workspaces.get(taskId));
       try {
+        await reconcileAbandonedClaim({directory:telemetryDirectory,taskId,
+          readTask:id=>control.call({request:{op:'get',task_id:id},...(verification?{verification}:{})})});
         if (await recoverWorkerTelemetry({taskId,telemetryDirectory,verification,connector:managedConnection})) break;
       } catch {
         console.error('A saved Task telemetry delivery is still pending.');

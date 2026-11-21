@@ -18,11 +18,12 @@ export function ownerReviewByCriterion(task,canonical) {
   if (canonical?.task?.id!==task.id || canonical.task.owner_acceptance!=='accepted' ||
       !['completed','archived'].includes(lifecycle?.stored_state) || attempt?.state!=='succeeded' ||
       typeof revision!=='string'||!/^[a-f0-9]{40}$/.test(revision)) return new Map();
-  const at=(canonical.events??[]).findLast(receipt=>receipt.kind==='accept'&&
-    receipt.attempt_id===attempt.id&&receipt.revision===revision)?.at;
+  const review=(canonical.events??[]).findLast(receipt=>receipt.kind==='accept'&&
+    receipt.attempt_id===attempt.id&&receipt.revision===revision);
+  const at=review?.at;
   const criteria=new Set((task.acceptance?.criteria??[]).map(item=>item.id));
   return new Map((lifecycle.evidence??[]).filter(item=>criteria.has(item.criterion_id)&&item.revision===revision&&
-    typeof item.uri==='string'&&item.uri.length>0).map(item=>[item.criterion_id,{...item,at}]));
+    ((typeof item.uri==='string'&&item.uri.length>0) || (item.attested===true && review?.actor==='owner'))).map(item=>[item.criterion_id,{...item,at}]));
 }
 
 export function evidenceClaimStatus(record, attempts = []) {

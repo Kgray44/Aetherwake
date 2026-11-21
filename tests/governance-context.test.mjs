@@ -80,6 +80,24 @@ test("context source identities, hashes and authority are stable across repeated
  assert.equal(a.coverage.incompleteContext,false);
 });
 
+test("opt-in context assembly preserves the complete authority payload and fallback",()=>{
+ for(const options of [
+  {task:"Optimize AADS Task Codex execution and authorization telemetry",paths:["scripts/agent/observatory-task-worker.mjs"],requiredIds:["AW-TRUST-001","AW-ATW-164"],budgetTokens:1},
+  {paths:["src/codex/approvals.ts"]},
+  {task:"Codex approval handling",forceFull:true},
+  {task:"unrelated"},
+ ]) {
+  const baseline=context(options);
+  const optimized=context({...options,fastAssembly:true});
+  assert.deepEqual(optimized,baseline);
+  assert.equal(formatContext(optimized),formatContext(baseline));
+ }
+ for(const fastAssembly of [false,true]) {
+  assert.throws(()=>context({requiredIds:["AW-FAKE-999"],fastAssembly}),/Unknown or unindexed/);
+ }
+ assert.throws(()=>context({task:"Codex",fastAssembly:"auto"}),/fastAssembly must be/);
+});
+
 test("indexes all 17 published charters, stable normative IDs and verifiable ranges",()=>{
  assert.equal(index.documents.length,17);
  assert.equal(index.documents.filter(d=>d.available).length,17);

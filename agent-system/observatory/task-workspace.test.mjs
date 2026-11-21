@@ -383,7 +383,7 @@ test('canonical operation choices use stored state and the current attempt count
   assert.deepEqual(executionActions({ lifecycle: { state: 'blocked', stored_state: 'admitted', executor: 'codex' } }), ['pause', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'paused', stored_state: 'paused' }, attempts: [{}] }), ['resume', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { state: 'failed', stored_state: 'failed' }, attempts: [{}, {}, {}] }), ['archive']);
-  assert.deepEqual(executionActions({ lifecycle: { state: 'verifying', stored_state: 'verifying' } }), ['accept', 'reject', 'cancel']);
+  assert.deepEqual(executionActions({ lifecycle: { state: 'verifying', stored_state: 'verifying' } }), ['accept', 'cancel']);
   assert.deepEqual(executionActions({ lifecycle: { stored_state: 'proposed' } }, { publishedIntake: true }), ['admit']);
   assert.deepEqual(commandForTask({ task: { id: 'task_a' }, version: 4 }, { type: 'pause' }, 'operation'),
     { op: 'command', task_id: 'task_a', expected_version: 4, operation_id: 'operation', action: { type: 'pause' } });
@@ -528,17 +528,24 @@ test('live App Server usage is scoped, separately reported and superseded by the
     event_id:id,task_id:task.id,attempt_id:attempt.id,revision:attempt.revision,repository:task.repository,session_id:sessionId,
     occurred_at:'2026-01-01T00:00:'+second+'.000Z',kind:'measurement',phase:'implementation',trace_id:'trace',span_id:'span',
     measurements:[{name:'provider_total_tokens',source:'codex_app_server_token_usage_updated',method,
-      unit:'tokens',availability:'observed',value:total}],
+      unit:'tokens',availability:'observed',value:total},{name:'provider_input_tokens',source:'codex_app_server_token_usage_updated',method,
+      unit:'tokens',availability:'observed',value:total-10}],
   });
   const latest=event('latest','10',700);
-  const events=[latest,event('first','01',300),latest,event('unlinked','11',900,'fresh_thread_progress','different')];
+  const events=[latest,event('first','01',300),event('middle','05',450),latest,event('unlinked','11',900,'fresh_thread_progress','different')];
   const input={task,attempts:[attempt],events};
   const live=taskUsageAccounting(input);
   assert.equal(live.observed.totalTokens,null);
   assert.equal(live.coverage.attemptTotals,0);
   assert.deepEqual(live.progressRows.map(row=>[row.receiptId,row.observed.totalTokens]),[['latest',700]]);
+  assert.deepEqual(live.progressRows[0].pace,{inputPerMinute:3000,elapsedMs:5000,sustained:true});
   assert.deepEqual(buildTaskTimeline(input).filter(row=>row.id.startsWith('trace:')),[]);
   assert.match(JSON.stringify(taskReportDefinition(input).content),/In-progress Codex usage/);
+  const failed={...input,attempts:[{...attempt,state:'failed'}]};
+  const failedUsage=taskUsageAccounting(failed);
+  assert.equal(failedUsage.observed.totalTokens,null);
+  assert.equal(failedUsage.progressRows[0].observed.totalTokens,700);
+  assert.match(JSON.stringify(taskReportDefinition(failed).content),/Partial Codex usage/);
   const finished=taskUsageAccounting({...input,events:[...events,event('final','18',1000,'fresh_thread_total')]});
   assert.equal(finished.observed.totalTokens,1000);
   assert.equal(finished.progressRows.length,0);
