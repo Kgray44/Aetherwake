@@ -262,7 +262,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
           <thead><tr>{['Task and attempt','Response intervals','First input','Latest input','Latest cached input','Repeated commands','Tool output bytes'].map(title=>
             <th key={title} scope="col">{title}</th>)}</tr></thead>
           <tbody>{data.appServerProfiles.map(row=><tr key={row.receiptId}>
-            <th scope="row">{row.taskId} #{row.attemptNumber}</th>
+            <th scope="row">{row.taskId} #{row.attemptNumber} · turn {row.ordinal}</th>
             <td>{count(row.reconciled)} / {count(row.intervals)}</td><td>{count(row.first.tokens)}</td>
             <td>{count(row.latest.tokens)}</td><td>{count(row.latest.cached)}</td>
             <td>{count(row.repeated)}</td><td>{count(row.outputBytes)}</td>

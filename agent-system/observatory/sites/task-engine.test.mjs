@@ -212,6 +212,8 @@ test('the runner delivers an exact-attempt addendum at the persisted thread boun
   await execution;
   assert.deepEqual(usageReceipts.filter(metric=>metric.name==='provider_total_tokens' && metric.method==='fresh_thread_total')
     .map(metric=>metric.value),[210]);
+  assert.deepEqual(usageReceipts.filter(metric=>metric.name==='app_server_workspace_turn_ordinal')
+    .map(metric=>metric.value),[1,2]);
   assert.deepEqual(unexpectedRpc, []);
   assert.deepEqual(reservations, [reservations[0], reservations[0]]);
   assert.equal(turns.length, 2);

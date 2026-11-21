@@ -260,13 +260,17 @@ test('Analytics binds App Server profiles and failed lower bounds to the exact c
     {...obs('app_server_latest_response_input_tokens','tokens',60),
       source:'codex_app_server_turn_profile',method:'observed_turn_notifications'}
   ]),repository:repo,session_id:session};
+  const followup={...profile,event_id:'followup-profile',measurements:[...profile.measurements,{
+    ...obs('app_server_workspace_turn_ordinal','count',2),
+    source:'codex_app_server_turn_profile',method:'observed_turn_notifications',
+  }]};
   const data=buildEngineeringAnalytics({
     records:[{...task,repository:repo},{...attempt,repository:repo,attempt_number:1}],
     sessionBindings:[{task_id:task.id,attempt_bindings:[{id:attempt.id,revision:rev,session_id:session}]}],
-    events:[{...usage('first',40),occurred_at:at(2)},usage('latest',100),profile,
+    events:[{...usage('first',40),occurred_at:at(2)},usage('latest',100),profile,followup,
       {...profile,event_id:'wrong-session',session_id:'other'}],now,
   });
-  assert.equal(data.appServerProfiles.length,1);
+  assert.deepEqual(data.appServerProfiles.map(row=>row.ordinal),[1,2]);
   assert.equal(data.appServerProfiles[0].latest.tokens,60);
   assert.equal(data.attemptReceiptAccounting.totals.tokens.totalTokens,null);
   assert.equal(data.attemptReceiptAccounting.observed.tokens.totalTokens,100);

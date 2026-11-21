@@ -119,14 +119,19 @@ export function appServerTurnProfiles(attempts, events) {
     const metrics = (event.measurements??[]).filter(metric=>metric?.source===appServerProfileSource &&
       metric.method==='observed_turn_notifications' && typeof metric.name==='string' && metric.name.startsWith('app_server_'));
     if (!metrics.length) continue;
-    // A worker emits one profile per attempt. Withhold conflicting receipts.
-    if (profiles.has(attempt.id)) { profiles.set(attempt.id,null); continue; }
     const value = (name, unit) => {
       const fields = metrics.filter(metric=>metric.name==='app_server_'+name);
       const metric = fields.length===1?fields[0]:null;
       return metric?.availability==='observed' && metric.unit===unit &&
         Number.isSafeInteger(metric.value) && metric.value>=0 ? metric.value : null;
     };
+    const hasOrdinal = metrics.some(metric=>metric.name==='app_server_workspace_turn_ordinal');
+    const ordinal = hasOrdinal ? value('workspace_turn_ordinal','count') : 1;
+    if (ordinal!==1 && ordinal!==2) continue;
+    const key = attempt.id+':'+ordinal;
+    // An older receipt describes the primary turn. A collision within the
+    // same attempt and turn makes that profile ambiguous.
+    if (profiles.has(key)) { profiles.set(key,null); continue; }
     const input = position => {
       const tokens = value(position+'_response_input_tokens','tokens');
       const cached = value(position+'_response_cached_input_tokens','tokens');
@@ -138,7 +143,7 @@ export function appServerTurnProfiles(attempts, events) {
       output:value('interval_'+interval+'_response_output_tokens','tokens'),
       commands:value('interval_'+interval+'_command_count','count'),
     })).sort((a,b)=>a.interval-b.interval);
-    profiles.set(attempt.id,{taskId:attempt.task_id, attemptId:attempt.id, attemptNumber:attempt.attempt_number,
+    profiles.set(key,{taskId:attempt.task_id, attemptId:attempt.id, attemptNumber:attempt.attempt_number, ordinal,
       revision:attempt.revision, receiptId:event.event_id, completed:value('turn_completed','boolean')===1,
       notifications:value('usage_notification_count','count'), intervals:value('observed_interval_count','count'),
       reconciled:value('reconciled_response_count','count'), first:input('first'), latest:input('latest'), samples,

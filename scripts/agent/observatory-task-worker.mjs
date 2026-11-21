@@ -254,13 +254,17 @@ export async function executeAppServer(connector, {cwd,task,attempt,onSession,on
   let result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
     resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
     onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
-  async function publishProfile(turn) {
+  async function publishProfile(turn, ordinal) {
     if (onUsage && turn.profile?.length) {
-      try { await onUsage(turn.profile,{sessionId:turn.sessionId}); }
+      const turnOrdinal = {
+        name:'app_server_workspace_turn_ordinal',unit:'count',value:ordinal,availability:'observed',
+        source:'codex_app_server_turn_profile',method:'observed_turn_notifications',
+      };
+      try { await onUsage([...turn.profile,turnOrdinal],{sessionId:turn.sessionId}); }
       catch { console.error('App Server turn profile could not be recorded.'); }
     }
   }
-  await publishProfile(result);
+  await publishProfile(result,1);
   if (result.status==='completed' && attempt.live_addenda && !signal.aborted) {
     const checkpoint = await onAddendumCheckpoint();
     if (checkpoint?.addenda.length) {
@@ -280,7 +284,7 @@ export async function executeAppServer(connector, {cwd,task,attempt,onSession,on
         onTurnAccepted: checkpoint.delivered,
       });
       if (result.status === 'completed') await checkpoint.acknowledged();
-      await publishProfile(result);
+      await publishProfile(result,2);
     }
   }
   if (result.status==='completed') {
@@ -311,7 +315,8 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   // A control reconnect can outlast the lease even though execution has time left.
   const sendBeforeLeaseExpiry = async request => {
     const remaining = timeUntilLeaseExpiry();
-    if (reportDeadlineExpired || remaining <= 0) throw leaseExpired();
+    if (remaining <= 0) reportDeadlineExpired = true;
+    if (reportDeadlineExpired) throw leaseExpired();
     const reportController = new AbortController();
     let timer;
     const expired = new Promise((_, reject) => {

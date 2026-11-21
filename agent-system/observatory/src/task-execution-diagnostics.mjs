@@ -56,7 +56,7 @@ export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tok
   )) {
     const samples = profile.samples.map(row=>'#'+row.interval+' '+display(row.tokens)+' / '+display(row.cached)+
       ' / '+display(row.output)+' / '+display(row.commands));
-    findings.push({title:'Attempt '+profile.attemptNumber+' App Server turn profile', key:profile.receiptId,
+    findings.push({title:'Attempt '+profile.attemptNumber+' App Server turn profile · turn '+profile.ordinal, key:profile.receiptId,
       detail:'Reconciled '+display(profile.reconciled)+' of '+display(profile.intervals)+' observed usage intervals. '+
         'First and latest reconciled response input were '+display(profile.first.tokens)+' and '+display(profile.latest.tokens)+
         ' tokens, with '+display(profile.first.cached)+' and '+display(profile.latest.cached)+' cached. '+
