@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -16,7 +16,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, executeAppServer, provisionTaskWorkspace, runClaim, verifyRetainedCandidate } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, executeAppServer, prepareRecoveredCandidate, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 import { reconcileAbandonedClaim } from '../../../scripts/agent/claim-telemetry.mjs';
 import { hasLiveTaskWork, workerDispatchStatus } from '../src/task-engine-client.mjs';
 import { openObservatoryConnector } from '../../../scripts/agent/observatory-connector.mjs';
@@ -615,7 +615,17 @@ test('the real worker can be killed before its terminal report and reconcile thr
   const recovery={directory:telemetryDirectory,taskId:task.task.id,readTask:()=>get(task),recoverCandidate:async marker=>{
     assert.equal(marker.candidateRevision,missed.report.revision);
     assert.equal(marker.terminalOperationId,missed.operation_id);
-    assert.equal(await verifyRetainedCandidate(workspace,marker),true);
+    const lock=join(workspace,'.git','aads-task-worker.lock');
+    assert.equal(existsSync(lock),true);
+    assert.equal(await prepareRecoveredCandidate(workspace,marker),true);
+    assert.equal(existsSync(lock),false);
+    await mkdir(lock);
+    const otherOwner=join(lock,createHash('sha256').update(crypto.randomUUID()).digest('hex'));
+    await writeFile(otherOwner,'');
+    assert.equal(await prepareRecoveredCandidate(workspace,marker),false);
+    assert.equal(existsSync(otherOwner),true);
+    await unlink(otherOwner);
+    await rmdir(lock);
     recoveries++;
     const result=await call({op:'recover_worker_candidate',task_id:task.task.id,attempt_id:marker.attemptId,
       operation_id:marker.recoveryOperationId,candidate_recovery:{key:marker.recoveryKey,revision:marker.candidateRevision,
@@ -632,6 +642,12 @@ test('the real worker can be killed before its terminal report and reconcile thr
   assert.equal(await git('rev-parse','HEAD'),missed.report.revision);
   assert.equal(readFileSync(join(workspace,'result.txt'),'utf8'),'A complete checkpoint.');
   assert.equal((await call(missed,'worker')).status,409);
+  assert.equal((await command(saved,'continue_candidate',{attempt_id:claim.attempt.id,
+    revision:missed.report.revision,feedback:'Continue from the saved checkpoint.'})).status,200);
+  const {body:{claim:next}}=await call({op:'claim',operation_id:crypto.randomUUID(),conversation_continuation:true},'worker');
+  assert.equal(next.attempt.resume_session_id,session);
+  assert.equal(next.attempt.revision,missed.report.revision);
+  assert.equal(existsSync(join(workspace,'.git','aads-task-worker.lock')),false);
 });
 
 test('candidate recovery respects owner cancellation and a replacement attempt', async t => {

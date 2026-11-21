@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, open, readdir, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstat, mkdtemp, readdir, readFile, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, toNamespacedPath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -132,6 +132,57 @@ export async function verifyRetainedCandidate(workspace, marker) {
     const result=await checkoutIdentity(workspace,marker.revision,{readGit:(cwd,...args)=>git(cwd,'--no-lazy-fetch',...args)});
     return !result.dirty && result.branch===marker.branch && result.revision===marker.candidateRevision;
   } catch { return false; }
+}
+
+function workspaceLock(workspace, attemptId) {
+  const directory=toNamespacedPath(join(workspace,'.git','aads-task-worker.lock'));
+  const owner=createHash('sha256').update(attemptId).digest('hex');
+  return {directory,owner};
+}
+
+async function takeWorkspaceLock(workspace, attemptId) {
+  const lock=workspaceLock(workspace,attemptId);
+  const pending=await mkdtemp(lock.directory+'.pending-');
+  try {
+    await writeFile(join(pending,lock.owner),'',{flag:'wx'});
+    // Install the directory with its owner already present. Reconcilers can only
+    // remove an empty directory, even if a new worker has since taken the lock.
+    await rename(pending,lock.directory).catch(async error=>{
+      const existing=await lstat(lock.directory).catch(cause=>{
+        if (cause.code!=='ENOENT') throw cause;
+      });
+      throw existing ? Object.assign(Error('Task checkout is locked'),{code:'EEXIST'}) : error;
+    });
+    return lock;
+  } finally {
+    await unlink(join(pending,lock.owner)).catch(error=>{if(error.code!=='ENOENT')throw error;});
+    await rmdir(pending).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  }
+}
+
+async function releaseWorkspaceLock({directory,owner}) {
+  const info=await lstat(directory).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  if (!info) return true;
+  if (!info.isDirectory()) return false;
+  const resolved=await realpath(directory).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  if (!resolved) return true;
+  if (toNamespacedPath(resolved)!==directory) return false;
+  await unlink(join(directory,owner)).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  return rmdir(directory).then(()=>true,error=>{
+    if (error.code==='ENOENT') return true;
+    if (['ENOTEMPTY','EEXIST'].includes(error.code)) return false;
+    throw error;
+  });
+}
+
+export async function prepareRecoveredCandidate(workspace, marker) {
+  if (!await verifyRetainedCandidate(workspace,marker) || !await existingPrivateDirectory(join(workspace,'.git'))) return false;
+  const lock=workspaceLock(workspace,marker.attemptId);
+  const info=await lstat(lock.directory).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  // Older workers wrote an empty file without an owner. Recover the candidate
+  // from those attempts, leaving their lock for explicit reconciliation.
+  if (info?.isFile()) return true;
+  return releaseWorkspaceLock(lock);
 }
 
 function gitProvisioningIdentity(settings) {
@@ -633,7 +684,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         stop('Git could not confirm the pinned checkout identity.','git');
         workerSignal.throwIfAborted();
       }
-      try { lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx'); }
+      try { lock = await takeWorkspaceLock(workspace, attempt.id); }
       catch (error) {
         if (error.code === 'EEXIST') stop('The checkout is still locked. Confirm the previous executor has stopped and reconcile its files before retrying.','checkout');
         throw error;
@@ -794,8 +845,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     await Promise.all([monitoring,storageMonitoring]);
     try {
       if (lock) await measureStage('checkout_lock_release','other',async () => {
-        await lock.close();
-        await unlink(join(workspace, '.git', 'aads-task-worker.lock'));
+        await releaseWorkspaceLock(lock);
       });
       if (retainedClaim) {
         try {
@@ -933,7 +983,7 @@ async function main(configPath) {
         await reconcileAbandonedClaim({directory:telemetryDirectory,taskId,
           readTask:id=>recovery.call({request:{op:'get',task_id:id},...(verification?{verification}:{})}),
           recoverCandidate:async marker=>{
-            if (!await verifyRetainedCandidate(workspaces.get(taskId)??join(root,taskId),marker)) return false;
+            if (!await prepareRecoveredCandidate(workspaces.get(taskId)??join(root,taskId),marker)) return false;
             const request={op:'recover_worker_candidate',task_id:taskId,attempt_id:marker.attemptId,
               operation_id:marker.recoveryOperationId,candidate_recovery:{key:marker.recoveryKey,
                 revision:marker.candidateRevision,session_id:marker.sessionId,branch:marker.branch}};
