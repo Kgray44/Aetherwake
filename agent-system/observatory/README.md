@@ -134,6 +134,24 @@ Use the same workspaces and Codex session storage when restarting a paused execu
 
 Fresh App Server executors publish up to one cumulative usage snapshot every 15 seconds, capped at 16 snapshots per turn. The Task view and PDF show the latest snapshot until a final receipt is available. Task totals use final receipts. The worker leaves resumed-thread attribution unavailable because the provider counter includes earlier turns.
 
+### Link Codex Desktop work to the Task
+
+On the signed-in Codex host, run the observer for one Task and its persisted conversation. Use `--thread-id` when the Task already links more than one conversation. Omit `--watch` for a single sync. Stop polling with Ctrl+C.
+
+```text
+node scripts/agent/observatory-desktop-sync.mjs --task-id task_<id> --watch
+```
+
+The observer uses documented App Server `thread/turns/list` and `thread/items/list` history reads. It does not resume the thread. Completed, timestamped turns outside all matching managed attempt windows appear in Linked Codex history with message, tool and file-change item counts. Counts describe the visible item page. The observer reads up to three pages of recent turns per pass and marks truncated item pages. Prompt text, arguments, tool outputs, and file paths stay on the Codex host. The history response provides neither a per-turn provider receipt nor a Git commit attribution, so these observations add no token total or claimed Git outcome. When the origin of a turn is unavailable, the Workspace identifies it by its persisted Codex history.
+
+The observer keeps imported history separate from the worker's leases and owner review. For managed continuation, run the following command in the original Task checkout before using its existing owner Retry or Resume control.
+
+```text
+node scripts/agent/observatory-desktop-sync.mjs --task-id task_<id> --reconcile
+```
+
+Reconciliation reports the pinned revision, current head, changed path count and whether the checkout is clean on the Task branch. Preserve a newer revision by retaining its branch or recording a verified checkpoint first. The owner can then restore a clean checkout at the required revision and authorize a new managed attempt. Review previously produced Git evidence before deciding whether another execution is needed.
+
 After a restart or a temporary delivery failure, an idle worker revisits journals in its configured Task scope once a minute. It reuses the saved upload and then syncs newer journal entries. It skips unchanged checkpoints and uses the existing authenticated telemetry connection.
 
 The subprocess integration test executes real artifact-producing steps with an explicit test executor. It proves queueing and evidence transitions across separate checkouts. Verify the hosted MCP deployment, owner controls and signed-in Codex provider execution independently before production acceptance.

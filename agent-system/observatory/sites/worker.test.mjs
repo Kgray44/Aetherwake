@@ -8,6 +8,8 @@ import { createWorker } from './worker.mjs';
 import { cachedGitHub } from './github-cache.mjs';
 import { proposedTask } from '../intake.mjs';
 import { createTelemetryClient, readStagedSnapshot, retryTelemetry } from '../src/telemetry-client.mjs';
+import { codexTurnObservation } from '../codex-turn-observation.mjs';
+import { sha256 } from './task-telemetry.mjs';
 
 const schema = JSON.parse(readFileSync(new URL('../../contracts/v1.schema.json', import.meta.url)));
 const validateEvent = addFormats(new Ajv2020({ strict: false })).compile(JSON.parse(readFileSync(new URL('../../contracts/trace-v1.schema.json',import.meta.url))));
@@ -108,6 +110,49 @@ function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey, as
   };
   return { call, post, requests, hitLimit, writes, sql };
 }
+
+test('linked Codex history persists once without rewriting managed Task execution', async t => {
+  const { call,sql } = fixture(t);
+  const scope = await sha256(JSON.stringify(['observatory-telemetry-v1','owner-1','live']));
+  const headers = {...ownerHeader,origin,'content-type':'application/json','x-observatory-sync-scope':scope};
+  const post = (path,body,overrides={})=>call(path,{method:'POST',headers:{...headers,...overrides},body:JSON.stringify(body)});
+  const registered = await (await post('/api/task-engine/v1',{
+    op:'register',operation_id:crypto.randomUUID(),fields:input,
+  })).json();
+  const now = Math.floor(Date.now()/1000);
+  const timestamp = seconds=>new Date(seconds*1000).toISOString();
+  const task = {...registered.task,created_at:timestamp(now-900),state:'failed'};
+  const session_id = crypto.randomUUID();
+  const attempt = {id:'attempt_'+crypto.randomUUID(),session_id,state:'failed',started_at:timestamp(now-500),finished_at:timestamp(now-300)};
+  const version = registered.version+1;
+  const eventReceipt = {kind:'failed',operation_id:crypto.randomUUID(),version,state:'failed',at:attempt.finished_at};
+  sql.prepare('UPDATE proposals SET record=?,engine=?,version=? WHERE task_id=?')
+    .run(JSON.stringify(task),JSON.stringify({state:'failed',attempts:[attempt],event:eventReceipt}),version,task.id);
+  const turn = {id:crypto.randomUUID(),startedAt:now-200,completedAt:now-100,status:'completed'};
+  const eventId = 'codex-turn:'+session_id+':'+turn.id;
+  const event = codexTurnObservation(task,[attempt],session_id,turn,[
+    {item:{type:'userMessage',text:'private message'}},{item:{type:'commandExecution',command:'private command'}},
+  ],false,await sha256(eventId));
+  const request = {base:null,generated_at:timestamp(now),records:[task],events:[event]};
+  const path = '/api/task-telemetry/'+task.id;
+  const first = await post(path,request);
+  assert.equal(first.status,200,await first.clone().text());
+  const receipt = await first.json();
+  assert.deepEqual(await (await post(path,request)).json(),receipt);
+  const baseline = await (await call(path,{headers})).json();
+  assert.equal(baseline.baseline.projection.events.length,1);
+  assert.doesNotMatch(JSON.stringify(baseline),/private message|private command/);
+  const forged = {...event,attempt_id:attempt.id};
+  assert.ok((await post(path,{...request,events:[forged]})).status>=400);
+  const duringAttempt = {...event,occurred_at:timestamp(now-400),measurements:event.measurements.map(metric=>
+    metric.name.endsWith('_seconds')?{...metric,value:now-450}:metric)};
+  assert.equal((await post(path,{...request,events:[duringAttempt]})).status,409);
+  assert.ok((await post(path,request,{'oai-authenticated-user-id':'owner-2'})).status>=400);
+  const current = await (await post('/api/task-engine/v1',{op:'get',task_id:task.id})).json();
+  assert.equal(current.lifecycle.state,'failed');
+  assert.deepEqual(current.attempts,[attempt]);
+  assert.equal(current.version,version);
+});
 
 test('hosted API checks identity and same-origin JSON before touching upstream', async t => {
   const { call, post, requests } = fixture(t);

@@ -198,6 +198,16 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   return {
     close,
     runWorkspaceTurn,
+    async readThreadTurns(threadId, cursor = null) {
+      if (!identifier(threadId)) throw Error('Invalid Codex thread identity');
+      await initialized;
+      return rpc('thread/turns/list', {threadId,cursor,limit:20,sortDirection:'desc',itemsView:'notLoaded'});
+    },
+    async readThreadTurnItems(threadId, turnId) {
+      if (!identifier(threadId) || !identifier(turnId)) throw Error('Invalid Codex turn identity');
+      await initialized;
+      return rpc('thread/items/list', {threadId,turnId,limit:50,sortDirection:'asc'});
+    },
     async call(args, toolName = tool, {signal:requestSignal} = {}) {
       requestSignal?.throwIfAborted();
       const threadId = await (opening ??= openToolThread());

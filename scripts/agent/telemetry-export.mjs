@@ -19,6 +19,16 @@ function validateActivity(event,operations) {
   if(a!==undefined) throw Error('Engineering activity requires its own trace kind');
   return;
  }
+ if(a?.kind==='codex_turn') {
+  if(Object.keys(a).some(key=>!activityFields.includes(key))||a.source!=='codex'||!digest(a.operation_id)||
+     !['completed','failed','inconclusive'].includes(a.outcome)||a.artifact_digest!==undefined||
+     event.attempt_id!==undefined||event.state!==undefined||event.parent_span_id!==undefined||
+     !event.session_id||event.phase!=='other'||event.measurements.length!==6||
+     event.event_id!=='codex-turn:'+event.session_id+':'+event.span_id||event.trace_id!=='codex-history:'+event.session_id) {
+   throw Error('Invalid Codex turn observation');
+  }
+  return;
+ }
  if(!a||Object.keys(a).some(key=>!activityFields.includes(key))||
     !activityKinds.has(a.kind)||!activitySources.has(a.source)||!digest(a.operation_id)||
     !activityOutcomes.has(a.outcome)||(a.artifact_digest!==undefined&&!digest(a.artifact_digest))||

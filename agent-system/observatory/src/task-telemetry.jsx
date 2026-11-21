@@ -7,6 +7,7 @@ import { formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs'
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 import { taskDataCoverage } from './task-data-coverage.mjs';
+import { codexThreadHref } from './task-engine-client.mjs';
 
 const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const words = value => String(value ?? '').replaceAll('_', ' ');
@@ -39,6 +40,32 @@ function measurementRows(records, events) {
 
 function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
+}
+
+function CodexHistory({ task, attempts, events }) {
+  const sessions = [...new Set(attempts.map(attempt=>attempt.session_id).filter(Boolean))];
+  const turns = events.filter(event=>event.activity?.kind==='codex_turn' && !event.attempt_id &&
+    sessions.includes(event.session_id)).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at));
+  if (!sessions.length) return null;
+  return <section aria-label="Linked Codex history">
+    <h3>Linked Codex history</h3>
+    <ul>{sessions.map((session,index)=><li key={session}>
+      <a href={codexThreadHref({executor:'codex',session_id:session})}>Open Codex conversation {index+1}</a>
+    </li>)}</ul>
+    {turns.length ? <>
+      <p>{turns.length} synced turns outside managed execution. Latest completion{' '}
+        <time dateTime={turns[0].occurred_at}>{new Date(turns[0].occurred_at).toLocaleString()}</time>.</p>
+      <ul>{turns.slice(0,12).map(turn=>{
+        const metric = name => turn.measurements.find(item=>item.name==='codex_turn_'+name)?.value;
+        return <li key={turn.event_id}><time dateTime={turn.occurred_at}>{new Date(turn.occurred_at).toLocaleString()}</time>
+          {' · '}{words(turn.activity.outcome)}{' · '}{metric('user_messages')} user messages
+          {' · '}{metric('tool_items')} tool items{' · '}{metric('file_change_items')} file-change items
+          {metric('item_page_partial')===1 ? ' · Partial item history' : ''}</li>;
+      })}</ul>
+    </> : <p>No independent turns have been synced from the linked conversation.</p>}
+    <p>Run this from the signed-in Codex host to sync history. Stop the watcher with Ctrl+C. For managed continuation, check the pinned checkout before using the Task’s execution controls.</p>
+    {/^[A-Za-z0-9_.:-]+$/.test(task.id) && <code>node scripts/agent/observatory-desktop-sync.mjs --task-id {task.id} --watch</code>}
+  </section>;
 }
 
 export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records, telemetrySource, pricing }) {
@@ -76,6 +103,7 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
     resourceGroups.set(key,group);
   }
   return <section className="task-telemetry" aria-label="Task telemetry">
+    <CodexHistory task={task} attempts={canonical?.attempts ?? attempts} events={events}/>
     <dl className="github-facts task-telemetry-coverage">
       <div><dt>Observed trace time</dt><dd>{time(timeline.coveredMs)}</dd></div>
       <div><dt>Linked execution events</dt><dd>{events.length}</dd></div>

@@ -30,6 +30,9 @@ export function validateProjection(body, validateRecord, validateEvent, now = Da
   return sanitized;
 }
 export async function storeProjection(db, owner, namespace, projection) {
+  if (projection.events.some(event=>event.activity?.kind==='codex_turn')) {
+    throw Error('Codex turn observations require a canonical Task telemetry endpoint');
+  }
   const payload = JSON.stringify(projection);
   // Compare-and-set by source generation time. Identical retry is idempotent;
   // equal timestamps with different bodies fail, never silently overwrite.

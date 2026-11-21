@@ -47,7 +47,7 @@
       "additionalProperties": false,
       "required": ["kind", "source", "operation_id", "outcome"],
       "properties": {
-        "kind": { "enum": ["commit", "review", "test", "benchmark", "verification", "deployment", "deployment_validation", "executor_session"] },
+        "kind": { "enum": ["commit", "review", "test", "benchmark", "verification", "deployment", "deployment_validation", "executor_session", "codex_turn"] },
         "source": { "enum": ["github_actions", "codex", "sites", "verification_runner", "local_runner", "external"] },
         "operation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "outcome": { "enum": ["started", "completed", "succeeded", "failed", "cancelled", "inconclusive"] },

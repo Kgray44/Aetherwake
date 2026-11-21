@@ -1,5 +1,6 @@
 import { applyTelemetryDelta, eventKey, recordKey } from '../telemetry-delta.mjs';
 import { MAX_SYNC_BYTES, validateProjection } from './sync.mjs';
+import { codexHistoryMetrics, codexHistorySource, independentCodexTurn } from '../codex-turn-observation.mjs';
 
 const digestPattern = /^[a-f0-9]{64}$/;
 const bytes = new TextEncoder();
@@ -25,6 +26,39 @@ export async function telemetryBaseline(db, owner, namespace, id) {
 }
 
 const fail = (status, error) => ({ status, body: { error } });
+async function verifyCodexTurns(db, owner, namespace, id, events) {
+  const observed = events.filter(event=>event.activity?.kind==='codex_turn');
+  if (!observed.length) return true;
+  const row = await db.prepare('SELECT record, engine FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?')
+    .bind(owner,namespace,id).first();
+  if (!row?.engine) return false;
+  const task = JSON.parse(row.record);
+  const attempts = JSON.parse(row.engine).attempts ?? [];
+  for (const event of observed) {
+    if (event.attempt_id || event.kind!=='engineering_activity' || event.phase!=='other' ||
+        event.activity.source!=='codex' || !['completed','failed','inconclusive'].includes(event.activity.outcome) ||
+        event.development_note || event.state || event.parent_span_id || event.activity.artifact_digest ||
+        event.revision!==task.revision || event.repository!==task.repository ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(event.span_id) ||
+        event.trace_id!=='codex-history:'+event.session_id ||
+        event.event_id!=='codex-turn:'+event.session_id+':'+event.span_id ||
+        event.activity.operation_id!==await sha256(event.event_id)) return false;
+    const names = new Set();
+    for (const metric of event.measurements) {
+      const unit = metric.name.endsWith('_seconds')?'seconds':metric.name.endsWith('_partial')?'boolean':'count';
+      if (!codexHistoryMetrics.has(metric.name) || names.has(metric.name) || metric.source!==codexHistorySource ||
+          metric.availability!=='observed' || !Number.isSafeInteger(metric.value) || metric.value<0 ||
+          metric.unit!==unit || (unit==='boolean'&&metric.value>1) ||
+          (unit==='count'&&metric.value>50) || Object.keys(metric).length!==5) return false;
+      names.add(metric.name);
+    }
+    if (names.size!==codexHistoryMetrics.size) return false;
+    const started = event.measurements.find(metric=>metric.name==='codex_turn_started_unix_seconds').value*1000;
+    const completed = Date.parse(event.occurred_at);
+    if (completed>Date.now()+1000 || !independentCodexTurn(task,attempts,event.session_id,started,completed)) return false;
+  }
+  return true;
+}
 export async function ingestTaskTelemetry({ db, owner, namespace, id, body, validate, validateEvent }) {
   if (!body || typeof body !== 'object' || Object.keys(body).some(key => !['base', 'generated_at', 'records', 'events'].includes(key)) ||
       !(body.base === null || (typeof body.base === 'string' && digestPattern.test(body.base))) ||
@@ -39,6 +73,9 @@ export async function ingestTaskTelemetry({ db, owner, namespace, id, body, vali
       export_version: 1, authority: 'local-task-records', repository: 'Kgray44/Aetherwake',
       generated_at: body.generated_at, records: body.records, events: body.events,
     }, validate, validateEvent);
+    if (!(await verifyCodexTurns(db,owner,namespace,id,incoming.events))) {
+      return fail(409, 'Codex history overlaps managed work or is not linked to this Task');
+    }
     projection = validateProjection(applyTelemetryDelta(existing?.projection, incoming), validate, validateEvent);
     const tasks = projection.records.filter(record => record.record_type === 'task');
     if (tasks.length !== 1 || tasks[0].id !== id ||
