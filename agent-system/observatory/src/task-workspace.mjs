@@ -107,8 +107,9 @@ export function taskActivity(task,attempts,events,lifecycle,workerAccess) {
     return {label:'Waiting for Codex worker access',at:null};
   }
   if (lifecycle?.state==='ready') return {label:'Awaiting worker claim',at:null};
+  if (lifecycle?.state==='verifying') return {label:'Candidate submitted for review',at:null};
   const humanize = state => String(state).replaceAll('_', ' ');
-  if (lifecycle && (['running','pausing','cancelling','blocked','failed','verifying','completed'].includes(lifecycle.state) ||
+  if (lifecycle && (['running','pausing','cancelling','blocked','failed','completed'].includes(lifecycle.state) ||
       waitingStates.has(lifecycle.state) || inactiveStates.has(lifecycle.state))) {
     return { label: 'Engine ' + humanize(lifecycle.state), at: lifecycle.state === 'scheduled'
       && Number.isFinite(lifecycle.start_at) ? new Date(lifecycle.start_at).toISOString() : null };
