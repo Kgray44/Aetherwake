@@ -157,9 +157,12 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   return {
     close,
     runWorkspaceTurn,
-    async call(args, toolName = tool) {
+    async call(args, toolName = tool, {signal:requestSignal} = {}) {
+      requestSignal?.throwIfAborted();
       const threadId = await (opening ??= openToolThread());
+      requestSignal?.throwIfAborted();
       const result = await rpc('mcpServer/tool/call', { threadId, server, tool:toolName, arguments:args });
+      requestSignal?.throwIfAborted();
       let value;
       try { value = result.structuredContent ?? JSON.parse(result.content.find(item => item.type === 'text').text); }
       catch { throw Error('Observatory returned an unreadable response'); }
