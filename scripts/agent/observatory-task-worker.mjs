@@ -187,7 +187,7 @@ export async function prepareRecoveredCandidate(workspace, marker) {
   return releaseWorkspaceLock(lock);
 }
 
-async function recoverInterruptedCheckout({directory,workspace,task,attempt,checkpoint,identity}) {
+async function recoverInterruptedCheckout({directory,workspace,task,attempt,checkpoint,identity,confirmLease}) {
   const marker=await readInterruptedClaim(directory,task.id,checkpoint.attempt_id);
   if (!marker || marker.candidateRevision || !marker.turnId ||
       marker.workspace!==workspace || marker.revision!==attempt.revision || identity.revision!==attempt.revision ||
@@ -196,6 +196,7 @@ async function recoverInterruptedCheckout({directory,workspace,task,attempt,chec
       createHash('sha256').update(marker.recoveryKey).digest('hex')!==checkpoint.recovery_commitment ||
       marker.pid===marker.providerPid || !processHasExited(marker.pid) || !processHasExited(marker.providerPid) ||
       !await existingPrivateDirectory(workspace) || !await existingPrivateDirectory(join(workspace,'.git'))) return false;
+  await confirmLease();
   return releaseWorkspaceLock(workspaceLock(workspace,marker.attemptId));
 }
 
@@ -680,6 +681,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       desired = state;
       controller.abort();
     }
+    return result;
   };
   const stop = (reason, kind) => {
     stopReason ??= reason;
@@ -801,9 +803,18 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       const checkpoint=claim.interrupted_checkout;
       let recovered=false;
       if (checkpoint && attempt.resume_session_id && telemetryDirectory) {
-        await confirmControl();
-        workerSignal.throwIfAborted();
-        recovered=await recoverInterruptedCheckout({directory:telemetryDirectory,workspace,task,attempt,checkpoint,identity});
+        recovered=await recoverInterruptedCheckout({directory:telemetryDirectory,workspace,task,attempt,checkpoint,identity,
+          confirmLease:async()=>{
+            const result=await confirmControl();
+            workerSignal.throwIfAborted();
+            const current=result?.attempts?.find(item=>item.id===attempt.id);
+            if(result?.task?.id!==task.id || result.lifecycle?.state!=='running' || current?.state!=='running' ||
+                !Number.isFinite(current.lease_until) || current.lease_until<=Date.now() ||
+                leaseExhausted || timeUntilLeaseExpiry()<=0) {
+              stop('The Task Engine could not confirm the current lease before checkout recovery.','lease');
+              workerSignal.throwIfAborted();
+            }
+          }});
       }
       try { lock = await takeWorkspaceLock(workspace, attempt.id); }
       catch (error) {

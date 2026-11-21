@@ -602,21 +602,25 @@ test('an owner retry resumes the exact dirty checkout after the recorded process
   assert.deepEqual(resumed.interrupted_checkout,{attempt_id:claim.attempt.id,recovery_commitment,branch});
   assert.equal((await get(task)).attempts.at(-1).recovery_commitment,undefined);
   let executions=0;
-  const denied=[];
   // Exercise the local preflight with an isolated report transport. The
   // canonical lease below remains usable once this fixture's provider exits.
-  const trial={...resumed,attempt:{...resumed.attempt,id:'attempt_'+crypto.randomUUID()}};
-  await runClaim({claim:trial,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
-    send:async ({report})=>{
-      denied.push(report);
-      return {lifecycle:{state:report.type==='failed'?'failed':'running'}};
-    },
-    execute:async ()=>{executions++;return {ok:false};}});
-  assert.equal(executions,0);
-  assert.equal(denied.at(-1).failure_kind,'checkout');
-  assert.ok(existsSync(join(lock,createHash('sha256').update(claim.attempt.id).digest('hex'))));
+  async function assertRefusesToUnlock(failureKind) {
+    const denied=[];
+    const trial={...resumed,attempt:{...resumed.attempt,id:'attempt_'+crypto.randomUUID()}};
+    await runClaim({claim:trial,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
+      send:async ({report})=>{
+        denied.push(report);
+        return {lifecycle:{state:report.type==='failed'?'failed':'running'}};
+      },
+      execute:async ()=>{executions++;return {ok:false};}});
+    assert.equal(executions,0);
+    assert.equal(denied.at(-1).failure_kind,failureKind);
+    assert.ok(existsSync(join(lock,createHash('sha256').update(claim.attempt.id).digest('hex'))));
+  }
+  await assertRefusesToUnlock('checkout');
   previousProvider.kill();
   await providerExited;
+  await assertRefusesToUnlock('lease');
   await runClaim({claim:resumed,workspace,telemetryDirectory,signal:AbortSignal.timeout(12000),admitStorage:async()=>{},
     send:async request=>(await call(request,'worker')).body,
     execute:async ({onSession})=>{
