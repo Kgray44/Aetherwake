@@ -1,5 +1,6 @@
 import {requirementKinds,TASK_OBJECTIVE_MAX} from '../intake.mjs';
 import {checkoutDiagnosticSchema} from '../checkout-diagnostic.mjs';
+import {executionFailureCategories} from '../execution-failure.mjs';
 
 const string = (maxLength,description) => ({type:'string',minLength:1,maxLength,...(description?{description}:{})});
 const strings = (count,length) => ({type:'array',maxItems:count,items:string(length)});
@@ -58,6 +59,7 @@ export const taskEngineToolSchema = object({
     attempt_id:string(160),lease:string(256),
     report:object({
       checkout_diagnostic:checkoutDiagnosticSchema,
+      failure_kind:{type:'string',enum:Object.keys(executionFailureCategories)},
       type:{type:'string',enum:['heartbeat','finished','failed','stopped','addenda_take','addenda_delivered','addenda_acknowledged']},
       turn_id:uuid,reservation_id:uuid,
       session_id:uuid,branch:string(200),revision,result:{type:'string',enum:['candidate']},failure:string(500),

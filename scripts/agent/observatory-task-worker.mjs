@@ -442,6 +442,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let identity;
   let desired;
   let stopReason;
+  let interruptionKind;
   let terminalConfirmed = false;
   const wallOrigin = Date.now();
   const monotonicOrigin = performance.now();
@@ -515,8 +516,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       controller.abort();
     }
   };
-  const stop = reason => {
+  const stop = (reason, kind) => {
     stopReason ??= reason;
+    interruptionKind ??= kind;
     controller.abort();
   };
   let monitoring;
@@ -568,7 +570,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           storage_guard_timeout: 'The worker storage guard timed out before execution.',
           storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
           storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
-        }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
+        }[error.code] ?? 'The worker storage check failed before execution.') + measurements,'storage');
         throw error;
       }
       workerSignal.throwIfAborted();
@@ -589,7 +591,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
                 ? 'The Task Engine did not answer lease renewal within the retry window.'
                 : error.code==='connector_disconnected'
                   ? 'The Task Engine connector disconnected during lease renewal.'
-                  : 'The worker could not confirm lease renewal with the Task Engine.');
+                  : 'The worker could not confirm lease renewal with the Task Engine.','lease');
           return;
         }
         try { await sleep(interval, undefined, {signal:heartbeats.signal}); }
@@ -613,7 +615,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         try { await sleep(240_000,undefined,{signal:checkSignal}); }
         catch { return; }
         try { await admitStorage(); }
-        catch { stop('The worker stopped because the storage check could not confirm a safe write.'); return; }
+        catch { stop('The worker stopped because the storage check could not confirm a safe write.','storage'); return; }
       }
     })();
     if (prepareWorkspace) {
@@ -626,14 +628,19 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     }
     workerSignal.throwIfAborted();
     await measureStage('checkout_validation','context',async () => {
-      identity = await identify(workspace, attempt.revision);
+      try { identity = await identify(workspace, attempt.revision); }
+      catch {
+        stop('Git could not confirm the pinned checkout identity.','git');
+        workerSignal.throwIfAborted();
+      }
       try { lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx'); }
       catch (error) {
-        if (error.code === 'EEXIST') stop('The checkout is still locked. Confirm the previous executor has stopped and reconcile its files before retrying.');
+        if (error.code === 'EEXIST') stop('The checkout is still locked. Confirm the previous executor has stopped and reconcile its files before retrying.','checkout');
         throw error;
       }
       if (identity.revision !== attempt.revision || ((!attempt.resume_session_id||attempt.resume_requires_clean)&&identity.dirty)) {
-        throw Error('Workspace must match the attempt revision and cleanliness policy');
+        stop('Workspace must match the attempt revision and cleanliness policy.','verification');
+        workerSignal.throwIfAborted();
       }
       await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
       await retainedClaim?.update({workspace,branch:identity.branch});
@@ -658,7 +665,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         await retainedClaim?.update({sessionId});
         try { await confirmControl(); }
         catch (error) {
-          stop('The Task Engine could not bind the Codex session to the active attempt.');
+          stop('The Task Engine could not bind the Codex session to the active attempt.','lease');
           throw error;
         }
       },
@@ -721,7 +728,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   try {
     if (!desired && outcome?.ok) {
       try { await confirmControl(); }
-      catch { stop('The worker could not confirm Task state before candidate submission.'); }
+      catch { stop('The worker could not confirm Task state before candidate submission.','lease'); }
     }
     if (desired && (outcome?.stopped || outcome?.ok || workerSignal.aborted)) {
       const checkpoint = desired === 'pausing' && identity ? await identify(workspace, attempt.revision).catch(() => null) : null;
@@ -729,6 +736,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
+      let failureKind='verification';
       try {
         result = await measureStage('candidate_git_verification','verification',async () => {
           let candidate = await identify(workspace, attempt.revision);
@@ -739,17 +747,19 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           }
           return candidate;
         });
-      } catch {
+      } catch (error) {
         result = undefined;
+        failureKind=error.code?.startsWith?.('storage_')?'storage':'git';
       }
       const lacksDeliverable=task.deliverables?.length>0&&result?.revision===attempt.revision;
       if (result && !result.dirty && result.branch === identity.branch && !lacksDeliverable) {
         await measureStage('candidate_submission','integration',() => terminal('finished', { result: 'candidate', revision: result.revision }));
         executionState = 'completed';
       } else {
-        await terminal('failed', { failure: lacksDeliverable
+        await terminal('failed', { failure_kind:failureKind, failure: lacksDeliverable
           ? 'The executor completed without creating a revision for the declared deliverables.'
-          : 'Candidate workspace did not yield a clean, pinned revision.' });
+          : failureKind==='storage' ? 'Storage admission failed before the worker could save the candidate.'
+            : 'Candidate workspace did not yield a clean, pinned revision.' });
       }
     } else {
       if (workerSignal.aborted) executionState = 'interrupted';
@@ -762,6 +772,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
             : ' Correct the reported operation before authorizing retry.')
         : outcome?.providerStatus==='disconnected' ? 'The Codex App Server disconnected before reporting a terminal turn.'
         : outcome?.providerStatus==='interrupted' ? 'Codex reported that the turn was interrupted.'
+        : outcome?.providerStatus==='failed' ? 'Codex reported a failed turn.'
         : 'Executor or workspace failed before producing a candidate.');
       const checkout = outcome?.checkout;
       const diagnostic = checkout && !workerSignal.aborted ? {
@@ -773,7 +784,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         ...(checkout.exitCode>=0 && checkout.exitCode<=255 ? {exit_code:checkout.exitCode} : {}),
         ...(checkout.tries ? {fetch_attempts:checkout.tries} : {}),
       } : null;
-      await terminal('failed', {failure, ...(diagnostic ? {checkout_diagnostic:diagnostic} : {})});
+      const failure_kind=interruptionKind ?? (signal.aborted?'worker':workerSignal.aborted?'time_limit':
+        checkout?'checkout':outcome?.providerStatus?'provider':'worker');
+      await terminal('failed', {failure,failure_kind,...(diagnostic ? {checkout_diagnostic:diagnostic} : {})});
     }
   } finally {
     heartbeats.abort();

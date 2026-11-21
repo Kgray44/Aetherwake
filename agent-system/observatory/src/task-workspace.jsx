@@ -203,7 +203,9 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         <code>codex resume --include-non-interactive {attempt.session_id}</code>
       </details>}
       {attempt.failure_diagnosis&&<div className="notice error">
-        <strong>{attempt.state==='orphaned'?'Execution interrupted':'Failure'}</strong><span>{attempt.failure_diagnosis}</span></div>}
+        <strong>{attempt.state==='orphaned'?'Execution interrupted':'Failure'}
+          {attempt.failure_kind?' · '+labels(attempt.failure_kind):''}</strong>
+        <span>{attempt.failure_diagnosis}</span></div>}
       {attempt.checkout_diagnostic&&<dl className="github-facts">
         <div><dt>Checkout ID</dt><dd><code>{attempt.task_id}</code></dd></div>
         <div><dt>Stage</dt><dd>{labels(attempt.checkout_diagnostic.stage)}</dd></div>

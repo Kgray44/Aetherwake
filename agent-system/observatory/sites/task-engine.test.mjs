@@ -589,6 +589,23 @@ test('versioned Task scope reaches the Codex worker with its input references an
   assert.ok(deliverables.every(item=>prompt.includes(item)));
 });
 
+test('failure reports retain a known category in the attempt and audit', async t => {
+  const {call,register,command,get}=setup(t);
+  const item=await register('Classified executor failure');
+  await command(item,'admit',{executor:'codex'});
+  const {claim}=(await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body;
+  const failure={type:'failed',failure:'The provider reported an interrupted turn.'};
+  const report=failure_kind=>call({op:'report',task_id:item.task.id,attempt_id:claim.attempt.id,
+    operation_id:crypto.randomUUID(),lease:claim.lease,report:{...failure,failure_kind}},'worker');
+  assert.equal((await report('arbitrary_remote_message')).status,400);
+  assert.equal((await report('provider')).status,200);
+  const result=await get(item);
+  const attempt=result.attempts.at(-1);
+  assert.equal(attempt.failure_kind,'provider');
+  assert.equal(result.events.at(-1).failure_kind,'provider');
+  assert.equal(taskAttemptRecord(result.task,attempt).failure_category,'environment');
+});
+
 test('owner time limits constrain the claim deadline and leave a specific receipt at expiry', async t => {
   const {call,register,command,get,advance}=setup(t);
   const task=await register('time limit');
@@ -850,6 +867,7 @@ test('a checkout failure exposes live and terminal telemetry before any Codex th
   assert.equal(checkoutStarted,true);
   const result=await get(task);
   assert.equal(result.lifecycle.state,'failed');
+  assert.equal(result.attempts[0].failure_kind,'checkout');
   assert.equal(result.attempts[0].session_id,undefined);
   assert.ok(projection?.events.some(event=>event.kind==='span_end'&&event.span_id.endsWith('-checkout_fetch')&&event.state==='failed'));
   assert.ok(!projection.events.some(event=>event.phase==='implementation'));
@@ -1197,6 +1215,7 @@ test('an observer reconciles lost workers and persists one fenced lease-expiry r
   for (const readback of [first, second]) {
     assert.equal(readback.lifecycle.state, 'failed');
     assert.equal(readback.attempts[0].state, 'orphaned');
+    assert.equal(readback.attempts[0].failure_kind, 'lease');
     const events = readback.events.filter(event => event.kind === 'lease_expired');
     assert.equal(events.length, 1);
     assert.equal(events[0].actor, 'scheduler');

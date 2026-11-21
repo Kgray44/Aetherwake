@@ -176,6 +176,9 @@
     }
   ],
   "$defs": {
+    "executionFailureKind": {
+      "enum": ["worker", "provider", "lease", "time_limit", "storage", "checkout", "git", "verification", "implementation"]
+    },
     "uuid": {
       "type": "string",
       "format": "uuid"
@@ -679,6 +682,7 @@
         "revision": {
           "$ref": "#/$defs/rid"
         },
+        "failure_kind": {"$ref": "#/$defs/executionFailureKind"},
         "checkout_diagnostic": {"$ref": "#/$defs/checkoutDiagnostic"},
         "failure": {
           "type": "string",
@@ -881,6 +885,7 @@
           "type": "string"
         },
         "recovery_until": { "type": "integer", "minimum": 1 },
+        "failure_kind": {"$ref": "#/$defs/executionFailureKind"},
         "checkpoint_revision": {
           "$ref": "#/$defs/rid"
         }
