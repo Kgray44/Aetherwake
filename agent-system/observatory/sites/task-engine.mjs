@@ -71,6 +71,14 @@ function prerequisiteStatus(task,lifecycle,rows) {
     const row=rows.get(id);
     const state=row?details(row).state:'missing';
     const acceptedArchive=state==='archived'&&record(row).owner_acceptance==='accepted';
+    if (task.prerequisites.merged_task_ids?.includes(id)) {
+      const accepted = state === 'completed' || acceptedArchive;
+      const candidate = accepted && details(row).attempts.at(-1);
+      const satisfied = Boolean(candidate?.candidate_revision &&
+        row.verified_main_candidates?.includes(candidate.id + ':' + candidate.candidate_revision));
+      return { type: 'task', id, milestone: 'merged', state: satisfied ? 'merged' : state,
+        status: satisfied ? 'satisfied' : row ? 'unsatisfied' : 'unverified' };
+    }
     const status=state==='completed'||acceptedArchive?'satisfied':row?'unsatisfied':'unverified';
     return {type:'task',id,state,status};
   });
@@ -145,8 +153,11 @@ function validateReferenceRevisions(requirements) {
 }
 
 function editTask(task, fields) {
+  const dependencies = Array.isArray(fields.dependencies) ? fields.dependencies : task.prerequisites.task_ids;
   const input = validateNewTask({
-    dependencies: task.prerequisites.task_ids, capabilities: task.prerequisites.capabilities, ...fields,
+    dependencies: task.prerequisites.task_ids,
+    merged_dependencies: (task.prerequisites.merged_task_ids ?? []).filter(id => dependencies.includes(id)),
+    capabilities: task.prerequisites.capabilities, ...fields,
   });
   validateReferenceRevisions(input.requirements);
   const previous = [...task.acceptance.criteria];
@@ -159,7 +170,8 @@ function editTask(task, fields) {
     ...(input.requirements===undefined?{}:{requirements:input.requirements}),
     ...(input.deliverables===undefined?{}:{deliverables:input.deliverables}),
     classification: { ...task.classification, primary: input.primary },
-    prerequisites: { task_ids: unique(input.ids), capabilities: unique(input.capabilities) },
+    prerequisites: { task_ids: unique(input.ids), capabilities: unique(input.capabilities),
+      ...(input.mergedIds.length ? { merged_task_ids: input.mergedIds } : {}) },
     acceptance: { profile_id: input.profile, criteria },
   };
 }
@@ -302,7 +314,7 @@ function commandChange(task, lifecycle, { action, now, rows, access, nextVersion
     const last = lifecycle.attempts.at(-1);
     if (!reviewedEvidence(task, action.evidence, last.candidate_revision)) return failure(409, 'Reviewed evidence is required for every criterion at the attempt revision');
     last.state = 'succeeded';
-    return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed',
+    return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed', accepted_at: timestamp(now),
       evidence: action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision })) } };
   }
   if (type === 'continue_candidate' && current === 'verifying') {
@@ -519,6 +531,16 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
   const query = (sql, ...args) => db.prepare(sql).bind(...args);
   const result = await query('SELECT * FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC',
     owner, namespace).all();
+  if (result.results.some(row => record(row).prerequisites?.merged_task_ids?.length)) {
+    const verified = await query(`SELECT task_id, task_attempt_id, COALESCE(json_extract(record, '$.task.head_sha'), head_sha) AS head_sha FROM integration_runs
+      WHERE owner_id = ? AND namespace = ? AND task_id IS NOT NULL AND state IN ('merged', 'deployed')`, owner, namespace).all();
+    const revisions = new Map();
+    for (const { task_id, task_attempt_id, head_sha } of verified.results) {
+      if (!revisions.has(task_id)) revisions.set(task_id, []);
+      revisions.get(task_id).push(task_attempt_id + ':' + head_sha);
+    }
+    for (const row of result.results) row.verified_main_candidates = revisions.get(row.task_id);
+  }
   return Promise.all(result.results.map(async row => {
     if (!row.engine) return row;
     const lifecycle = details(row);

@@ -79,13 +79,14 @@ export function dependencyGraph(current,tasks,{lifecycle,summaries}={}) {
   const node=id=>{
     const task=index.get(id);
     const check=checks.get('task:'+id);
+    const requiresMerge=current.prerequisites?.merged_task_ids?.includes(id);
     const summary=summaries?.get(id);
     const stored=summary?.lifecycle.stored_state;
     const acceptedArchive=stored==='archived'&&summary.task?.owner_acceptance==='accepted';
-    const status=check?.status??(summaries
+    const status=check?.status??(requiresMerge?'unverified':summaries
       ? !summary?'unverified':stored==='completed'||acceptedArchive?'satisfied':'unsatisfied'
       : !task?'unverified':task.state==='accepted'?'satisfied':'unsatisfied');
-    return {id,task,status,...(check?{reason:check.state}:{})};
+    return {id,task,status,...(check?{reason:check.state}:{}),...(requiresMerge?{milestone:'merged'}:{})};
   };
   return {
     upstream:[...new Set(current.prerequisites?.task_ids??[])].map(node),

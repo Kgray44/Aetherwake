@@ -4,6 +4,8 @@ import { isTaskWorkerKey, taskOperation } from './task-engine.mjs';
 import { ingestTaskTelemetry, telemetryBaseline, sha256 } from './task-telemetry.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
 import { mcpOwnerCommands,taskEngineToolSchema } from './task-engine-tool-schema.mjs';
+import { integrationAccess, integrationOperation, integrationWorkerOps } from './integration-runs.mjs';
+import { githubIntegration } from './github-integration.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const tools=[
  {name:'task_engine_v1',description:'List, inspect, register and edit canonical engineering Tasks. The authenticated owner can amend admitted Tasks, append exact-attempt addenda, schedule, dispatch, pause, resume, retry and cancel. Executor claim and reporting require a worker credential.',
@@ -23,7 +25,7 @@ async function receipt(projection){
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
  return {generated_at:projection.generated_at,digest:'sha256:'+digest,records:projection.records.length,events:projection.events.length,authority:projection.authority,acceptance:'not-granted'};
 }
-export async function mcp(request,env,{validate,validateEvent,taskRevision}){
+export async function mcp(request,env,{validate,validateEvent,taskRevision,fetcher = fetch}){
  const reply=(body,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store','x-content-type-options':'nosniff'}});
  const owner=request.headers.get('oai-authenticated-user-id');
  if(!owner)return reply({error:'Authenticated caller required'},401);
@@ -62,7 +64,10 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
     }
     access = 'worker';
    }
-   const response = await taskOperation({ db: env.DB, owner, namespace, body: args.request, validate, access, revision: taskRevision });
+   const response = integrationWorkerOps.has(args.request?.op)
+     ? await integrationOperation({ db: env.DB, owner, namespace, body: args.request, worker: access === 'worker',
+       access: integrationAccess(env, owner, namespace), github: githubIntegration(fetcher, env.GITHUB_READ_TOKEN) })
+     : await taskOperation({ db: env.DB, owner, namespace, body: args.request, validate, access, revision: taskRevision });
    return result({status:response.status,...response.body},response.status>=400);
   }
   if(name==='sync_task_telemetry'){

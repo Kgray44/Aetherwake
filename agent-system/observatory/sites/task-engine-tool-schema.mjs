@@ -11,7 +11,7 @@ const taskId = string(128,'Exact Task ID returned by register or list.');
 const taskFields = object({
   title:string(160),objective:{type:'string',minLength:12,maxLength:TASK_OBJECTIVE_MAX},
   primary:{type:'string',enum:['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration']},
-  profile_id:string(100),criteria:strings(50,1000),dependencies:strings(100,128),
+  profile_id:string(100),criteria:strings(50,1000),dependencies:strings(100,128),merged_dependencies:strings(100,128),
   capabilities:strings(100,128),deliverables:strings(30,500),
   priority:{type:'string',enum:['low','normal','high','urgent']},
   requirements:{type:'array',maxItems:50,items:object({
@@ -23,7 +23,18 @@ export const mcpOwnerCommands = new Set(ownerCommands);
 
 export const taskEngineToolSchema = object({
   request:object({
-    op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse','recover_worker_candidate']},
+    op:{type:'string',enum:['list','get','register','command','claim','report','worker_pulse','recover_worker_candidate','integration_claim','integration_begin','integration_report',
+      'repair_tick','repair_claim','repair_begin','repair_status','repair_report']},
+    id:uuid,claim_id:uuid,repair_id:uuid,tree_sha:revision,shallow_base:revision,candidate_sha:revision,session_id:uuid,turn_id:uuid,
+    changed_paths:strings(12,240),
+    usage:object({input_tokens:{type:'integer',minimum:0},cached_input_tokens:{type:'integer',minimum:0},
+      output_tokens:{type:'integer',minimum:0},total_tokens:{type:'integer',minimum:0},
+      cache_write_input_tokens:{type:'integer',minimum:0},
+      complete:{type:'boolean'},source:{const:'codex_app_server_fresh_thread'}},
+    ['input_tokens','cached_input_tokens','output_tokens','total_tokens','complete','source']),
+    status:{type:'string',enum:['submitted','failed','unknown','candidate']},
+    execution_identity:object({model:string(100),provider:string(100),source:{const:'codex_app_server_thread_start'}},
+      ['model','provider','source']),
     worker_id:{type:'string',description:'Worker UUID for authenticated liveness observations.'},
     worker_state:{type:'string',enum:['available','busy','claim_rejected','task_connection_unavailable','storage_guard_timeout','storage_reserve_denied','storage_guard_unavailable']},
     operation_id:{...uuid,description:'Required for register, command, claim and report. Generate a UUID v4 once per write and reuse it only to replay the same request.'},

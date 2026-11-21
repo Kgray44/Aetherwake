@@ -25,12 +25,14 @@ async function untilAborted(promise, signal) {
 }
 
 export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex',
-  spawnProcess = spawn } = {}) {
+  spawnProcess = spawn, localOnly = false } = {}) {
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
+  delete env.AADS_INTEGRATION_PUSH_TOKEN;
   const child = spawnProcess(executable, ['app-server','--listen','stdio://',
     '-c','sandbox_workspace_write.network_access=false','-c','sandbox_workspace_write.writable_roots=[]',
     '-c','sandbox_workspace_write.exclude_tmpdir_env_var=true','-c','sandbox_workspace_write.exclude_slash_tmp=true',
+    ...(localOnly ? ['--disable','apps','-c','web_search="disabled"','-c','mcp_servers={}'] : []),
   ], {
     cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
   });
@@ -114,7 +116,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
   async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession,
-    onDevelopmentNote,onTurnStarted,onTurnAccepted,onTurnFinished,onUsageSnapshot,
+    onDevelopmentNote,onTurnStarted,onTurnAccepted,onTurnFinished,onUsageSnapshot,onUsageBudget,
     captureFreshThreadUsage = !resumeSessionId}) {
     runSignal.throwIfAborted();
     await initialized;
@@ -125,6 +127,12 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     if (!identifier(id)||(resumeSessionId&&id!==resumeSessionId)||started.thread.ephemeral===true||started.sandbox?.type!=='workspaceWrite'||started.sandbox.networkAccess!==false||
         !started.sandbox.writableRoots?.every(root=>relative(workspace,root)==='')) {
       throw Error('App Server workspace policy was not confirmed');
+    }
+    if (localOnly) {
+      const inventory = await rpc('mcpServerStatus/list', { threadId:id, limit:1 }, timeoutMs);
+      if (!Array.isArray(inventory?.data) || inventory.data.length || inventory.nextCursor) {
+        throw Error('Local-only repair requires a confirmed empty MCP inventory');
+      }
     }
     const identity=identifier(started.model)&&identifier(started.modelProvider)
       ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
@@ -150,6 +158,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
           total.totalTokens<(usage?.totalTokens??0)) return;
       const changed=total.totalTokens!==usage?.totalTokens;
       usage=total;
+      if (changed) onUsageBudget?.(total);
       const now=performance.now();
       if (!onUsageSnapshot||!changed||usageWrite||samples>=16||now-lastSampleAt<15_000) return;
       lastSampleAt=now;
@@ -223,7 +232,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (status!=='completed'&&onUsageSnapshot&&usage&&JSON.stringify(usage)!==JSON.stringify(publishedUsage)) {
         await publishUsage(usage);
       }
-      return {status,usage,sessionId:id,profile:profile.measurements(status==='completed',limitedStart)};
+      return {status,usage,sessionId:id,turnId,profile:profile.measurements(status==='completed',limitedStart)};
     } finally {
       runSignal.removeEventListener('abort',abort);
       threadListeners.delete(id);

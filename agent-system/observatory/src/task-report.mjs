@@ -8,6 +8,7 @@ import { executionTiming,timingLegend } from './execution-timing.mjs';
 import { taskEngineeringActivity } from './task-activity.mjs';
 import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 import { taskDataCoverage } from './task-data-coverage.mjs';
+import { integrationMilestones, integrationWorkflowTiming, integrationRepairPricing } from './integration-analytics.mjs';
 import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 
 const words = value => value.replaceAll('_',' ');
@@ -84,11 +85,12 @@ function allocationBar(part, total) {
   ]}];
 }
 
-export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt, pricing, workerAccess}) {
+export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt, pricing, workerAccess, integrationRuns=[]}) {
   const taskRecords=records.filter(record=>record.task_id===task.id);
   const taskEvents=events.filter(event=>event.task_id===task.id);
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
   const taskAttempts=attempts.filter(attempt=>attempt.task_id===task.id);
+  const integrations=integrationRuns.filter(run=>run.task?.id===task.id);
   const notes=taskDevelopmentNotes(task.id,taskEvents,taskAttempts);
   const noteIds=new Set(notes.map(note=>note.event_id));
   const evidence=taskRecords.filter(record=>record.record_type==='evidence');
@@ -170,6 +172,35 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       ...(canonical ? blocks([{version:canonical.version,priority:canonical.priority,...canonical.lifecycle}],()=> 'Canonical lifecycle') : []),
       section('Acceptance criteria and owner review',criteria.length),
       ...blocks(criteria,item=>item.id+'  ·  '+item.status),
+      ...(integrations.length ? [section('Integration and merge evidence',integrations.length),
+        ...integrations.flatMap(run=>{
+          const milestones=integrationMilestones(run);
+          const estimate=integrationRepairPricing([run],pricing,Date.parse(generatedAt));
+          return [...blocks([run],()=>run.pr_number ? 'Pull request '+run.pr_number : 'Task candidate',()=>[
+            ['Integration state',words(run.state)], ['Accepted attempt',run.task.attempt_id],
+            ['Source SHA',run.head_sha], ['Target main SHA',run.evidence?.base_sha],
+            ['Verified merge SHA',run.evidence?.merged_sha], ['Acceptance time (UTC)',milestones.acceptedAt],
+            ['PR creation time (UTC)',milestones.prCreatedAt], ['Merge time (UTC)',milestones.mergedAt],
+            ['Acceptance to PR (ms)',milestones.acceptanceToPrMs], ['PR to merge (ms)',milestones.prToMergeMs],
+            ['CI rerun receipts',run.repair_attempts?.length ?? 0], ['Actual integration billing','Unavailable'],
+            ['OpenAI API reference estimate for repairs',estimate.total===null?'Unavailable':
+              formatReferenceCost(estimate.total)+' across '+estimate.attempts.length+' priced repairs'],
+          ]),
+          ...blocks(run.source_repairs ?? [],repair=>'Codex source repair '+repair.id,repair=>[
+            ['Status',words(repair.status)], ['Failed head SHA',repair.head_sha],
+            ['Candidate SHA',repair.candidate_sha], ['Candidate tree',repair.tree_sha],
+            ['Session',repair.session_id], ['Turn',repair.turn_id],
+            ['Usage coverage',repair.usage ? repair.usage.complete ? 'Complete turn receipt' : 'Observed lower bound' : 'Unavailable'],
+            ['Uncached input tokens',repair.usage ? repair.usage.input_tokens-repair.usage.cached_input_tokens : null],
+            ['Cached input tokens',repair.usage?.cached_input_tokens], ['Output tokens',repair.usage?.output_tokens],
+            ['Owner review (UTC)',repair.reviewed_at],
+          ]),
+          ...blocks(integrationWorkflowTiming(run),work=>'Workflow '+work.run_id+' · attempt '+work.attempt,work=>[
+            ['Revision',work.head_sha], ['Conclusion',work.conclusion], ['Queue (ms)',work.queueMs], ['Start to GitHub update (ms)',work.wallMs],
+            ['GitHub',work.url],
+          ])];
+        }),
+      ] : []),
       section('Task Timeline',timeline.length),
       {text:'Trace events are ordered by journal occurrence. '+journalReceiptSummary(timeline),style:'muted'},
       ...blocks(timeline,item=>item.at+'  ·  '+item.title,item=>[

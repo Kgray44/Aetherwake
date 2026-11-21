@@ -115,7 +115,7 @@ export function useTaskFilters() {
 export function PrerequisiteChecks({graph,Status}) {
   const nodes=[...graph.upstream.map(node=>({...node,type:'Task'})),...graph.capabilities.map(node=>({...node,type:'Capability'}))];
   return nodes.length>0&&<ul className="dependency-nodes" aria-label="Prerequisite checks">{nodes.map(node=>
-    <li key={node.type+':'+node.id}><span><small>{node.type}</small> {node.task?.title??node.id}</span><Status value={node.status}/></li>
+    <li key={node.type+':'+node.id}><span><small>{node.type}{node.milestone==='merged'?' · Requires merge into main':''}</small> {node.task?.title??node.id}</span><Status value={node.status}/></li>
   )}</ul>;
 }
 
@@ -123,7 +123,8 @@ export function TaskDependencies({task,tasks,lifecycle,summaries,Status}) {
   const graph=dependencyGraph(task,tasks,{lifecycle,summaries});
   const renderNodes = (nodes, empty, showStatus) => nodes.length ? <ul className="dependency-nodes">
     {nodes.map(node => <li key={node.id}>
-      {node.task ? <a href={taskHref(node.id)}>{node.task.title}</a> : <span className="mono">{node.id}</span>}
+      <span>{node.task ? <a href={taskHref(node.id)}>{node.task.title}</a> : <span className="mono">{node.id}</span>}
+        {showStatus&&node.milestone==='merged'&&<small> · Requires merge into main</small>}</span>
       <Status value={showStatus ? node.status : node.task?.state}/>
     </li>)}
   </ul> : <p className="low">{empty}</p>;

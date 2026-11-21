@@ -145,6 +145,12 @@
               },
               "uniqueItems": true
             },
+            "merged_task_ids": {
+              "description": "Subset of task_ids that require the current accepted candidate to be verified on main.",
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
             "capabilities": {
               "type": "array",
               "items": {
