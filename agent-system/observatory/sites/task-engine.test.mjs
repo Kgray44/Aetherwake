@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable, Writable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -13,7 +14,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { proposedTask } from '../intake.mjs';
 import { taskAttemptRecord, taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkerStorage, checkWorkspaceTelemetryScope, codexTaskPrompt, executeAppServer, provisionTaskWorkspace, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 import { hasLiveTaskWork, workerDispatchStatus } from '../src/task-engine-client.mjs';
 import { openObservatoryConnector } from '../../../scripts/agent/observatory-connector.mjs';
 import { readJournal } from '../../../scripts/agent/journal.mjs';
@@ -29,7 +30,7 @@ function setup(t, { countAuditWrites = false } = {}) {
   const sqlite = new DatabaseSync(':memory:');
   t.after(() => sqlite.close());
   for (const migration of ['0000_proposals', '0003_proposal_publication', '0004_cached_proposal_revision',
-    '0007_proposal_controls', '0011_task_engine', '0013_task_worker_liveness']) {
+    '0007_proposal_controls', '0011_task_engine', '0013_task_worker_liveness', '0014_task_worker_scope']) {
     sqlite.exec(readFileSync(new URL('./drizzle/' + migration + '.sql', import.meta.url), 'utf8'));
   }
   const db = { prepare(statement) {
@@ -94,6 +95,203 @@ test('storage guard permits slower verification and distinguishes timeout, reser
     [{ code:'ENOENT' },'storage_guard_unavailable']]) {
     await assert.rejects(checkWorkerStorage(command, '.', async () => { throw cause; }), { code });
   }
+});
+
+test('owner amendments preserve the claimed spec and become effective on retry', async t => {
+  const { register, command, call, get } = setup(t);
+  const task = await register('amendment');
+  const admitted = (await command(task, 'admit', { executor: 'codex' })).body;
+  const edit = { fields: { ...fields('edited before claim'), priority: 'high' } };
+  assert.equal((await command(admitted, 'edit', edit, 'agent')).status, 403);
+  const edited = await command(admitted, 'edit', edit);
+  assert.equal(edited.status, 200);
+  assert.equal((await command(admitted, 'edit', edit)).status, 409);
+  const claim = async () => (await call({ op: 'claim', operation_id: crypto.randomUUID() }, 'worker')).body.claim;
+  const first = await claim();
+  assert.equal(first.task.title, edit.fields.title);
+  assert.equal(first.attempt.spec_version, edited.body.version);
+  const revised = await command(await get(task), 'edit', {
+    fields: { ...edit.fields, criteria: ['Revised review criterion'] },
+  });
+  assert.equal(revised.status, 200);
+  assert.equal(revised.body.task.acceptance.criteria[0].description, 'Artifact is readable');
+  assert.equal(revised.body.lifecycle.pending_spec.fields.acceptance.criteria[0].description, 'Revised review criterion');
+  const failed = await call({ op: 'report', operation_id: crypto.randomUUID(), task_id: task.task.id,
+    attempt_id: first.attempt.id, lease: first.lease, report: { type: 'failed', failure: 'Fixture failure' },
+  }, 'worker');
+  assert.equal(failed.status, 200);
+  assert.equal((await command(failed.body, 'retry', { changed_assumption: 'Use the revised criterion' })).status, 200);
+  const second = await claim();
+  assert.equal(second.task.acceptance.criteria[0].description, 'Revised review criterion');
+  assert.equal(second.attempt.spec_version, revised.body.version);
+  assert.equal(second.attempt.revision, first.attempt.revision);
+});
+
+test('the runner delivers an exact-attempt addendum at the persisted thread boundary after a lost receipt', async t => {
+  const { register, command, call, get } = setup(t);
+  const task = await register('Live amendment');
+  const dependent = await register('Dependent', [task.task.id]);
+  await command(task, 'admit', { executor: 'codex' });
+  await command(dependent, 'admit', { executor: 'codex' });
+  const claimRequest = () => call({ op: 'claim', operation_id: crypto.randomUUID(), live_addenda: true }, 'worker');
+  const { claim } = (await claimRequest()).body;
+  assert.equal((await claimRequest()).body.claim, null);
+  const workspace = await mkdtemp(join(tmpdir(), 'aads-addendum-'));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  await mkdir(join(workspace, '.git'));
+  const session = crypto.randomUUID();
+  const firstTurn = Promise.withResolvers();
+  const followup = Promise.withResolvers();
+  const deliveryRecorded = Promise.withResolvers();
+  const turns = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.kill = () => child.stdout.end();
+  const emit = message => child.stdout.write(JSON.stringify(message) + '\n');
+  const firstTurnId = crypto.randomUUID();
+  const secondTurnId = crypto.randomUUID();
+  const unexpectedRpc = [];
+  child.stdin = new Writable({ write(chunk, _encoding, done) {
+    const { method, id, params } = JSON.parse(chunk.toString());
+    const reply = result => emit({ id, result });
+    if (method === 'initialize') reply({});
+    else if (method === 'thread/start' || method === 'thread/resume') {
+      if (method === 'thread/resume' && params.threadId !== session) unexpectedRpc.push('thread identity');
+      reply({ thread: { id: session, ephemeral: false }, model: 'fixture', modelProvider: 'fixture',
+        sandbox: { type: 'workspaceWrite', networkAccess: false, writableRoots: [] } });
+    } else if (method === 'turn/start') {
+      if (params.threadId !== session) unexpectedRpc.push('turn identity');
+      turns.push(params.input[0].text);
+      reply({ turn: { id: turns.length === 1 ? firstTurnId : secondTurnId } });
+      (turns.length === 1 ? firstTurn : followup).resolve();
+    } else if (method === 'turn/interrupt') {
+      reply({});
+    } else if (method !== 'initialized') unexpectedRpc.push(method);
+    done();
+  } });
+  const complete = id => emit({ method: 'turn/completed', params: { threadId: session, turn: { id, status: 'completed' } } });
+  const usage = (turnId, inputTokens) => emit({ method:'thread/tokenUsage/updated', params:{
+    threadId:session, turnId, tokenUsage:{total:{inputTokens,cachedInputTokens:0,outputTokens:10,totalTokens:inputTokens+10}},
+  } });
+  const connector = openObservatoryConnector({ cwd: workspace, spawnProcess: () => child });
+  t.after(() => connector.close());
+  const reservations = [];
+  const send = async request => {
+    const result = await call(request, 'worker');
+    if (result.status !== 200) throw Object.assign(Error(result.body.error), { status: result.status });
+    if (request.report.type === 'addenda_take') {
+      reservations.push(request.operation_id);
+      if (reservations.length === 1) throw Error('Fixture disconnected after the durable reservation');
+    }
+    if (request.report.type === 'addenda_delivered') deliveryRecorded.resolve();
+    return result.body;
+  };
+  const usageReceipts = [];
+  const execution = runClaim({ claim, send, workspace, signal: AbortSignal.timeout(6000),
+    onTelemetryStart: async () => {}, admitStorage: async () => {},
+    onUsage: async receipt => { usageReceipts.push(...receipt.measurements); },
+    identify: async () => ({ revision: rev, branch: 'fixture', dirty: false }),
+    execute: options => executeAppServer(connector, options),
+  });
+  const waitFor = promise => Promise.race([promise, execution.then(() => assert.fail('Worker ended before checkpoint'))]);
+  await waitFor(firstTurn.promise);
+  const addendum = { target: 'active_attempt', attempt_id: claim.attempt.id, text: 'Check the deliverable headings.' };
+  const accepted = await command(await get(task), 'addendum', addendum);
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.lifecycle.addenda[0].status, 'pending');
+  assert.equal((await command(await get(task), 'addendum', addendum, 'agent')).status, 403);
+  assert.equal((await command(await get(dependent), 'addendum', addendum)).status, 409);
+  usage(firstTurnId,100);
+  complete(firstTurnId);
+  await waitFor(followup.promise);
+  await waitFor(deliveryRecorded.promise);
+  const late = await command(await get(task), 'addendum', { ...addendum, text: 'Late supplemental instruction' });
+  assert.equal(late.body.lifecycle.addenda[1].status, 'deferred');
+  usage(secondTurnId,200);
+  complete(secondTurnId);
+  await execution;
+  assert.deepEqual(usageReceipts.filter(metric=>metric.name==='provider_total_tokens' && metric.method==='fresh_thread_total')
+    .map(metric=>metric.value),[210]);
+  assert.deepEqual(usageReceipts.filter(metric=>metric.name==='app_server_workspace_turn_ordinal')
+    .map(metric=>metric.value),[1,2]);
+  assert.deepEqual(unexpectedRpc, []);
+  assert.deepEqual(reservations, [reservations[0], reservations[0]]);
+  assert.equal(turns.length, 2);
+  assert.ok(!turns[0].includes(addendum.text));
+  assert.ok(turns[1].includes(addendum.text));
+  assert.ok(!turns[1].includes('Late supplemental instruction'));
+  const result = await get(task);
+  const [delivered] = result.lifecycle.addenda;
+  assert.equal(result.lifecycle.state, 'verifying');
+  assert.equal(delivered.status, 'acknowledged');
+  assert.equal(delivered.session_id, session);
+  assert.equal(delivered.turn_id, secondTurnId);
+  assert.equal(delivered.spec_version, claim.attempt.spec_version);
+  assert.equal(result.events.filter(event => event.kind === 'addenda_take').length, 1);
+  assert.equal((await claimRequest()).body.claim, null);
+  const revisions = await Promise.all(['First update', 'Second update'].map(title =>
+    command(result, 'edit', { fields: { ...fields(title), criteria: ['Criterion for a new review cycle'] } })));
+  assert.deepEqual(revisions.map(response => response.status).sort(), [200, 409]);
+  const reviewedSpec = await get(task);
+  assert.equal(reviewedSpec.task.acceptance.criteria[0].id, task.task.acceptance.criteria[0].id);
+  assert.equal((await command(reviewedSpec, 'accept', {
+    evidence: [{ criterion_id: reviewedSpec.lifecycle.pending_spec.fields.acceptance.criteria[0].id,
+      revision: rev, uri: 'https://example.test/review' }],
+  })).status, 409);
+  await command(reviewedSpec, 'accept', {
+    evidence: [{ criterion_id: task.task.acceptance.criteria[0].id, revision: rev, uri: 'https://example.test/review' }],
+  });
+  assert.equal((await claimRequest()).body.claim.task.id, dependent.task.id);
+});
+
+test('scope observations and storage errors explain worker availability without creating an attempt', async t => {
+  const { call, register, command, get, advance } = setup(t);
+  const task = await register('Scoped');
+  await command(task, 'admit', { executor: 'codex' });
+  const pulse = { op: 'worker_pulse', worker_id: crypto.randomUUID(), worker_state: 'available', task_ids: [] };
+  assert.equal((await call(pulse)).status, 403);
+  await call(pulse, 'worker');
+  assert.equal((await get(task)).worker_dispatch.no_matching_worker, true);
+  await call({ ...pulse, task_ids: [task.task.id], worker_state: 'storage_guard_timeout' }, 'worker');
+  assert.deepEqual((await get(task)).worker_dispatch.states, ['storage_guard_timeout']);
+  advance(60_000);
+  assert.deepEqual((await get(task)).worker_dispatch.states, []);
+  assert.deepEqual((await get(task)).attempts, []);
+  await checkWorkerStorage(['fixture', 'budget'], '.', async (_file, _args, options) => assert.equal(options.timeout, 30_000));
+  await assert.rejects(checkWorkerStorage(['fixture'], '.', async () => { throw { killed: true }; }), { code: 'storage_guard_timeout' });
+});
+
+test('a restarted worker cannot deliver an expired reservation or replay it into a retry', async t => {
+  const { call, register, command, get, advance } = setup(t);
+  const task = await register('Interrupted delivery');
+  const queuedAddendum = await command(task, 'addendum', { target: 'next_attempt', text: 'Keep the evidence link.' });
+  await command(queuedAddendum.body, 'admit', { executor: 'codex' });
+  const claim = async () => (await call({
+    op: 'claim', operation_id: crypto.randomUUID(), live_addenda: true, conversation_continuation: true,
+  }, 'worker')).body.claim;
+  const first = await claim();
+  const session_id = crypto.randomUUID();
+  const report = (leased, type, fields = {}) => ({
+    op: 'report', task_id: task.task.id, operation_id: crypto.randomUUID(),
+    attempt_id: leased.attempt.id, lease: leased.lease, report: { type, session_id, ...fields },
+  });
+  await call(report(first, 'heartbeat'), 'worker');
+  const checkpoint = report(first, 'addenda_take');
+  const reserved = await call(checkpoint, 'worker');
+  assert.equal(reserved.body.addenda[0].attempt_id, first.attempt.id);
+  advance(60_001);
+  assert.equal((await call(checkpoint, 'worker')).status, 409);
+  const expired = await get(task);
+  assert.equal(expired.lifecycle.addenda[0].status, 'deferred');
+  assert.match(expired.lifecycle.addenda[0].reason, /could not be confirmed/);
+  await command(expired, 'retry', { changed_assumption: 'The replacement worker is available' });
+  const retry = await claim();
+  assert.equal(retry.attempt.resume_session_id, session_id);
+  await call(report(retry, 'heartbeat'), 'worker');
+  assert.equal((await call(report(retry, 'addenda_delivered', {
+    reservation_id: checkpoint.operation_id, turn_id: crypto.randomUUID(),
+  }), 'worker')).status, 409);
+  assert.deepEqual((await call(report(retry, 'addenda_take'), 'worker')).body.addenda, []);
 });
 
 test('legacy and Codex-created Tasks share one identity and versioned writes', async t => {
@@ -518,7 +716,11 @@ test('hung control report returns at lease expiry without submitting a stale ter
   const task=await register('Hung control transport');
   assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
   const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
-  claim.attempt.lease_until=Date.now()+80;
+  // Simulate a monotonic timer firing while the wall clock still reads
+  // before expiry, as it can around clock adjustment and timer rounding.
+  const wallClock=Date.now();
+  t.mock.method(Date,'now',()=>wallClock);
+  claim.attempt.lease_until=wallClock+80;
   const reports=[];
   const guard=new AbortController();
   t.after(()=>guard.abort());

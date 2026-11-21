@@ -110,7 +110,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const timing=executionTiming({taskId:task.id,canonical,attempts:taskAttempts,spans:trace.spans,linkedEvents:activity.events});
   const usage=taskUsageAccounting({task,canonical,attempts:taskAttempts,events:taskEvents,pricing});
   const {rows:tokens,desktop}=usage;
-  const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
+  const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords,events:taskEvents});
   const dataCoverage=taskDataCoverage({task,canonical,attempts:taskAttempts,usage,diagnostics,events:taskEvents,telemetrySource});
   const nextAction=taskNextAction(canonical,workerAccess);
   const latestCoverage=diagnostics.coverage.at(-1);

@@ -1,4 +1,4 @@
-import { taskTokenRows } from './task-engine-client.mjs';
+import { taskTokenProgress, taskTokenRows } from './task-engine-client.mjs';
 
 const TURN_SOURCE = 'codex_exec_json_turn_completed';
 const STREAM_SOURCE = 'codex_exec_jsonl';
@@ -61,17 +61,25 @@ export function accountLoadedAttemptReceipts({tasks,attempts,events,cutoff,turnA
     }
   }
   for (const row of turnAccounting.byAttempt) scopes.get(row.taskId)?.rows.push(row);
-  const byTask = [...scopes.values()].map(({task,attempts,events,rows})=>({
-    taskId:task.id,
-    rows:taskTokenRows({schemaVersion:1,byAttempt:rows},task.id,attempts,events,task.repository),
-  }));
-  const summarize = rows => {
-    const {turns,samples,...tokens}=observed(rows.map(row=>row.observed));
-    return {tokens,attemptsWithTotals:rows.filter(row=>row.observed.totalTokens!=null).length,
-      attempts:rows.length,appServerReceipts:rows.filter(row=>row.source==='Codex App Server').length};
+  const byTask = [...scopes.values()].map(({task,attempts,events,rows})=>{
+    const final = taskTokenRows({schemaVersion:1,byAttempt:rows},task.id,attempts,events,task.repository);
+    const progress = taskTokenProgress(task,attempts,events,final);
+    const progressByAttempt = new Map(progress.map(row=>[row.attemptId,row]));
+    // Failed/interrupted fresh turns may have only a cumulative lower bound.
+    // Replace an empty row with its latest progress; never add it to a final.
+    const observedRows = final.map(row=>row.observed.totalTokens===null ? progressByAttempt.get(row.attemptId)??row : row);
+    return {taskId:task.id,rows:final,observedRows};
+  });
+  const summarize = (rows, includePartial = false) => {
+    const measured = includePartial ? rows : rows.filter(row=>['complete','observed'].includes(row.coverage));
+    const {turns,samples,...tokens}=observed(measured.map(row=>row.observed));
+    return {tokens,attemptsWithTotals:measured.filter(row=>row.observed.totalTokens!=null).length,
+      attempts:rows.length,appServerReceipts:measured.filter(row=>row.source==='Codex App Server').length};
   };
   return {totals:summarize(byTask.flatMap(task=>task.rows)),
-    byTask:byTask.map(task=>({...task,totals:summarize(task.rows)})),billing:'Unknown'};
+    observed:summarize(byTask.flatMap(task=>task.observedRows),true),
+    byTask:byTask.map(({taskId,rows,observedRows})=>({taskId,rows,totals:summarize(rows),
+      observedRows,observed:summarize(observedRows,true)})),billing:'Unknown'};
 }
 
 function completeStream({starts, ends, turns}) {

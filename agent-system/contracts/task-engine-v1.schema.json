@@ -93,6 +93,7 @@
         "conversation_continuation": {
           "type": "boolean"
         },
+        "live_addenda": {"type": "boolean"},
         "task_ids": {
           "type": "array",
           "maxItems": 500,
@@ -105,6 +106,18 @@
         "op",
         "operation_id"
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {"const": "worker_pulse"},
+        "worker_id": {"$ref": "#/$defs/uuid"},
+        "worker_state": {"enum": ["available", "busy", "claim_rejected", "task_connection_unavailable",
+          "storage_guard_timeout", "storage_reserve_denied", "storage_guard_unavailable"]},
+        "conversation_continuation": {"type": "boolean"},
+        "task_ids": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/taskId"}}
+      },
+      "required": ["op", "worker_id", "worker_state"]
     },
     {
       "type": "object",
@@ -291,22 +304,26 @@
               "const": "edit"
             },
             "fields": {
-              "allOf": [
-                {
-                  "$ref": "#/$defs/fields"
-                },
-                {
-                  "required": [
-                    "priority"
-                  ]
-                }
-              ]
+              "$ref": "#/$defs/fields"
             }
           },
           "required": [
             "type",
             "fields"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "addendum"},
+            "target": {"enum": ["active_attempt", "next_attempt"]},
+            "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "attempt_id": {"type": "string", "minLength": 1, "maxLength": 160}
+          },
+          "required": ["type", "target", "text"],
+          "if": {"properties": {"target": {"const": "active_attempt"}}},
+          "then": {"required": ["attempt_id"]},
+          "else": {"not": {"required": ["attempt_id"]}}
         },
         {
           "type": "object",
@@ -589,12 +606,17 @@
             "heartbeat",
             "finished",
             "failed",
-            "stopped"
+            "stopped",
+            "addenda_take",
+            "addenda_delivered",
+            "addenda_acknowledged"
           ]
         },
         "session_id": {
           "$ref": "#/$defs/uuid"
         },
+        "turn_id": {"$ref": "#/$defs/uuid"},
+        "reservation_id": {"$ref": "#/$defs/uuid"},
         "execution_identity": {
           "$ref": "#/$defs/executionIdentity"
         },
@@ -646,6 +668,16 @@
               "maximum": 30
             },
             "can_configure_execution": {"type":"boolean"},
+            "can_edit_spec": {"type":"boolean"},
+            "edit_effect": {"enum":["before_claim","next_attempt"]},
+            "spec_version": {"$ref":"#/$defs/positive"},
+            "pending_spec": {
+              "type": "object",
+              "properties": {"version":{"$ref":"#/$defs/positive"},"fields":{"type":"object"}},
+              "required": ["version","fields"]
+            },
+            "can_addendum": {"type":"boolean"},
+            "addenda": {"type":"array","items":{"$ref":"#/$defs/addendum"}},
             "prerequisite_status": {
               "type": "array",
               "items": {
@@ -693,6 +725,26 @@
         "attempts",
         "events"
       ]
+    },
+    "addendum": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref":"#/$defs/uuid"},
+        "task_id": {"$ref":"#/$defs/taskId"},
+        "version": {"$ref":"#/$defs/positive"},
+        "spec_version": {"$ref":"#/$defs/positive"},
+        "target": {"enum":["active_attempt","next_attempt"]},
+        "status": {"enum":["pending","delivered","acknowledged","deferred"]},
+        "attempt_id": {"type":"string"},
+        "session_id": {"$ref":"#/$defs/uuid"},
+        "turn_id": {"$ref":"#/$defs/uuid"},
+        "text": {"type":"string","maxLength":2000},
+        "accepted_at": {"type":"string","format":"date-time"},
+        "delivered_at": {"type":"string","format":"date-time"},
+        "acknowledged_at": {"type":"string","format":"date-time"},
+        "reason": {"type":"string"}
+      },
+      "required": ["id","task_id","version","target","status","text","accepted_at"]
     },
     "error": {
       "type": "object",
@@ -742,6 +794,11 @@
         },
         "resume_requires_clean": {
           "type": "boolean"
+        },
+        "changed_assumption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
         },
         "execution_identity": {
           "$ref": "#/$defs/executionIdentity"

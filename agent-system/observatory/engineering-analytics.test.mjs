@@ -236,16 +236,46 @@ test('loaded attempt totals select each receipt once while daily trends retain C
   });
   const app=receipt('app-second','second','second-attempt');
   const wrongRevision={...receipt('wrong','second','uncovered'),revision:'b'.repeat(40)};
-  const {tokenAccounting,attemptReceiptAccounting:usage}=buildEngineeringAnalytics({
-    records:rows,events:[...cli,receipt('overlap','task','attempt'),app,{...app},wrongRevision],now,
+  const progress={...app,event_id:'progress',measurements:app.measurements.map(metric=>({...metric,method:'fresh_thread_progress'}))};
+  const {tokenAccounting,attemptReceiptAccounting:usage,usage:generic}=buildEngineeringAnalytics({
+    records:rows,events:[...cli,receipt('overlap','task','attempt'),app,{...app},wrongRevision,progress],now,
   });
   assert.equal(usage.totals.tokens.totalTokens,130);
   assert.equal(usage.totals.appServerReceipts,1);
   assert.equal(usage.totals.attemptsWithTotals,2);
   assert.equal(usage.totals.attempts,3);
+  assert.equal(usage.observed.tokens.totalTokens,130);
   assert.equal(usage.byTask.find(row=>row.taskId==='second').totals.tokens.uncachedInputTokens,20);
   assert.equal(usage.billing,'Unknown');
   assert.equal(tokenAccounting.daily.at(-1).observed.totalTokens,40);
+  assert.equal(generic.tokens.find(row=>row.name==='provider_input_tokens').total,30);
+});
+
+test('Analytics binds App Server profiles and failed lower bounds to the exact canonical attempt', () => {
+  const repo='Kgray44/Aetherwake', session='11111111-1111-4111-8111-111111111111';
+  const usage=(eventId,total)=>({...event(eventId,'app','measurement','implementation',3,[
+    {...obs('provider_total_tokens','tokens',total),source:'codex_app_server_token_usage_updated',method:'fresh_thread_progress'},
+  ]),repository:repo,session_id:session});
+  const profile={...event('profile','app','measurement','implementation',4,[
+    {...obs('app_server_latest_response_input_tokens','tokens',60),
+      source:'codex_app_server_turn_profile',method:'observed_turn_notifications'}
+  ]),repository:repo,session_id:session};
+  const followup={...profile,event_id:'followup-profile',measurements:[...profile.measurements,{
+    ...obs('app_server_workspace_turn_ordinal','count',2),
+    source:'codex_app_server_turn_profile',method:'observed_turn_notifications',
+  }]};
+  const data=buildEngineeringAnalytics({
+    records:[{...task,repository:repo},{...attempt,repository:repo,attempt_number:1}],
+    sessionBindings:[{task_id:task.id,attempt_bindings:[{id:attempt.id,revision:rev,session_id:session}]}],
+    events:[{...usage('first',40),occurred_at:at(2)},usage('latest',100),profile,followup,
+      {...profile,event_id:'wrong-session',session_id:'other'}],now,
+  });
+  assert.deepEqual(data.appServerProfiles.map(row=>row.ordinal),[1,2]);
+  assert.equal(data.appServerProfiles[0].latest.tokens,60);
+  assert.equal(data.attemptReceiptAccounting.totals.tokens.totalTokens,null);
+  assert.equal(data.attemptReceiptAccounting.observed.tokens.totalTokens,100);
+  assert.equal(data.attemptReceiptAccounting.byTask[0].observed.tokens.totalTokens,100);
+  assert.deepEqual(data.usage.tokens,[]);
 });
 
 test('paired experiments retain failed attempts and require complete, verified matched outcomes', () => {
@@ -295,5 +325,11 @@ test('paired experiments retain failed attempts and require complete, verified m
   assert.equal(query([b,{...c,revision:'b'.repeat(40)}]).pairs[0].status,'unmatched');
   const changedScope = {...c,acceptance:{...c.acceptance,profile_id:'other'}};
   assert.equal(query([b,changedScope]).pairs[0].status,'unmatched');
+  const protocol={provider:'openai',model:'fixture',effort:'high',environmentDigest:'b'.repeat(64),
+    requirementsDigest:'c'.repeat(64),verificationDigest:'d'.repeat(64)};
+  const declared={...pair,protocol:{baseline:protocol,candidate:{...protocol}}};
+  assert.equal(query([b,c],events,[declared]).pairs[0].protocolCoverage,'matched_declaration');
+  declared.protocol.candidate.effort='low';
+  assert.equal(query([b,c],events,[declared]).pairs[0].status,'unmatched');
   assert.throws(() => query([b,c],events,[pair,{...pair,id:'duplicate'}]), /reused/);
 });

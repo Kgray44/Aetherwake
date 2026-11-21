@@ -34,6 +34,97 @@ export function codexUsage(event) {
   })));
 }
 
+const appServerUsageFields = ['totalTokens', 'inputTokens', 'cachedInputTokens', 'outputTokens'];
+const tokenCount = value => Number.isSafeInteger(value) && value >= 0;
+
+// A fresh thread has an implicit zero baseline. A resumed thread has no
+// baseline until its first in-turn notification. A notification can cover
+// multiple responses, so only accept a response-sized interval when its
+// cumulative difference agrees with the accompanying `last` breakdown.
+export function appServerTurnProfile(resumed, promptBytes) {
+  const previousZero = Object.fromEntries(appServerUsageFields.map(key => [key, 0]));
+  let previous = resumed ? null : previousZero;
+  let first, latest, peakInput, peakWindow, responseCount = 0, intervals = 0, notices = 0;
+  let commands = 0, repeated = 0, failures = 0, mcp = 0, outputBytes = 0, outputs = 0;
+  let commandsAtLastNotice = 0;
+  let toolLimit = false;
+  const tools = new Set(), commandFingerprints = new Set();
+  const responseSamples = [];
+  const validUsage = usage => appServerUsageFields.every(key => tokenCount(usage?.[key])) &&
+    usage.cachedInputTokens <= usage.inputTokens && usage.totalTokens === usage.inputTokens + usage.outputTokens;
+  return {
+    observeUsage(usage) {
+      const {total, last, modelContextWindow} = usage ?? {};
+      if (!validUsage(total)) return;
+      if (previous && appServerUsageFields.some(key => total[key] < previous[key])) return;
+      if (previous && total.totalTokens === previous.totalTokens) return;
+      notices++;
+      if (tokenCount(modelContextWindow) && modelContextWindow > 0) peakWindow = Math.max(peakWindow ?? 0, modelContextWindow);
+      if (previous) {
+        intervals++;
+        if (validUsage(last) && appServerUsageFields.every(key => total[key] - previous[key] === last[key])) {
+          responseCount++;
+          const sample = {input:last.inputTokens, cached_input:last.cachedInputTokens, output:last.outputTokens};
+          first ??= sample;
+          latest = sample;
+          peakInput = Math.max(peakInput ?? 0, sample.input);
+          // Keep the opening four and most recent four reconciled intervals.
+          // Aggregates above still include all reconciled observations.
+          if (responseSamples.length===8) responseSamples.splice(4,1);
+          responseSamples.push({interval:intervals, sample, commands:commands-commandsAtLastNotice});
+        }
+      }
+      commandsAtLastNotice=commands;
+      previous = Object.fromEntries(appServerUsageFields.map(key => [key, total[key]]));
+    },
+    observeTool(item) {
+      if (!['commandExecution', 'mcpToolCall'].includes(item?.type) || typeof item.id !== 'string' ||
+          !item.id || item.id.length>160 || tools.has(item.id)) return;
+      if (tools.size >= 1024) { toolLimit = true; return; }
+      tools.add(item.id);
+      if (item.type === 'mcpToolCall') { mcp++; return; }
+      commands++;
+      if (item.status === 'failed') failures++;
+      if (typeof item.aggregatedOutput === 'string') {
+        outputs++;
+        outputBytes += Buffer.byteLength(item.aggregatedOutput);
+      }
+      if (typeof item.command === 'string') {
+        const hash = createHash('sha256').update(JSON.stringify([item.cwd, item.command])).digest('hex');
+        if (commandFingerprints.has(hash)) repeated++;
+        commandFingerprints.add(hash);
+      }
+    },
+    measurements(completed, limitedStart = false) {
+      const metric = (name, unit, value) => ({name:'app_server_'+name, unit,
+        source:'codex_app_server_turn_profile', method:'observed_turn_notifications',
+        availability:'observed', value});
+      const counts = {
+        usage_notification_count:notices, observed_interval_count:intervals,
+        reconciled_response_count:responseCount, command_count:commands,
+        repeated_command_count:repeated, failed_command_count:failures,
+        command_output_sample_count:outputs, mcp_tool_count:mcp,
+      };
+      const samples = (position, sample) => Object.entries(sample ?? {}).map(([key, value]) =>
+        metric(position+'_response_'+key+'_tokens','tokens',value));
+      return [
+        metric('submitted_task_prompt_bytes','bytes',promptBytes),
+        ...Object.entries(counts).map(([key,value])=>metric(key,'count',value)),
+        metric('command_event_output_bytes','bytes',outputBytes),
+        metric('turn_completed','boolean',Number(completed)),
+        metric('tool_observation_limit_reached','boolean',Number(toolLimit || limitedStart)),
+        ...samples('first',first), ...samples('latest',latest),
+        ...responseSamples.flatMap(row=>[
+          ...samples('interval_'+row.interval,row.sample),
+          metric('interval_'+row.interval+'_command_count','count',row.commands),
+        ]),
+        ...(peakInput === undefined ? [] : [metric('peak_response_input_tokens','tokens',peakInput)]),
+        ...(peakWindow === undefined ? [] : [metric('max_reported_context_window_tokens','tokens',peakWindow)]),
+      ];
+    },
+  };
+}
+
 function observation(name, value, unit = 'count') {
   return { name: 'provider_' + name, availability: 'observed', value, unit, source: SOURCE, method: 'observed_stdout_frames' };
 }

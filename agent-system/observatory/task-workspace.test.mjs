@@ -57,6 +57,24 @@ const current = { id: 'task_a', title: 'Build editor', objective: 'Landing works
   prerequisites: { task_ids: ['accepted', 'blocked', 'unknown', 'accepted'] }, classification: { primary: 'visual' } };
 const downstream = { id: 'next', title: 'Verify workspace', state: 'ready', prerequisites: { task_ids: ['task_a'] } };
 
+test('Workspace diagnostics and PDF share the exact App Server turn profile receipt', () => {
+  const task={...current,repository:'Kgray44/Aetherwake'};
+  const attempt={id:'attempt',task_id:task.id,attempt_number:1,revision:'a'.repeat(40),
+    session_id:'11111111-1111-4111-8111-111111111111',state:'failed'};
+  const measurements=[['latest_response_input_tokens','tokens',300],['latest_response_cached_input_tokens','tokens',275],
+    ['command_count','count',4]].map(([name,unit,value])=>({name:'app_server_'+name,unit,value,
+    method:'observed_turn_notifications',source:'codex_app_server_turn_profile',availability:'observed'}));
+  const receipt={event_id:'profile',task_id:task.id,attempt_id:attempt.id,repository:task.repository,
+    session_id:attempt.session_id,revision:attempt.revision,kind:'measurement',occurred_at:'2026-01-04T00:00:00.000Z',measurements};
+  const events=[receipt,{...receipt,event_id:'other',revision:'b'.repeat(40)}];
+  const diagnostics=taskExecutionDiagnostics({task,attempts:[attempt],trace:traceTimeline(events),tokens:[],records:[],events});
+  assert.equal(diagnostics.findings.filter(row=>row.key==='profile').length,1);
+  assert.match(diagnostics.findings.find(row=>row.key==='profile').detail,/300 tokens.*275 cached/);
+  const report=JSON.stringify(taskReportDefinition({task,attempts:[attempt],events}).content);
+  assert.match(report,/Attempt 1 App Server turn profile/);
+  assert.match(report,/Receipt profile at/);
+});
+
 test('Task status and Development Notes use exact attempt and session evidence in Workspace and PDF',()=>{
   const task={id:'task-notes',title:'Notes fixture',objective:'Verify development observations'};
   const attempt={id:'attempt',task_id:task.id,attempt_number:1,revision:'a'.repeat(40),

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { routeTask, taskClasses } from '../scripts/agent/task-router.mjs';
+import { contextExperimentScope, evaluateContextRollout, routeTask, taskClasses } from '../scripts/agent/task-router.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const config = JSON.parse(readFileSync(new URL('../agent-system/task-classes.json', import.meta.url),'utf8'));
@@ -158,4 +158,25 @@ test('unknown paths and classifications do not establish test independence', () 
   assert.deepEqual(result.verification_plan.unmapped_paths, ['some/unknown.mjs']);
   assert.ok(result.required_check_ids.includes('authorization-tests'));
   assert.ok(result.required_check_ids.includes('visual-review'));
+});
+
+test('compact context stays off without scoped independently reviewed full-cost improvements', () => {
+  const task=fixture('performance');
+  const plan=routeTask(task,['scripts/governance-context.mjs']);
+  const now=Date.parse('2026-11-20T00:00:00Z');
+  const review=(receipt,workload)=>({
+    review_receipt:receipt.repeat(64),workload_digest:workload.repeat(64),expires_at:'2026-11-21T00:00:00Z',
+    independently_reviewed:true,matched:true,holdout:true,baseline_verified:true,candidate_verified:true,
+    guardrails_passed:true,baseline_full_cost_usd:10,candidate_full_cost_usd:8,
+  });
+  const reviews=[review('a','b'),review('c','d')];
+  const args={schema_version:1,configured:'json',candidate:'compact',scope:contextExperimentScope(task,plan),reviews};
+  const evaluate=(evidence=args,proposal=plan)=>evaluateContextRollout(task,proposal,evidence,now);
+  assert.deepEqual(evaluate(),{status:'candidate',authorized:false,format:'compact',verified_pairs:2,fallback:'json'});
+  assert.equal(evaluate(undefined,routeTask(task,['scripts/agent/task-router.mjs'])).reason,'scope_incomplete');
+  assert.equal(evaluate({...args,reviews:[reviews[0],{...reviews[1],candidate_full_cost_usd:null}]}).reason,'no_qualified_improvement');
+  assert.equal(evaluate({...args,reviews:[reviews[0],{...reviews[1],candidate_full_cost_usd:10}]}).reason,'no_qualified_improvement');
+  assert.equal(evaluate({...args,reviews:[...reviews,{...review('e','f'),candidate_full_cost_usd:11}]}).reason,'regression');
+  assert.equal(evaluate({...args,reviews:[...reviews,{...review('e','f'),guardrails_passed:false}]}).reason,'regression');
+  assert.equal(evaluate({...args,reviews:[...reviews,reviews[0]]}).reason,'review_identity_reused');
 });

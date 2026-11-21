@@ -265,7 +265,8 @@ const dependencyRevision=JSON.stringify((engineSummary?.task.prerequisites.task_
   const summary=summaries.get(id);
   return [id,summary?.lifecycle.stored_state,summary?.task.owner_acceptance];
 }));
-const engineTask=useTaskEngineDetail({summary:engineSummary,dependencyRevision,headers:verificationHeaders,onRefresh:()=>refresh(false,{quiet:true})});
+const engineTask=useTaskEngineDetail({summary:engineSummary,dependencyRevision,workerDispatch:engine.workerDispatch,
+  headers:verificationHeaders,onRefresh:()=>refresh(false,{quiet:true})});
 const canonical=engineTask.detail;
 const reviewedCriteria=current?ownerReviewByCriterion(canonical?.task??current,canonical):new Map();
 const detailState=canonical?.lifecycle.state??summaries.get(current?.id)?.lifecycle.state??current?.state;
@@ -410,7 +411,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 {detailState==='archived'&&<p className="notice" role="status">Task archived{(canonical?.task??current).owner_acceptance==='accepted'?' · Owner accepted the final result.':''}</p>}
 {engineSummary&&hasLiveFeed&&<Rise><Panel id="task-controls" title="Execution controls">
   {engineTask.error&&<p role="alert">{engineTask.error}</p>}
-  {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} workerAccess={workerAccess} publishedIntake={publishedIntake} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
+  {canonical?<Suspense fallback={<p role="status">Loading execution controls…</p>}><TaskEngineControls detail={canonical} workerAccess={workerAccess} workerDispatch={canonical.worker_dispatch??engine.workerDispatch} publishedIntake={publishedIntake} onCommand={engineTask.command} tasks={canonicalTasks} Status={Status}/></Suspense>:!engineTask.error&&<p role="status">Loading canonical Task state…</p>}
 </Panel></Rise>}
 <Rise><Panel id="task-timeline" title="Task Timeline"><TaskTimeline key={current.id} task={canonical?.task??current} canonical={canonical} github={demo?null:github} telemetrySource={taskTelemetrySource} attempts={taskAttempts} events={taskEvents} audits={taskAudits}
   executorAttempt={canonical?.attempts.at(-1)} executorState={canonical?.lifecycle.state}
@@ -428,7 +429,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   <ProposalControls key={current.id} task={canonical.task} control={canonical} tasks={canonicalTasks} summaries={summaries} Status={Status} classes={types}
     headers={verificationHeaders} readFields={taskDraft} refresh={()=>refresh(false,{quiet:true})}
     manageable={task=>Object.hasOwn(privateControls,task.id)} engineCommand={engineTask.command}
-    engineEditable={!canonical.lifecycle.executor&&['proposed','blocked'].includes(canonical.lifecycle.stored_state)}/>
+    engineEditable={canonical.lifecycle.can_edit_spec ?? (!canonical.lifecycle.executor&&['proposed','blocked'].includes(canonical.lifecycle.stored_state))}/>
 </Panel></Rise>}
 {proposalControls&&!engineSummary&&<Rise><Panel id="task-editor" title="Task editor">
   <ProposalControls key={current.id}

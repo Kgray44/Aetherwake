@@ -13,7 +13,7 @@ const revision = /^[a-f0-9]{40}$/;
 const claimMarker = /^active-(attempt_[a-f0-9-]{36})\.json$/;
 const terminalStates = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
 const codexTurnSources = new Set(['codex_exec_json_turn_completed', 'not_exposed_by_usage_event',
-  'codex_app_server_token_usage_updated']);
+  'codex_app_server_token_usage_updated', 'codex_app_server_turn_profile']);
 
 // A local marker survives abrupt process exit. It carries no lease, workspace
 // contents, or credentials. The existing telemetry journal carries the result.

@@ -1,6 +1,7 @@
 import { attemptMatchesEvidence, ownerReviewByCriterion } from './evidence-status.mjs';
 import { attemptTraceCoverage } from './trace-timeline.mjs';
 import { validMatchedBenchmark } from '../matched-benchmark.mjs';
+import { appServerTurnProfiles } from './task-engine-client.mjs';
 
 const number = new Intl.NumberFormat('en-US');
 const percent = new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:1});
@@ -41,7 +42,7 @@ function benchmarkComparison(record) {
   };
 }
 
-export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tokens, records }) {
+export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tokens, records, events = [] }) {
   const coverage = attemptTraceCoverage(attempts, trace.spans);
   const accepted = ownerReviewByCriterion(task, canonical);
   const evidence = records.filter(record => record.task_id === task.id && record.record_type === 'evidence');
@@ -49,6 +50,23 @@ export function taskExecutionDiagnostics({ task, canonical, attempts, trace, tok
     record.synthetic===false&&validMatchedBenchmark(record.matched_benchmark)&&
     attempts.some(attempt=>attemptMatchesEvidence(attempt,record))).map(benchmarkComparison);
   const findings = [];
+  const display = value => value === null ? 'unavailable' : number.format(value);
+  for (const profile of appServerTurnProfiles(
+    attempts.filter(attempt=>attempt.task_id===task.id).map(attempt=>({...attempt,repository:attempt.repository??task.repository})),events
+  )) {
+    const samples = profile.samples.map(row=>'#'+row.interval+' '+display(row.tokens)+' / '+display(row.cached)+
+      ' / '+display(row.output)+' / '+display(row.commands));
+    findings.push({title:'Attempt '+profile.attemptNumber+' App Server turn profile · turn '+profile.ordinal, key:profile.receiptId,
+      detail:'Reconciled '+display(profile.reconciled)+' of '+display(profile.intervals)+' observed usage intervals. '+
+        'First and latest reconciled response input were '+display(profile.first.tokens)+' and '+display(profile.latest.tokens)+
+        ' tokens, with '+display(profile.first.cached)+' and '+display(profile.latest.cached)+' cached. '+
+        display(profile.commands)+' observed commands, '+display(profile.repeated)+' repeated command invocations, '+
+        display(profile.outputBytes)+' bytes across '+display(profile.commandOutputs)+' command output samples. '+
+        (profile.toolLimited?'Tool observations reached the capture limit. ':'')+
+        (samples.length?'Sampled intervals show input, cached input, output and command completions. '+samples.join(', ')+'. ':'')+
+        'Submitted Task prompt '+display(profile.promptBytes)+' bytes. Full provider request contents are unavailable. '+
+        'Receipt '+profile.receiptId+' at '+profile.revision+'.'});
+  }
   for (const row of coverage) {
     if (row.untracedMs <= 0) continue;
     const edges = row.beforeTraceMs == null ? '' :

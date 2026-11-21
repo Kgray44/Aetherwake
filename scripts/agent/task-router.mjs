@@ -7,7 +7,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createSnapshot, checkFreshness, writeSnapshot } from './context.mjs';
+import { createSnapshot, checkFreshness, taskDigest, writeSnapshot } from './context.mjs';
+import { canonical } from './evidence-trust.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -116,8 +117,11 @@ export function routeTask(task, inputPaths = []) {
 }
 /** Prepare the existing workflow proposal and a source-verified reusable snapshot. */
 export async function prepareTask(task, {
-  paths = [], owners = [], checkout = process.cwd(), contextFile, includeGovernance = false
+  paths = [], owners = [], checkout = process.cwd(), contextFile, includeGovernance = false, governanceFormat = 'json'
 } = {}) {
+  if (!['json','compact'].includes(governanceFormat) || (!includeGovernance && governanceFormat !== 'json')) {
+    invalid('Compact governance requires governance preparation');
+  }
   const plan = routeTask(task, paths);
   if (!owners.length) invalid('Provide source-backed ownership with --owner component=tracked/path');
   let snapshot;
@@ -143,21 +147,60 @@ export async function prepareTask(task, {
   }
   const result = { ...plan, context_snapshot: snapshot, context_reused: reused };
   if (includeGovernance) {
-    result.governance_context = JSON.parse(execFileSync(process.execPath, [
-      ...plan.governance.context_argv.slice(1), '--json'
-    ], { cwd: checkout, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
+    const payload = execFileSync(process.execPath, [
+      ...plan.governance.context_argv.slice(1), '--'+governanceFormat
+    ], { cwd: checkout, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+    result.governance_context = governanceFormat === 'json' ? JSON.parse(payload) : payload.trimEnd();
+    if (governanceFormat === 'compact') result.governance_format = 'compact';
   }
   if (contextFile && !reused) await writeSnapshot(contextFile, snapshot);
   return result;
 }
 
+export function contextExperimentScope(task, plan) {
+  return {
+    revision:plan.task_revision, policy_revision:plan.policy_revision, task_digest:taskDigest(task),
+    affected_paths:[...plan.affected_paths].sort(), checks:[...plan.required_check_ids].sort(),
+  };
+}
+
+/** Apply the independently reviewed holdout and regression rules from PR #326 to a context-only trial. */
+export function evaluateContextRollout(task, plan, evidence, now = Date.now()) {
+  const keep = reason => ({status:'keep_configured', authorized:false, reason});
+  if (!plan.affected_paths.length || evidence?.schema_version!==1 ||
+      evidence.configured!=='json' || evidence.candidate!=='compact' ||
+      canonical(evidence.scope)!==canonical(contextExperimentScope(task,plan)) ||
+      !Array.isArray(evidence.reviews) || evidence.reviews.length>100 || !Number.isFinite(now)) {
+    return keep('scope_incomplete');
+  }
+  const sha256 = value => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+  const usd = value => Number.isFinite(value) && value>=0;
+  const receipts = new Set(), workloads = new Set();
+  for (const review of evidence.reviews) {
+    if (review?.independently_reviewed!==true || !sha256(review.review_receipt) ||
+        !sha256(review.workload_digest) || !(Date.parse(review.expires_at)>now)) continue;
+    if (review.guardrails_passed===false || review.candidate_verified===false ||
+        (usd(review.baseline_full_cost_usd) && usd(review.candidate_full_cost_usd) &&
+        review.candidate_full_cost_usd>review.baseline_full_cost_usd)) return keep('regression');
+    if (review.holdout!==true || review.matched!==true || review.guardrails_passed!==true ||
+        review.baseline_verified!==true || review.candidate_verified!==true ||
+        !usd(review.baseline_full_cost_usd) || !usd(review.candidate_full_cost_usd) ||
+        review.candidate_full_cost_usd>=review.baseline_full_cost_usd) continue;
+    if (receipts.has(review.review_receipt)||workloads.has(review.workload_digest)) return keep('review_identity_reused');
+    receipts.add(review.review_receipt);
+    workloads.add(review.workload_digest);
+  }
+  return receipts.size<2 ? keep('no_qualified_improvement') :
+    {status:'candidate', authorized:false, format:'compact', verified_pairs:receipts.size, fallback:'json'};
+}
+
 function usage() {
-  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json] [--prepare --owner component=tracked/path [--context-file <private.json>] [--with-governance --json]]';
+  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json] [--execution-evidence <private.json> --json] [--prepare --owner component=tracked/path [--context-file <private.json>] [--with-governance [--compact-governance] --json]]';
 }
 async function main(argv) {
-  let file, contextFile;
+  let file, contextFile, executionEvidence;
   const paths=[], owners=[];
-  let json=false, prepare=false, includeGovernance=false;
+  let json=false, prepare=false, includeGovernance=false, governanceFormat='json';
   for(let i=0;i<argv.length;i++){
     const arg=argv[i];
     if(arg==='--task-file') { file=argv[++i]; if(!file) invalid('--task-file requires path'); }
@@ -166,6 +209,8 @@ async function main(argv) {
     else if(arg==='--context-file') { contextFile=argv[++i]; if(!contextFile) invalid('--context-file requires path'); }
     else if(arg==='--prepare') prepare=true;
     else if(arg==='--with-governance') includeGovernance=true;
+    else if(arg==='--compact-governance') governanceFormat='compact';
+    else if(arg==='--execution-evidence') { executionEvidence=argv[++i]; if(!executionEvidence) invalid('--execution-evidence requires path'); }
     else if(arg==='--json') json=true;
     else if(arg==='--help' || arg==='-h') { console.log(usage()); return; }
     else invalid('Unknown argument: ' + arg);
@@ -174,7 +219,10 @@ async function main(argv) {
   const task=JSON.parse(readFileSync(resolve(process.cwd(),file),'utf8'));
   if(!prepare && (contextFile || owners.length)) invalid('Context options require --prepare');
   if(includeGovernance && !(prepare && json)) invalid('--with-governance requires --prepare and --json');
-  const plan=prepare ? await prepareTask(task,{paths,owners,contextFile,includeGovernance}) : routeTask(task,paths);
+  if(governanceFormat==='compact'&&!includeGovernance) invalid('--compact-governance requires --with-governance');
+  if(executionEvidence&&!json) invalid('--execution-evidence requires --json');
+  const plan=prepare ? await prepareTask(task,{paths,owners,contextFile,includeGovernance,governanceFormat}) : routeTask(task,paths);
+  if(executionEvidence) plan.context_rollout=evaluateContextRollout(task,plan,JSON.parse(await readFile(executionEvidence,'utf8')));
   if(json) console.log(JSON.stringify(plan,null,2));
   else {
     console.log('Engineering Task: ' + plan.task_id + ' (' + plan.primary_class + ')');

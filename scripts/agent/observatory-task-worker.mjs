@@ -236,7 +236,8 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   }
 }
 
-async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,signal}) {
+export async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,
+  onAddendumCheckpoint,signal}) {
   async function recordUsage(usage,method,scope) {
     if (!usage||!onUsage) return;
     const fields={total:'totalTokens',input:'inputTokens',cached_input:'cachedInputTokens',
@@ -248,15 +249,48 @@ async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,o
         source:'codex_app_server_token_usage_updated',method,
       }] : [];
     });
-    if (metrics.length) {
-      try { await onUsage(metrics,scope); }
-      catch { console.error('App Server token telemetry could not be recorded.'); }
-    }
+    if (metrics.length) await onUsage(metrics,scope);
   }
-  const result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
+  let result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
     resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
     onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
-  if (result.status==='completed') await recordUsage(result.usage,'fresh_thread_total',{sessionId:result.sessionId});
+  async function publishProfile(turn, ordinal) {
+    if (onUsage && turn.profile?.length) {
+      const turnOrdinal = {
+        name:'app_server_workspace_turn_ordinal',unit:'count',value:ordinal,availability:'observed',
+        source:'codex_app_server_turn_profile',method:'observed_turn_notifications',
+      };
+      try { await onUsage([...turn.profile,turnOrdinal],{sessionId:turn.sessionId}); }
+      catch { console.error('App Server turn profile could not be recorded.'); }
+    }
+  }
+  await publishProfile(result,1);
+  if (result.status==='completed' && attempt.live_addenda && !signal.aborted) {
+    const checkpoint = await onAddendumCheckpoint();
+    if (checkpoint?.addenda.length) {
+      try { await recordUsage(result.usage,'fresh_thread_progress',{sessionId:result.sessionId}); }
+      catch { console.error('App Server token telemetry could not be recorded.'); }
+      const instructions = checkpoint.addenda.map(({ id, text }) => ({ id, text }));
+      result = await connector.runWorkspaceTurn({
+        cwd, resumeSessionId: result.sessionId, signal, onSession, onDevelopmentNote, onTurnStarted, onTurnFinished,
+        captureFreshThreadUsage: !attempt.resume_session_id,
+        onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope)),
+        prompt: [
+          'Apply the authenticated owner addenda below within the already approved Task scope.',
+          'The original execution authorization, workspace, Git base and claimed acceptance criteria still govern.',
+          'Changes to external actions, publication, acceptance or tool authorization require separate approval.',
+          JSON.stringify({ task_id: task.id, attempt_id: attempt.id, spec_version: attempt.spec_version, instructions }),
+        ].join('\n'),
+        onTurnAccepted: checkpoint.delivered,
+      });
+      if (result.status === 'completed') await checkpoint.acknowledged();
+      await publishProfile(result,2);
+    }
+  }
+  if (result.status==='completed') {
+    try { await recordUsage(result.usage,'fresh_thread_total',{sessionId:result.sessionId}); }
+    catch { console.error('App Server token telemetry could not be recorded.'); }
+  }
   return {ok:result.status==='completed',stopped:signal.aborted,providerStatus:result.status};
 }
 
@@ -274,17 +308,22 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let desired;
   let stopReason;
   let terminalConfirmed = false;
+  let reportDeadlineExpired = false;
   let leaseUntil = attempt.lease_until ?? attempt.deadline;
   const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
   const leaseExpired = () => Object.assign(Error('The Task lease expired before the worker could confirm its report.'), {code:'report_lease_expired'});
   // A control reconnect can outlast the lease even though execution has time left.
   const sendBeforeLeaseExpiry = async request => {
     const remaining = timeUntilLeaseExpiry();
-    if (remaining <= 0) throw leaseExpired();
+    if (remaining <= 0) reportDeadlineExpired = true;
+    if (reportDeadlineExpired) throw leaseExpired();
     const reportController = new AbortController();
     let timer;
     const expired = new Promise((_, reject) => {
       timer = setTimeout(() => {
+        // A lost renewal is ambiguous. Keep the lease fenced even if the
+        // wall clock still reads before expiry when another report runs.
+        reportDeadlineExpired = true;
         const error = leaseExpired();
         reportController.abort(error);
         reject(error);
@@ -304,7 +343,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
             ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
             ...(identity ? { branch: identity.branch } : {}) } };
         const result = await sendBeforeLeaseExpiry(request);
-        if (type!=='heartbeat') { terminalConfirmed=true; heartbeats.abort(); }
+        if (['finished', 'failed', 'stopped'].includes(type)) { terminalConfirmed=true; heartbeats.abort(); }
         return result;
       });
       reports = pending.catch(()=>{});
@@ -467,6 +506,26 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           durationMs:performance.now()-turnStarted.monotonic,state});
         turnStarted=undefined;
       },
+      onAddendumCheckpoint: async () => {
+        await confirmControl();
+        workerSignal.throwIfAborted();
+        const { addenda } = await report('addenda_take');
+        if (!addenda.length) return { addenda };
+        const reservationId = addenda[0].reservation_id;
+        if (addenda.some(item => item.task_id !== task.id || item.attempt_id !== attempt.id ||
+            item.session_id !== sessionId || item.spec_version !== attempt.spec_version || item.reservation_id !== reservationId)) {
+          throw Error('Addendum delivery identity does not match this attempt');
+        }
+        let turnId;
+        return {
+          addenda,
+          delivered: async id => {
+            await report('addenda_delivered', { reservation_id: reservationId, turn_id: id });
+            turnId = id;
+          },
+          acknowledged: () => report('addenda_acknowledged', { reservation_id: reservationId, turn_id: turnId }),
+        };
+      },
       signal: workerSignal });
   } catch {
     outcome = { ok: false };
@@ -586,6 +645,7 @@ async function main(configPath) {
   }
   if ((!author && !workspaces.size) || workspaces.size > 500) throw Error('Worker requires 1 to 500 Task workspace mappings');
   const scope = config.auto_provision?.task_ids ?? (author ? undefined : [...workspaces.keys()]);
+  const appServer = config.executor_transport === 'app_server';
   if (scope !== undefined && (!Array.isArray(scope) || !scope.length || scope.length > 500 ||
       !scope.every(id => taskIdPattern.test(id)))) throw Error('Invalid automatic checkout Task scope');
 
@@ -616,6 +676,8 @@ async function main(configPath) {
   }
   const control = connection();
   const delivery = connection();
+  const observations = connection();
+  const recovery = connection();
   const send = (request, options) => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) }, tool, options);
   const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   let nextPulse = 0;
@@ -625,14 +687,16 @@ async function main(configPath) {
     if (pulseRequest || (state === lastWorkerState && Date.now() < nextPulse)) return;
     lastWorkerState = state;
     nextPulse = Date.now() + 15_000;
-    pulseRequest = delivery.call({
-      request: { op:'worker_pulse', worker_id:workerId, worker_state:state },
+    pulseRequest = observations.call({
+      request: { op:'worker_pulse', worker_id:workerId, worker_state:state,
+        conversation_continuation:appServer, ...(scope ? { task_ids:scope } : {}) },
       worker_key:credential, ...(verification ? { verification } : {}),
     },tool).catch(() => { /* An unavailable observation must not block claims or leases. */ })
       .finally(() => { pulseRequest = undefined; });
   }
   let recoveryCursor = 0;
   let nextRecovery = 0;
+  let recovering;
   async function recoverIdleTelemetry() {
     if (active.size || signal.aborted || Date.now()<nextRecovery) return;
     nextRecovery=Date.now()+60_000;
@@ -648,7 +712,7 @@ async function main(configPath) {
       const telemetryDirectory=await workerTelemetryDirectory(root,taskId,workspaces.get(taskId));
       try {
         await reconcileAbandonedClaim({directory:telemetryDirectory,taskId,
-          readTask:id=>control.call({request:{op:'get',task_id:id},...(verification?{verification}:{})})});
+          readTask:id=>recovery.call({request:{op:'get',task_id:id},...(verification?{verification}:{})})});
         if (await recoverWorkerTelemetry({taskId,telemetryDirectory,verification,connector:managedConnection})) break;
       } catch {
         console.error('A saved Task telemetry delivery is still pending.');
@@ -661,7 +725,8 @@ async function main(configPath) {
       if (active.size < taskExecutionCapacity) {
         try {
           await admitStorage();
-          const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:true, ...(scope ? { task_ids:scope } : {}) };
+          const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:appServer,
+            live_addenda:appServer, ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
             if (error.status && error.status < 500) throw error;
             return send(request);
@@ -690,12 +755,16 @@ async function main(configPath) {
             continue;
           }
           pulse(result.dispatch_state === 'busy' ? 'busy' : 'available');
-          await recoverIdleTelemetry();
+          recovering ??= recoverIdleTelemetry().catch(() => {
+            console.error('A saved Task telemetry delivery is still pending.');
+          }).finally(() => { recovering = undefined; });
         } catch (error) {
           const detail = error.code?.startsWith?.('storage_') ? error.code :
             error.status === 409 ? 'claim_rejected' : 'task_connection_unavailable';
+          if (detail !== lastWorkerState || Date.now() >= nextPulse) {
+            console.error(new Date().toISOString() + ' Worker poll deferred (' + detail + ').');
+          }
           pulse(detail);
-          console.error('Worker poll deferred (' + detail + ').');
           if (error.status === 403 || error.status === 404) throw Error('Hosted Task worker is not configured or authorized');
         }
       } else pulse('busy');
@@ -704,8 +773,11 @@ async function main(configPath) {
   } finally {
     controller.abort();
     await Promise.all(active);
+    recovery.close();
+    observations.close();
     delivery.close();
     control.close();
+    await recovering;
   }
 }
 
