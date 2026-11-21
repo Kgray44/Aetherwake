@@ -17,7 +17,7 @@ const taskFields = object({
     kind:{type:'string',enum:requirementKinds},uri:string(1000),revision:string(128),
   },['kind','uri'])},
 },['title','objective','primary','profile_id','criteria']);
-const ownerCommands = ['edit','addendum','admit','configure_execution','pause','resume','cancel','retry'];
+const ownerCommands = ['edit','addendum','admit','configure_execution','pause','resume','cancel','retry','continue_candidate'];
 export const mcpOwnerCommands = new Set(ownerCommands);
 
 export const taskEngineToolSchema = object({
@@ -37,6 +37,8 @@ export const taskEngineToolSchema = object({
       text:string(2000,'Authenticated owner instructions for the chosen attempt.'),
       target:{type:'string',enum:['active_attempt','next_attempt']},
       attempt_id:string(160),
+      revision,
+      feedback:string(2000,'Owner instructions for continuing the exact candidate.'),
       changed_assumption:string(500,'Required for retry of a failed Task. Explain what changed since the failed attempt.'),
       executor:{type:'string',enum:['codex']},
       start_at:{type:['string','null'],description:'ISO 8601 datetime with offset. Null clears an existing schedule on configure_execution.'},

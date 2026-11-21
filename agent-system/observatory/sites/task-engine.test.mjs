@@ -461,6 +461,54 @@ test('archive keeps accepted prerequisites and feedback reopens at the accepted 
   assert.ok(next.task.objective.endsWith(feedback));
 });
 
+test('the owner can continue a partial candidate at the cycle limit without accepting it or replaying its lease', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('Long-running implementation');
+  await command(task,'admit',{executor:'codex'});
+  const claim=(continuation=false)=>call({op:'claim',operation_id:crypto.randomUUID(),
+    task_ids:[task.task.id],conversation_continuation:continuation,separate_execution_notes:true},'worker');
+  const report=(lease, fields)=>call({op:'report',task_id:task.task.id,operation_id:crypto.randomUUID(),
+    attempt_id:lease.attempt.id,lease:lease.lease,report:fields},'worker');
+  for (let i=0;i<2;i++) {
+    const prior=(await claim()).body.claim;
+    assert.equal((await report(prior,{type:'failed',failure:'Fixture provisioning failure'})).status,200);
+    assert.equal((await command(await get(task),'retry',{changed_assumption:'Fixed fixture preflight '+i})).status,200);
+  }
+  const old=(await claim()).body.claim;
+  const session=crypto.randomUUID(), revision='b'.repeat(40), branch='codex/aads-task-fixture';
+  assert.equal((await report(old,{type:'finished',result:'candidate',revision,session_id:session,branch})).status,200);
+  const reviewing=await get(task);
+  assert.equal(reviewing.lifecycle.cycle_attempts,3);
+  assert.equal(reviewing.lifecycle.can_continue_candidate,true);
+  const action={attempt_id:old.attempt.id,revision,feedback:'Finish publication and verify the hosted merge path.'};
+  assert.equal((await command(reviewing,'continue_candidate',action,'agent')).status,403);
+  assert.equal((await command(reviewing,'continue_candidate',{...action,revision:rev})).status,409);
+  const continued=await command(reviewing,'continue_candidate',action);
+  assert.equal(continued.status,200);
+  assert.equal(continued.body.task.id,task.task.id);
+  assert.equal(continued.body.task.objective,task.task.objective);
+  assert.equal(continued.body.task.owner_acceptance,'not_reviewed');
+  assert.equal(continued.body.lifecycle.cycle_attempts,0);
+  assert.equal(continued.body.lifecycle.can_continue_candidate,false);
+  assert.equal(continued.body.attempts.at(-1).state,'checkpointed');
+  assert.equal(continued.body.attempts.at(-1).candidate_revision,revision);
+  assert.equal(continued.body.events.at(-1).attempt_id,old.attempt.id);
+  assert.equal(continued.body.events.at(-1).revision,revision);
+  assert.equal((await command(reviewing,'continue_candidate',action)).status,409);
+  assert.equal((await report(old,{type:'heartbeat'})).status,409);
+  assert.equal((await claim()).body.claim,null);
+  const next=(await claim(true)).body.claim;
+  assert.equal(next.attempt.attempt_number,4);
+  assert.equal(next.attempt.revision,revision);
+  assert.equal(next.attempt.resume_session_id,session);
+  assert.equal(next.attempt.branch,branch);
+  assert.equal(next.attempt.resume_requires_clean,true);
+  assert.ok(next.execution_notes[0].endsWith(action.feedback));
+  assert.equal((await claim(true)).body.claim,null);
+  assert.equal((await report(old,{type:'heartbeat'})).status,409);
+  assert.equal((await report(next,{type:'heartbeat',session_id:session,branch:'codex/other'})).status,400);
+});
+
 test('versioned Task scope reaches the Codex worker with its input references and outcomes', async t => {
   const {call,register,command}=setup(t);
   const task=await register('task scope');

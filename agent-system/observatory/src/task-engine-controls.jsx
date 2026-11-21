@@ -11,13 +11,15 @@ import { executionActions, reviewRevision, workerDispatchStatus } from './task-e
 const actionLabels = {
   addendum:'Add owner instructions',
   recover_candidate:'Submit recovered candidate',
+  continue_candidate:'Continue from candidate',
   configure_execution:'Edit execution settings', admit: 'Admit to Codex queue', pause: 'Pause', cancel: 'Cancel Task', resume: 'Resume', retry: 'Retry',
   archive:'Archive Task', reopen:'Reopen with feedback', accept: 'Record owner acceptance', reject: 'Reject candidate', supersede: 'Supersede', associate: 'Attach evidence link',
 };
-const actionIcons = { addendum:Link2, recover_candidate:CheckCircle2, configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
+const actionIcons = { addendum:Link2, recover_candidate:CheckCircle2, continue_candidate:Play, configure_execution:Clock3, admit:Play, pause:Pause, resume:Play, retry:RotateCcw, accept:CheckCircle2,
   archive:Archive, reopen:RotateCcw, reject:XCircle, cancel:Square, supersede:GitBranch, associate:Link2, satisfy:CheckCircle2 };
 const actionHints = { addendum:'Send instructions at an attempt checkpoint', recover_candidate:'Send the checked revision for owner review', configure_execution:'Change the schedule and limits before the next attempt', admit:'Choose a start time and prerequisite policy', pause:'Suspend the queue or request a worker pause',
   resume:'Return the Task to the queue', retry:'Record what changed before retrying', accept:'Review evidence at the candidate revision',
+  continue_candidate:'Resume the original conversation from this candidate',
   reject:'Record why the candidate needs work', cancel:'Withdraw the Task or ask the worker to stop',
   archive:'Move the Task out of active views', reopen:'Queue a new attempt with owner feedback', supersede:'Point to the replacement Task', associate:'Link a PR, CI run, or artifact', satisfy:'Record an observed capability' };
 const featuredActions = ['admit','resume','accept','reopen','recover_candidate','retry','pause'];
@@ -119,6 +121,11 @@ export function TaskEngineControls({ detail, workerAccess, workerDispatch, publi
         change.reason = fields.get('reason');
       }
       if (action === 'reopen') change.feedback = fields.get('feedback');
+      if (action === 'continue_candidate') {
+        change.attempt_id = actionAttempt;
+        change.revision = candidateRevision;
+        change.feedback = fields.get('feedback');
+      }
       if (action === 'reject') change.reason = fields.get('reason');
       if (action === 'accept') change.evidence = task.acceptance.criteria.map(criterion => ({
         criterion_id: criterion.id, uri: fields.get(criterion.id), revision: candidateRevision,
@@ -231,6 +238,8 @@ export function TaskEngineControls({ detail, workerAccess, workerDispatch, publi
       {action === 'archive' && <p>Move this Task to Archived. Its timeline, attempts, and evidence remain available there.</p>}
       {action === 'reopen' && <><p>Queue a new Codex attempt from the last accepted revision. Previous approval remains in the timeline.</p>
         <label>Feedback for the next attempt<textarea name="feedback" required maxLength={2000}/></label></>}
+      {action === 'continue_candidate' && <><p>Queue a new attempt in the saved Codex conversation from <code>{candidateRevision}</code>. The candidate remains in the Task history for reference.</p>
+        <label>Remaining work<textarea name="feedback" required maxLength={2000}/></label></>}
       {action === 'cancel' && <p>Confirm cancellation. If an executor is active, the request waits for it to confirm that it stopped.</p>}
       {action === 'supersede' && <label>Replacement Task <select name="successor" required>
         <option value="">Choose a Task</option>
