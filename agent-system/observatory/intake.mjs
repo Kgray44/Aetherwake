@@ -29,7 +29,10 @@ export function proposalChecks(body) {
   return {
     outcome: cleanString(body.title,160).length >= 4 && validTaskObjective(body.objective),
     classification: validClasses.has(cleanString(body.primary,32)),
-    prerequisites: list(body.dependencies).length <= 100 && list(body.capabilities).length <= 100,
+    prerequisites: list(body.dependencies).length <= 100 && list(body.capabilities).length <= 100 &&
+      (body.merged_dependencies === undefined || Array.isArray(body.merged_dependencies) &&
+        body.merged_dependencies.length <= 100 && body.merged_dependencies.every(id =>
+          typeof id === 'string' && list(body.dependencies).includes(id))),
     inputs: validRequirements(body.requirements),
     deliverables: validDeliverables(body.deliverables),
     acceptance: Boolean(cleanString(body.profile_id,100)) &&
@@ -54,7 +57,9 @@ export function validateNewTask(b){
   if(!checks.inputs)throw Error('Use up to 50 typed requirement or input artifact references.');
   if(!checks.deliverables)throw Error('Use up to 30 planned deliverables of 500 characters each.');
   if(!checks.acceptance)throw Error('At least one acceptance criterion is required');
-  return {title,objective,primary,profile,ids,accept,capabilities:capabilities.map(x=>cleanString(x,128)).filter(Boolean),
+  return {title,objective,primary,profile,ids,accept,
+    mergedIds:[...new Set((b.merged_dependencies ?? []).map(id=>cleanString(id,128)).filter(Boolean))],
+    capabilities:capabilities.map(x=>cleanString(x,128)).filter(Boolean),
     requirements:b.requirements?.map(({kind,uri,revision})=>({kind,uri:uri.trim(),...(revision?.trim()?{revision:revision.trim()}:{})})),
     deliverables:b.deliverables?.map(item=>item.trim())};
 }
@@ -62,6 +67,6 @@ export function proposedTask(body,rev,uuid=()=>crypto.randomUUID()){
   const v=validateNewTask(body);
   if(!rev||!/^[0-9a-f]{40}$/.test(rev))throw Error('A checked-out Git revision is required to create a task');
   const now=new Date().toISOString(),id='task_'+uuid();
-  return {schema_version:1,record_type:'task',id,created_at:now,repository:'Kgray44/Aetherwake',revision:rev,title:v.title,objective:v.objective,classification:{primary:v.primary,secondary:[]},prerequisites:{task_ids:v.ids,capabilities:v.capabilities},acceptance:{profile_id:v.profile,criteria:v.accept},state:'proposed',owner_acceptance:'not_reviewed',artifacts:[],
+  return {schema_version:1,record_type:'task',id,created_at:now,repository:'Kgray44/Aetherwake',revision:rev,title:v.title,objective:v.objective,classification:{primary:v.primary,secondary:[]},prerequisites:{task_ids:v.ids,capabilities:v.capabilities,...(v.mergedIds.length?{merged_task_ids:v.mergedIds}:{})},acceptance:{profile_id:v.profile,criteria:v.accept},state:'proposed',owner_acceptance:'not_reviewed',artifacts:[],
     ...(v.requirements?.length?{requirements:v.requirements}:{}),...(v.deliverables?.length?{deliverables:v.deliverables}:{})};
 }

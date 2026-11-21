@@ -11,6 +11,7 @@ import {ownerReviewByCriterion} from './evidence-status.mjs';
 import {GitHubFeed} from './github-feed.jsx';
 import {ProposalControls} from './proposal-controls.jsx';
 import {activityHref,parseActivityHref} from './github-activity.mjs';
+import {IntegrationTaskStatus,MergeWorkspace,useIntegrationRuns} from './merge-workspace.jsx';
 import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
@@ -39,7 +40,7 @@ const GitHubActivityDetails=lazy(()=>import('./github-activity-pages.jsx').then(
 const GitHubActivityList=lazy(()=>import('./github-activity-pages.jsx').then(m=>({default:m.GitHubActivityList})));
 
 const types=['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration'];
-const nav=[['overview','Overview',Activity],['tasks','Task Control Center',ListTodo],['analytics','Engineering analytics',BarChart3],['pulls','Pull requests',GitPullRequest],['runs','CI runs',Workflow],['create','New task',Plus]];
+const nav=[['overview','Overview',Activity],['tasks','Task Control Center',ListTodo],['merge','Merge Workspace',GitPullRequest],['analytics','Engineering analytics',BarChart3],['pulls','Pull requests',GitPullRequest],['runs','CI runs',Workflow],['create','New task',Plus]];
 const fmt=v=>v&&!Number.isNaN(Date.parse(v))?new Date(v).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';
 const date=v=>v&&!Number.isNaN(Date.parse(v))?new Date(v).toLocaleDateString(undefined,{month:'short',day:'numeric'}):'Unavailable';
 const short=v=>v?String(v).slice(0,10):'Unavailable';
@@ -67,13 +68,15 @@ function taskDraft(form) {
     title: f.get('title'), objective: f.get('objective'), primary: f.get('primary'), profile_id: f.get('profile_id'),
     visibility: f.get('visibility') || 'private', priority: f.get('priority') || 'normal',
     dependencies: split(f.get('dependencies')), capabilities: split(f.get('capabilities')),
+    ...(f.has('merged_dependencies')?{merged_dependencies:split(f.get('merged_dependencies'))}:{}),
     ...readTaskScope(f),
     criteria: String(f.get('criteria') || '').split('\n').map(s => s.trim()).filter(Boolean),
   };
 }
 
 function TaskAdmission({checks,draft,tasks,summaries,publicIntake,publicationConfigured}) {
-  const graph=dependencyGraph({prerequisites:{task_ids:draft.dependencies,capabilities:draft.capabilities}},tasks,{summaries});
+  const graph=dependencyGraph({prerequisites:{task_ids:draft.dependencies,capabilities:draft.capabilities,
+    merged_task_ids:draft.merged_dependencies}},tasks,{summaries});
   const steps = [
     ['Explicit outcome', checks.outcome, 'Enter a title (4+ characters) and objective (12 to 100,000 characters).'],
     ['Task classification', checks.classification, 'Choose a primary category.'],
@@ -103,11 +106,12 @@ const [hasLiveFeed,setHasLiveFeed]=useState(false);
 const [routeHash,setRouteHash]=useState(()=>window.location.hash);
 const githubView=parseActivityHref(routeHash);
 const taskRoute=parseTaskHref(routeHash);
+const mergeRoute=/^#merge(?:\?(.*))?$/.exec(routeHash);
 const [githubFilters,setGitHubFilters]=useState({
   pulls:{query:'',state:'',group:'',oldest:false},
   runs:{query:'',state:'',group:'',oldest:false}
 });
-const page=githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute.id ? 'detail' : 'tasks') : localPage;
+const page=mergeRoute ? 'merge' : githubView ? (githubView.id ? 'github-detail' : githubView.kind) : taskRoute ? (taskRoute.id ? 'detail' : 'tasks') : localPage;
 const onTaskDetail=page==='detail';
 const activeNavigation=githubView?.kind ?? (onTaskDetail?'tasks':page);
 useEffect(()=>{
@@ -194,7 +198,7 @@ useEffect(()=>{
 },[page]);
 const [legacyHistory,setLegacyHistory]=useState(null);
 const [deployedRevision,setDeployedRevision]=useState(null);
-const watchingTasks=(Boolean(taskRoute)||page==='overview')&&!demo;
+const watchingTasks=(Boolean(taskRoute)||page==='overview'||page==='merge')&&!demo;
 const watchingExecution=watchingTasks&&engine.status==='available'&&(Boolean(engine.workerDispatch)||hasLiveTaskWork(engine.tasks));
 useEffect(()=>{
   if(!watchingExecution)return;
@@ -259,6 +263,7 @@ const privateControls=!demo&&hasLiveFeed ? {...proposals?.controls,...Object.fro
 const workerAccess=!demo&&engine.status==='available'&&['configured','not_configured'].includes(engine.workerAccess)?engine.workerAccess:undefined;
 const activityFor=task=>taskActivity(task,related(task.id,'attempt'),execution?.events??[],demo?null:summaries.get(task.id)?.lifecycle,workerAccess);
 const current=tasks.find(t=>t.id===taskRoute?.id);
+const integrationRuns=useIntegrationRuns(verificationHeaders,!demo&&Boolean(current&&hasLiveFeed),current?.id);
 const publication=current?proposals?.publication?.[current.id]:null;
 const engineSummary=!demo&&current&&publication!=='pending'?summaries.get(current.id):null;
 const dependencyRevision=JSON.stringify((engineSummary?.task.prerequisites.task_ids??[]).map(id=>{
@@ -275,7 +280,8 @@ const taskAudits=canonical?.events??(legacyHistory?.taskId===current?.id?legacyH
 const taskTelemetrySource=demo||!current?null:execution?.sources?.find(source=>source.task_id===current.id);
 const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attempt));
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
-const {pricing,loadingPrice}=useOpenAIPricing(taskAttempts,page==='detail'&&!demo,verificationHeaders);
+const {pricing,loadingPrice}=useOpenAIPricing([...taskAttempts,...integrationRuns.runs.flatMap(run=>run.source_repairs ?? [])],
+  page==='detail'&&!demo,verificationHeaders);
 const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
 const dispatchStatus=workerDispatchStatus(engine.workerDispatch,workerAccess);
 const nextAction=taskNextAction(canonical,workerAccess,engine.workerDispatch);
@@ -291,6 +297,10 @@ const select=id=>{
 };
 const proposalControls=current&&!demo&&Object.hasOwn(proposals?.controls??{},current.id)?proposals.controls[current.id]:null;
 const navigate=id=>{
+  if(id==='merge'){
+    window.location.hash='#merge';
+    return;
+  }
   if(id==='pulls'||id==='runs'){
     window.location.hash=activityHref(id);
     return;
@@ -354,7 +364,7 @@ const retryPublication=async()=>{
     await refresh(false);
   }catch(err){setPublishError(err.message)}finally{setSaving(false)}
 };
-const title=({overview:'Engineering overview',tasks:'Task Control Center',detail:current?.title??'Task inspection',analytics:'Engineering analytics',create:'Create task',pulls:'Pull requests',runs:'CI runs','github-detail':githubView?.kind==='pulls'?'Pull request':'CI run'})[page],desc=({overview:'Systems intelligence / Engineering operations',tasks:'Create and manage private proposals. Inspect Tasks and their execution records.',detail:'Complete execution trace and acceptance evidence',analytics:'Delivery, verification, and execution observations',create:'Structured engineering task intake',pulls:'Find changes and inspect their GitHub details',runs:'Inspect workflow outcomes, jobs, and steps','github-detail':'Kgray44 / Aetherwake'})[page];
+const title=({overview:'Engineering overview',tasks:'Task Control Center',detail:current?.title??'Task inspection',merge:'Merge Workspace',analytics:'Engineering analytics',create:'Create task',pulls:'Pull requests',runs:'CI runs','github-detail':githubView?.kind==='pulls'?'Pull request':'CI run'})[page],desc=({overview:'Systems intelligence / Engineering operations',tasks:'Create and manage private proposals. Inspect Tasks and their execution records.',detail:'Complete execution trace and acceptance evidence',merge:'Inspect pull requests, required checks, and verified merges into main',analytics:'Delivery, verification, and execution observations',create:'Structured engineering task intake',pulls:'Find changes and inspect their GitHub details',runs:'Inspect workflow outcomes, jobs, and steps','github-detail':'Kgray44 / Aetherwake'})[page];
 useEffect(()=>{document.title=title+' · Aetherwake Observatory'},[title]);
 const githubUi={Metric,Panel,Rise,Status};
 const jumpToTaskSection=id=>{
@@ -382,13 +392,17 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   headers={verificationHeaders} live={!demo&&Boolean(proposals)} ui={githubUi}
   investigation={{ records, events: execution?.events ?? [], github,
     openTask: taskId => { navigate('detail'); select(taskId); } }}/></Suspense>}
+{page==='merge'&&<MergeWorkspace headers={verificationHeaders} demo={demo}
+  initialTask={new URLSearchParams(mergeRoute?.[1]).get('task')}
+  pulls={github?.pulls?.items?.filter(pr=>pr.state==='open')??[]}
+  acceptedTasks={tasks.filter(task=>task.owner_acceptance==='accepted')}/>}
 {page==='analytics'&&<Suspense fallback={<p role="status">Loading engineering analytics…</p>}><EngineeringAnalyticsPage
   records={records} events={execution?.events} github={demo?null:github} execution={demo?null:execution}
   ready={!demo&&hasLiveFeed} ui={githubUi} headers={verificationHeaders}/></Suspense>}
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 {conversation&&<a className="primary-button" href={codexThreadHref(conversation)}>Open in Codex</a>}
 <TaskReportExport key={current.id} disabled={!demo&&(loadingPrice||!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
-  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,workerAccess,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
+  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,workerAccess,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,integrationRuns:integrationRuns.runs,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
@@ -399,7 +413,9 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-evidence')}>Evidence</button>
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-telemetry')}>Telemetry</button>
 </nav>
-{detailState==='completed'&&<div className="task-completion" role="status"><CheckCircle2 size={24} aria-hidden="true"/><div><strong>Task complete</strong><small>Owner accepted the verified result.</small></div></div>}
+{detailState==='completed'&&<div className="task-completion" role="status"><CheckCircle2 size={24} aria-hidden="true"/><div><strong>Implementation complete</strong><small>Owner accepted the verified result.</small></div></div>}
+{!demo&&(canonical?.task??current).owner_acceptance==='accepted'&&
+  <IntegrationTaskStatus {...integrationRuns} taskId={current.id} attemptId={canonical?.attempts.at(-1)?.id}/>}
 {statusBanner&&<div className={'task-completion task-execution-banner '+(statusBanner.tone??'neutral')} role="status">
   {statusBanner.tone==='error'?<CircleAlert size={24} aria-hidden="true"/>:<Activity size={24} aria-hidden="true"/>}
   <div><strong>{statusBanner.title}</strong>{statusBanner.description&&<small>{statusBanner.description}</small>}
@@ -456,6 +472,6 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   <TaskDeliveryEvidence task={canonical.task} lifecycle={canonical.lifecycle}/>
 </Suspense></Panel></Rise>}
 {page==='detail'&&current&&<Rise delay={.17}><Panel title="Full engineering record"><RawTaskRecord key={current.id} records={{task:current,attempts:related(current.id,'attempt'),evidence:related(current.id,'evidence'),telemetry:related(current.id,'telemetry'),context_snapshots:related(current.id,'context_snapshot'),verification_profiles:profiles.filter(p=>p.profile_id===current.acceptance?.profile_id)}}/></Panel></Rise>}
-{page==='create'&&<div className="detail-layout"><Rise><Panel title="Define engineering task" kicker="CONTROL PLANE / INTAKE"><form className="form" onSubmit={create} onChange={e=>setDraft(taskDraft(e.currentTarget))}><label>Task title <input name="title" placeholder="Vela intelligence state transitions" required minLength={4} maxLength={160}/></label><label>Tangible objective <textarea name="objective" placeholder="Define exactly what behavior must exist, with clear scope…" required/></label><div className="form-grid"><label>Primary category <select name="primary">{types.map(c=><option key={c}>{c}</option>)}</select></label><label>Verification profile <input name="profile_id" defaultValue="visual-gpu" required/></label></div>{engine.status==='available'&&<label>Priority <select name="priority" defaultValue="normal">{['low','normal','high','urgent'].map(priority=><option key={priority}>{priority}</option>)}</select></label>}<label>Prerequisite task IDs <input name="dependencies" placeholder="task_001, task_002"/></label><label>Required capabilities <input name="capabilities" placeholder="GPU renderer, visual test harness"/></label><TaskScopeFields checks={checks}/><label>Acceptance criteria <textarea name="criteria" required placeholder={'Transitions match approved reference\nPerformance target is met\nOwner visual approval recorded'}/></label>{canPublish&&<label>Visibility <select name="visibility" defaultValue="private"><option value="private">Private Observatory</option><option value="public">Public GitHub proposal</option></select></label>}{engine.status==='error'&&!publicIntake&&<p className="notice error" role="alert">Task engine unavailable: {engine.error}</p>}{formError&&<div className="notice error"><CircleAlert size={16}/>{formError}</div>}<div className="form-actions"><motion.button type="submit" className="primary-button" disabled={saving||(!publicIntake&&!['available','absent'].includes(engine.status))||!Object.values(checks).every(Boolean)} whileTap={{scale:.97}}><Plus size={16}/>{saving?'Saving…':publicIntake?(proposals.publication_configured?'Create and publish proposal':'Queue public proposal'):(engine.status==='available'?'Create Task':'Create proposed task')}</motion.button><button type="button" className="quiet-button" onClick={()=>navigate('tasks')}>Cancel</button></div></form></Panel></Rise><StickySectionAside><Rise delay={.08}><TaskAdmission checks={checks} tasks={tasks} summaries={engine.status==='available'?summaries:undefined} draft={draft} publicIntake={publicIntake} publicationConfigured={proposals?.publication_configured}/></Rise></StickySectionAside></div>}
+{page==='create'&&<div className="detail-layout"><Rise><Panel title="Define engineering task" kicker="CONTROL PLANE / INTAKE"><form className="form" onSubmit={create} onChange={e=>setDraft(taskDraft(e.currentTarget))}><label>Task title <input name="title" placeholder="Vela intelligence state transitions" required minLength={4} maxLength={160}/></label><label>Tangible objective <textarea name="objective" placeholder="Define exactly what behavior must exist, with clear scope…" required/></label><div className="form-grid"><label>Primary category <select name="primary">{types.map(c=><option key={c}>{c}</option>)}</select></label><label>Verification profile <input name="profile_id" defaultValue="visual-gpu" required/></label></div>{engine.status==='available'&&<label>Priority <select name="priority" defaultValue="normal">{['low','normal','high','urgent'].map(priority=><option key={priority}>{priority}</option>)}</select></label>}<label>Prerequisite task IDs <input name="dependencies" placeholder="task_001, task_002"/></label><label>Prerequisites that must merge into main <input name="merged_dependencies"/><small>Use Task IDs from the prerequisite list above.</small></label><label>Required capabilities <input name="capabilities" placeholder="GPU renderer, visual test harness"/></label><TaskScopeFields checks={checks}/><label>Acceptance criteria <textarea name="criteria" required placeholder={'Transitions match approved reference\nPerformance target is met\nOwner visual approval recorded'}/></label>{canPublish&&<label>Visibility <select name="visibility" defaultValue="private"><option value="private">Private Observatory</option><option value="public">Public GitHub proposal</option></select></label>}{engine.status==='error'&&!publicIntake&&<p className="notice error" role="alert">Task engine unavailable: {engine.error}</p>}{formError&&<div className="notice error"><CircleAlert size={16}/>{formError}</div>}<div className="form-actions"><motion.button type="submit" className="primary-button" disabled={saving||(!publicIntake&&!['available','absent'].includes(engine.status))||!Object.values(checks).every(Boolean)} whileTap={{scale:.97}}><Plus size={16}/>{saving?'Saving…':publicIntake?(proposals.publication_configured?'Create and publish proposal':'Queue public proposal'):(engine.status==='available'?'Create Task':'Create proposed task')}</motion.button><button type="button" className="quiet-button" onClick={()=>navigate('tasks')}>Cancel</button></div></form></Panel></Rise><StickySectionAside><Rise delay={.08}><TaskAdmission checks={checks} tasks={tasks} summaries={engine.status==='available'?summaries:undefined} draft={draft} publicIntake={publicIntake} publicationConfigured={proposals?.publication_configured}/></Rise></StickySectionAside></div>}
 </motion.div><footer><span>ENGINEERING RECORDS ARE NOT AGENT INTENT · EVIDENCE IS NOT APPROVAL</span><span>{deployedRevision?'BUILD '+short(deployedRevision)+' · ':''}CONTROL SURFACE / V1</span></footer></main></div>}
 createRoot(document.getElementById('root')).render(<MotionConfig reducedMotion="user"><App/></MotionConfig>);

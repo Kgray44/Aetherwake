@@ -5,6 +5,8 @@ import { useOpenAIPricing } from './use-openai-pricing.jsx';
 import { loadedSessionUsage } from './task-usage-accounting.mjs';
 import { Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, Clock3, Cpu, FileCheck2, GitPullRequest, Workflow } from 'lucide-react';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
+import { integrationAnalytics, integrationRepairPricing } from './integration-analytics.mjs';
+import { useIntegrationRuns } from './merge-workspace.jsx';
 import { activityHref, activityId, activityState, newestActivity, pullRepositoryTotals, runRepositoryTotal } from './github-activity.mjs';
 
 const noRows = [];
@@ -178,6 +180,10 @@ function TokenAccounting({ accounting, receipts, ready, headers }) {
 
 export function EngineeringAnalyticsPage({ records, events, github, execution, ready, ui, headers }) {
   const { Metric, Panel, Rise, Status } = ui;
+  const integration = useIntegrationRuns(headers, ready);
+  const merge = integrationAnalytics(integration.runs);
+  const { pricing:repairPricing } = useOpenAIPricing(integration.runs.flatMap(run=>run.source_repairs ?? []), ready, headers);
+  const repairEstimate = integrationRepairPricing(integration.runs, repairPricing);
   const data = useMemo(() => buildEngineeringAnalytics({
     records: ready ? records : undefined,
     events: ready && execution ? events : undefined,
@@ -201,6 +207,22 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
     ['Recent median merge time', spanTime(data.pulls.medianMergeMs), count(data.pulls.mergeSamples) + ' observed merges in the loaded window', Clock3]
   ];
   return <>
+    {ready && <Rise><Panel title="Integration and merge">
+      {integration.loading ? <p role="status">Loading integration evidence…</p> :
+        integration.error ? <p>Integration evidence unavailable.</p> : <MetricRows fields={[
+          ['Recent integration runs', count(merge.runs)], ['Verified on main', count(merge.merged)],
+          ['Blocked integrations', count(merge.blocked)], ['Exact-head CI attempts', count(merge.ciAttempts)],
+          ['CI rerun receipts', count(merge.reruns)], ['Automatic CI rerun receipts',count(merge.automaticReruns)],
+          ['Codex source repairs', count(merge.sourceRepairs)],
+          ['Observed repair uncached input tokens', count(merge.repairUsage?.uncached)],
+          ['Observed repair cached input tokens', count(merge.repairUsage?.cached)],
+          ['Observed repair output tokens', count(merge.repairUsage?.output)],
+          ['Complete repair usage receipts', count(merge.repairUsage?.completeTurns)],
+          ['OpenAI API reference estimate for repairs', repairEstimate.total === null ? 'Unavailable' :
+            formatReferenceCost(repairEstimate.total) + ' across ' + repairEstimate.attempts.length + ' priced repairs'],
+          ['Actual integration billing', 'Unavailable'],
+        ]}/>}
+    </Panel></Rise>}
     <div className="metrics analytics-metrics">{stats.map(([name,value,meta,Icon], index) =>
       <Metric key={name} name={name} value={value} meta={meta} Icon={Icon} index={index}/>)}</div>
     <Rise><Panel title="Engineering activity" right={<span className="panel-meta">14 UTC days · loaded records</span>}>

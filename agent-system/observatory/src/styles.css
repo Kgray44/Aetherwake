@@ -436,3 +436,30 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
   .execution-timing .trace-row.quiet-button { grid-template-columns:minmax(0,1fr) auto; }
   .execution-timing .trace-track { grid-row:2; grid-column:1 / -1; }
 }
+.integration-workspace { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.integration-workspace > .panel { min-width: 0; padding: clamp(1rem, 3vw, 1.75rem); }
+.integration-workspace :is(h2, h3) { margin: 0 0 .85rem; }
+.integration-workspace form { display: grid; gap: .75rem; margin-block: 1rem; }
+.integration-workspace label:not(.task-check) { display: grid; gap: .35rem; }
+.integration-workspace form button { justify-self: start; }
+.integration-actions, .integration-heading { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; }
+.integration-heading { justify-content: space-between; }
+.integration-workspace button[aria-pressed="true"] { outline: 1px solid currentColor; outline-offset: -2px; }
+.integration-workspace :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.integration-workspace :is(.integration-details, .integration-message) { grid-column: 1 / -1; }
+.integration-message:empty { display: none; }
+.integration-runs ul, .integration-evidence { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.integration-runs li > button, .integration-evidence li { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; width: 100%; text-align: start; }
+.integration-evidence li { border-bottom: 1px solid rgba(155, 204, 230, .16); padding-block: .45rem; }
+.integration-evidence small { display: block; overflow-wrap: anywhere; }
+.integration-details section { margin-block: 1rem; }
+.integration-revisions { display: grid; gap: .6rem; }
+.integration-revisions div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: .4rem; }
+.integration-revisions dd { margin: 0; }
+.integration-revisions code, .integration-sha { overflow-wrap: anywhere; }
+.integration-controls > button { margin: .35rem .5rem .35rem 0; }
+@media (max-width: 750px) {
+  .integration-workspace { grid-template-columns: minmax(0, 1fr); }
+  .integration-revisions div { grid-template-columns: minmax(0, 1fr); }
+  .integration-evidence li { flex-wrap: wrap; }
+}

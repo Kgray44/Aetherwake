@@ -6,7 +6,9 @@ import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub, cachedGitHubDetail, peekGitHub, peekTaskGitHubDetails } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
-import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
+import { ciAccess, ciStatus, integrationCIRerunner, submitCI } from './ci-controls.mjs';
+import { integrationAccess, integrationOperation, integrationPath } from './integration-runs.mjs';
+import { githubIntegration } from './github-integration.mjs';
 import { combinedTelemetry, ingestTaskTelemetry, sha256, telemetryBaseline } from './task-telemetry.mjs';
 import { createOpenAIModelPricing } from './openai-pricing.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
@@ -53,9 +55,10 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs|histories)\/([1-9][0-9]*)$/);
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
     const ciActions = url.pathname === '/api/github/actions';
+    const integrations = url.pathname === integrationPath;
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
-    if (!overview && !taskEngine && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
-    const readOnly = overview || detailsRoute || ((control || automaticSync || ciActions) && request.method === 'GET');
+    if (!overview && !taskEngine && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions && !integrations) return error('Not found', 404);
+    const readOnly = overview || detailsRoute || ((control || automaticSync || ciActions || integrations) && request.method === 'GET');
     if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
@@ -67,6 +70,23 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (integrations) {
+      if (owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID) return error('Integration owner access required', 403);
+      const access = { ...integrationAccess(env, owner, namespace), ci_enabled: ciAccess(env, owner, verification).enabled };
+      let body;
+      try {
+        body = readOnly
+          ? url.searchParams.has('id') ? { op: 'get', id: url.searchParams.get('id') } :
+            { op: 'list', task_id: url.searchParams.get('task_id') ?? undefined }
+          : JSON.parse(await readBounded(request.body, 4096));
+      } catch (cause) { return error('Invalid integration request', cause instanceof RangeError ? 413 : 400); }
+      const github = githubIntegration(fetcher, env.GITHUB_READ_TOKEN, access.merge_enabled ? env.GITHUB_INTEGRATION_MERGE_TOKEN : null,
+        access.publish_enabled ? env.GITHUB_INTEGRATION_PUBLISH_TOKEN : null);
+      const rerunJob = integrationCIRerunner({env,owner,verification,fetcher});
+      const result = await integrationOperation({ db: env.DB, owner, namespace, github, access, body, rerunJob });
+      return json(result.body, result.status);
+    }
 
     if (taskEngine) {
       let body;
@@ -261,7 +281,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
-      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent, taskRevision: () => taskRevision(env)});
+      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent, fetcher, taskRevision: () => taskRevision(env)});
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         try { return await api(request, env, url); }
         catch { return error('Observatory data temporarily unavailable', 503); }

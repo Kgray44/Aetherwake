@@ -1,7 +1,8 @@
 /** Use the owner's installed Sites plugin through Codex. No model turn or browser session is needed. */
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { relative } from 'node:path';
+import { promisify } from 'node:util';
 import { parseDevelopmentNote } from '../../agent-system/observatory/development-notes.mjs';
 import { appServerTurnProfile } from './provider-events.mjs';
 
@@ -9,6 +10,9 @@ const server = 'codex_apps';
 const telemetryTool = 'aetherwake_engineering_observatory.sync_task_telemetry';
 const timeoutMs = 8000;
 const startupTimeoutMs = 180_000;
+const localOnlyFlags = ['--disable','apps','--disable','plugins','--disable','remote_plugin','-c','web_search="disabled"'];
+const localMcpName = /^[A-Za-z0-9_-]{1,64}$/;
+const runFile = promisify(execFile);
 
 const disconnected = () => Object.assign(Error('Codex connector is unavailable'), {code:'connector_disconnected'});
 
@@ -24,13 +28,37 @@ async function untilAborted(promise, signal) {
   finally { signal.removeEventListener('abort',abort); }
 }
 
-export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex',
-  spawnProcess = spawn } = {}) {
+function connectorEnvironment() {
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
+  delete env.AADS_INTEGRATION_PUSH_TOKEN;
+  return env;
+}
+
+export async function openLocalRepairConnector({ cwd, executable, signal, spawnProcess } = {}) {
+  let serverNames;
+  try {
+    const {stdout}=await runFile(executable,[...localOnlyFlags,'mcp','list','--json'],{
+      cwd,signal,env:connectorEnvironment(),windowsHide:true,timeout:5000,maxBuffer:65536,
+    });
+    const configured=JSON.parse(stdout);
+    if (!Array.isArray(configured) || configured.length>64 ||
+        configured.some(server=>typeof server?.name!=='string'||!localMcpName.test(server.name))) throw Error();
+    serverNames=[...new Set(configured.map(server=>server.name))];
+  } catch { throw Error('Local-only repair could not confirm the configured MCP server names'); }
+  return openObservatoryConnector({cwd,executable,signal,spawnProcess,localOnly:true,disabledMcpServers:serverNames});
+}
+
+export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = telemetryTool, executable = 'codex',
+  spawnProcess = spawn, localOnly = false, disabledMcpServers = [] } = {}) {
+  const env = connectorEnvironment();
   const child = spawnProcess(executable, ['app-server','--listen','stdio://',
     '-c','sandbox_workspace_write.network_access=false','-c','sandbox_workspace_write.writable_roots=[]',
     '-c','sandbox_workspace_write.exclude_tmpdir_env_var=true','-c','sandbox_workspace_write.exclude_slash_tmp=true',
+    ...(localOnly ? [...localOnlyFlags,...disabledMcpServers.flatMap(name=>{
+      if (typeof name!=='string'||!localMcpName.test(name)) throw Error('Invalid local MCP server name');
+      return ['-c','mcp_servers.'+name+'.enabled=false'];
+    })] : []),
   ], {
     cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
   });
@@ -114,7 +142,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
   }
   const identifier = value => typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(value);
   async function runWorkspaceTurn({cwd:workspace,prompt,resumeSessionId,signal:runSignal,onSession,
-    onDevelopmentNote,onTurnStarted,onTurnAccepted,onTurnFinished,onUsageSnapshot,
+    onDevelopmentNote,onTurnStarted,onTurnAccepted,onTurnFinished,onUsageSnapshot,onUsageBudget,
     captureFreshThreadUsage = !resumeSessionId}) {
     runSignal.throwIfAborted();
     await initialized;
@@ -125,6 +153,16 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     if (!identifier(id)||(resumeSessionId&&id!==resumeSessionId)||started.thread.ephemeral===true||started.sandbox?.type!=='workspaceWrite'||started.sandbox.networkAccess!==false||
         !started.sandbox.writableRoots?.every(root=>relative(workspace,root)==='')) {
       throw Error('App Server workspace policy was not confirmed');
+    }
+    if (localOnly) {
+      const inventory = await rpc('mcpServerStatus/list', { threadId:id, limit:64 }, timeoutMs);
+      const disabled = server => server?.runtimeStatus==='disabled' && server.tools &&
+        typeof server.tools==='object' && !Array.isArray(server.tools) && Object.keys(server.tools).length===0 &&
+        Array.isArray(server.resources) && server.resources.length===0 &&
+        Array.isArray(server.resourceTemplates) && server.resourceTemplates.length===0;
+      if (!Array.isArray(inventory?.data) || !inventory.data.every(disabled) || inventory.nextCursor) {
+        throw Error('Local-only repair requires every MCP server to be explicitly disabled');
+      }
     }
     const identity=identifier(started.model)&&identifier(started.modelProvider)
       ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
@@ -150,6 +188,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
           total.totalTokens<(usage?.totalTokens??0)) return;
       const changed=total.totalTokens!==usage?.totalTokens;
       usage=total;
+      if (changed) onUsageBudget?.(total);
       const now=performance.now();
       if (!onUsageSnapshot||!changed||usageWrite||samples>=16||now-lastSampleAt<15_000) return;
       lastSampleAt=now;
@@ -223,7 +262,7 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
       if (status!=='completed'&&onUsageSnapshot&&usage&&JSON.stringify(usage)!==JSON.stringify(publishedUsage)) {
         await publishUsage(usage);
       }
-      return {status,usage,sessionId:id,profile:profile.measurements(status==='completed',limitedStart)};
+      return {status,usage,sessionId:id,turnId,profile:profile.measurements(status==='completed',limitedStart)};
     } finally {
       runSignal.removeEventListener('abort',abort);
       threadListeners.delete(id);
