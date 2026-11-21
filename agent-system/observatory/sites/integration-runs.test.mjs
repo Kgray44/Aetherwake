@@ -642,12 +642,18 @@ test('GitHub merge readback requires a closed merged PR and ancestry on main', a
   let linked = false;
   let mergedFlag = true;
   let headRevision = head;
-  const fetcher = async url => {
+  let mergeReadbackHead = head;
+  const fetcher = async (url, init) => {
     const path = new URL(url).pathname;
-    if (path.endsWith('/pulls/5')) return Response.json({
-      number: 5, state: 'closed', merged: mergedFlag, merged_at: '2026-11-21T00:00:00Z', merge_commit_sha: merged,
-      base: { repo, ref: 'main', sha: base }, head: { sha: headRevision },
-    });
+    if (path.endsWith('/pulls/5')) {
+      const version = new Headers(init.headers).get('X-GitHub-Api-Version');
+      const legacy = version === '2022-11-28';
+      return Response.json({
+        number: 5, state: 'closed', merged: mergedFlag, merged_at: '2026-11-21T00:00:00Z',
+        ...(legacy ? {merge_commit_sha:merged} : {}),
+        base: {repo,ref:'main',sha:base},head:{sha:legacy ? mergeReadbackHead : headRevision},
+      });
+    }
     if (path.endsWith('/git/ref/heads/main')) return Response.json({ ref: 'refs/heads/main', object: { sha: base, type: 'commit' } });
     if (path.includes('/compare/')) return Response.json({ status: linked ? 'ahead' : 'diverged', merge_base_commit: { sha: merged } });
     throw new Error('Unexpected URL');
@@ -656,7 +662,9 @@ test('GitHub merge readback requires a closed merged PR and ancestry on main', a
   const run = { pr_number: 5, head_sha: head };
   assert.equal((await github.inspect(run)).reason, 'merge_readback');
   linked = true;
-  assert.equal((await github.inspect(run)).state, 'merged');
+  assert.equal((await github.inspect(run)).merged_sha, merged);
+  mergeReadbackHead = base;
+  assert.equal((await github.inspect(run)).reason, 'merge_readback');
   mergedFlag = false;
   assert.equal((await github.inspect(run)).reason, 'pr_state');
   headRevision = base;

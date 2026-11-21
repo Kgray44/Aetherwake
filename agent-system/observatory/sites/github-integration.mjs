@@ -4,6 +4,7 @@ import { githubStepLog } from './github-step-logs.mjs';
 
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const apiVersion = '2026-03-10';
+const mergeCommitReadVersion = '2022-11-28';
 const passing = new Set(['success', 'neutral', 'skipped']);
 const pending = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending', 'expected']);
 
@@ -25,13 +26,14 @@ const runLink = id => 'https://github.com/' + REPO + '/actions/runs/' + id;
 const observedTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 
 export function githubIntegration(fetcher, token, mergeToken, publishToken) {
-  const read = (url, init) => fetcher(url, { ...init,
-    headers: { ...init.headers, 'X-GitHub-Api-Version': apiVersion } });
+  const read = (url, init, version = apiVersion) => fetcher(url, { ...init,
+    headers: { ...init.headers, 'X-GitHub-Api-Version': version } });
   async function inspect({ pr_number: number, head_sha: head, task: accepted, reviewed_source, expected_base: base,
     published_branch: publishedBranch }) {
     const task = reviewed_source ?? accepted;
     if (!token) return blocked('repository_or_credential', 'Authenticated GitHub reads are required.');
-    const reader = githubReader(read, AbortSignal.timeout(10_000), token, Date.now, null, 0);
+    const signal = AbortSignal.timeout(10_000);
+    const reader = githubReader(read, signal, token, Date.now, null, 0);
     async function get(path, requireComplete = true) {
       const result = await reader.get(path);
       if (requireComplete && result.hasNext) throw new RangeError('Incomplete GitHub response');
@@ -62,16 +64,31 @@ export function githubIntegration(fetcher, token, mergeToken, publishToken) {
         evidence.tree_sha = commit.commit.tree.sha;
       }
       if (pr.merged === true) {
-        if (pr.state !== 'closed' || !observedTime(pr.merged_at) || !isRevision(pr.merge_commit_sha)) {
+        if (pr.state !== 'closed' || !observedTime(pr.merged_at)) {
           return blocked('merge_readback', 'GitHub did not provide a complete merge record.', evidence);
         }
-        if (main.object.sha !== pr.merge_commit_sha) {
-          const relation = await get('/compare/' + pr.merge_commit_sha + '...' + main.object.sha + '?per_page=1', false);
-          if (relation?.status !== 'ahead' || relation.merge_base_commit?.sha !== pr.merge_commit_sha) {
+        let mergedSha = pr.merge_commit_sha;
+        if (!isRevision(mergedSha)) {
+          // The async merge API version can omit the resulting SHA on the PR.
+          // Read the older representation for the same closed, exact-head PR.
+          const legacy = githubReader((url, init) => read(url, init, mergeCommitReadVersion),
+            signal, token, Date.now, null, 0);
+          const { data, hasNext } = await legacy.get('/pulls/' + number);
+          if (hasNext || data?.number !== number || data.state !== 'closed' || data.merged !== true ||
+              data.merged_at !== pr.merged_at || data.head?.sha !== head || data.base?.ref !== 'main' ||
+              data.base.repo?.id !== pr.base.repo.id || data.base.repo.full_name !== REPO ||
+              !isRevision(data.merge_commit_sha)) {
+            return blocked('merge_readback', 'GitHub did not provide a complete merge record for the same pull request.', evidence);
+          }
+          mergedSha = data.merge_commit_sha;
+        }
+        if (main.object.sha !== mergedSha) {
+          const relation = await get('/compare/' + mergedSha + '...' + main.object.sha + '?per_page=1', false);
+          if (relation?.status !== 'ahead' || relation.merge_base_commit?.sha !== mergedSha) {
             return blocked('merge_readback', 'The reported merge commit could not be verified on main.', evidence);
           }
         }
-        return { ...evidence, state: 'merged', merged_sha: pr.merge_commit_sha, merged_at: pr.merged_at };
+        return { ...evidence, state: 'merged', merged_sha: mergedSha, merged_at: pr.merged_at };
       }
       if (pr.state !== 'open' || pr.draft) return blocked('pr_state', 'The pull request must be open and ready for review.', evidence);
       if (pr.stack) return blocked('policy', 'Stacked pull requests require separate authorization for every affected pull request.', evidence);
