@@ -84,6 +84,7 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
     return () => { active = false; };
   }, [selected, verification, runs]);
   const run = detail?.run.id === selected ? detail.run : runs.find(item => item.id === selected);
+  const transientJobs = run?.evidence?.jobs?.filter(job => job.infrastructure) ?? [];
   const sourceRepair = run?.source_repairs?.at(-1);
   const sourceActive = ['queued','claimed','running','awaiting_review'].includes(sourceRepair?.status);
   const autoCI = run?.policy.auto_ci_reruns;
@@ -320,13 +321,14 @@ export function MergeWorkspace({ headers, acceptedTasks, pulls, initialTask, dem
           </div>
         </form>}
         {access.ci_enabled && run.state === 'blocked' && !run.stopped && run.evidence?.reason === 'ci_infrastructure' &&
+          transientJobs.length > 0 &&
           (run.repair_attempts?.length ?? 0) + (run.source_repairs?.length ?? 0) < run.policy.repair_limit && <form onSubmit={event => {
             event.preventDefault();
             const fields = new FormData(event.currentTarget);
             change('rerun_job', { job_id: Number(fields.get('job')), feedback: fields.get('feedback') });
           }}>
             <label>Infrastructure job<select name="job" required>
-              {run.evidence.jobs.filter(job => job.infrastructure).map(job =>
+              {transientJobs.map(job =>
                 <option key={job.job_id} value={job.job_id}>{job.name ?? 'Job ' + job.job_id}</option>)}
             </select></label>
             <label>Owner feedback (optional)<textarea name="feedback" maxLength={1000} rows={2}/></label>
