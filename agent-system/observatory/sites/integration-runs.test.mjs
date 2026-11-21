@@ -199,6 +199,7 @@ test('a repair worker cannot start a model turn with an external MCP tool enable
   const child = Object.assign(new EventEmitter(), { stdin:new PassThrough(), stdout:new PassThrough(), kill() {} });
   const workspace = resolve('repair-fixture');
   const methods = [];
+  let server = {name:'external-server',runtimeStatus:'connected',tools:{lookup:{}},resources:[],resourceTemplates:[]};
   let startedArgs;
   child.stdin.on('data', chunk => {
     const {id,method} = JSON.parse(chunk);
@@ -206,17 +207,24 @@ test('a repair worker cannot start a model turn with an external MCP tool enable
     if (id === undefined) return;
     const result = method === 'thread/start'
       ? { thread:{id:uuid(),ephemeral:false},sandbox:{type:'workspaceWrite',networkAccess:false,writableRoots:[workspace]} }
-      : method === 'mcpServerStatus/list' ? {data:[{name:'external-server'}]} : {};
+      : method === 'mcpServerStatus/list' ? {data:[server]} : {};
     child.stdout.write(JSON.stringify({id,result})+'\n');
   });
-  const connector = openObservatoryConnector({ localOnly:true,cwd:workspace,spawnProcess:(_file,args)=>{
+  const connector = openObservatoryConnector({ localOnly:true,disabledMcpServers:['external-server'],cwd:workspace,spawnProcess:(_file,args)=>{
     startedArgs=args;
     return child;
   } });
   try {
-    await assert.rejects(connector.runWorkspaceTurn({cwd:workspace,prompt:'fixture',onSession:()=>{},
-      signal:new AbortController().signal}),/empty MCP inventory/);
+    const probe = () => connector.runWorkspaceTurn({cwd:workspace,prompt:'fixture',
+      onSession:()=>{throw Error('Disabled inventory passed validation');},signal:new AbortController().signal});
+    await assert.rejects(probe(),/explicitly disabled/);
+    server = {...server,runtimeStatus:'disabled'};
+    await assert.rejects(probe(),/explicitly disabled/);
+    server = {...server,tools:{}};
+    await assert.rejects(probe(),/Disabled inventory passed validation/);
     assert.ok(startedArgs.includes('apps'));
+    assert.ok(startedArgs.includes('plugins'));
+    assert.ok(startedArgs.includes('mcp_servers.external-server.enabled=false'));
     assert.ok(methods.includes('mcpServerStatus/list'));
     assert.ok(!methods.includes('turn/start'));
   } finally { connector.close(); }

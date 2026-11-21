@@ -10,7 +10,7 @@ import { taskExecutionCapacity } from '../../agent-system/observatory/task-execu
 import { taskDigest, writeSnapshot } from './context.mjs';
 import { createClaimTelemetryHooks, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
-import { openObservatoryConnector } from './observatory-connector.mjs';
+import { openLocalRepairConnector, openObservatoryConnector } from './observatory-connector.mjs';
 import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory-sync.mjs';
 import { availableTransferCredential, transferReviewedCandidate } from './integration-transfer.mjs';
 import { repairablePath, repairDiffPaths, usageFromCodex } from '../../agent-system/observatory/sites/source-repair.mjs';
@@ -390,7 +390,7 @@ async function runSourceRepair({ job, root, author, gitCache, executable, send, 
       finally { checking = false; }
     }, 15_000);
     heartbeat.unref();
-    connector = openObservatoryConnector({ cwd:workspace, executable, signal:localSignal, localOnly:true });
+    connector = await openLocalRepairConnector({ cwd:workspace, executable, signal:localSignal });
     const result = await connector.runWorkspaceTurn({
       cwd:workspace, prompt:mergeRepairPrompt(job), signal:localSignal,
       onSession(id, identity) { sessionId = id; executionIdentity = identity; },
