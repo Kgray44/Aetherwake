@@ -122,7 +122,7 @@ export function TaskEngineControls({ detail, workerAccess, publishedIntake, onCo
     <div className="task-command-shell">
       <div className="task-command-context">
         <header className="task-command-hero"><span className="task-command-signal"><Activity size={19} aria-hidden="true"/></span>
-          <div><Status value={lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
+          <div><Status task value={lifecycle.state}/><p>Stored state {humanize(lifecycle.stored_state)} · Version {detail.version}</p></div></header>
         <dl className="task-command-facts">
           <div><dt>Executor</dt><dd>{lifecycle.executor ?? 'Unassigned'}</dd></div>
           {workerAccess&&<div><dt>Codex worker access</dt><dd>{workerAccess==='not_configured'?'Not configured':'Configured'}</dd></div>}

@@ -387,6 +387,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     assert.equal(await git('status', '--porcelain'), '');
     await page.clock.fastForward(6_000);
     await page.getByRole('button',{name:'Record owner acceptance',exact:true}).waitFor({timeout:8_000});
+    await page.locator('.task-review-state .status-succeeded').getByText('Run complete',{exact:true}).first().waitFor();
+    await page.locator('.task-review-state').getByText('Awaiting owner review',{exact:true}).first().waitFor();
   } finally {
     unblockFeed();
     await page.unroute(overviewRoute);
@@ -724,6 +726,25 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('heading',{name:'CI run',exact:true}).waitFor();
   await page.getByRole('button',{name:'Overview',exact:true}).click();
   const overviewCard = page.locator('.metric').filter({hasText:'Registered tasks'});
+  const throughput = page.getByRole('group',{name:'Tasks created per day, UTC'});
+  const points = throughput.getByRole('button');
+  assert.equal(await points.count(),14);
+  const line = throughput.locator('.throughput-line');
+  assert.equal(await line.evaluate(node=>getComputedStyle(node).strokeDasharray),'none');
+  assert.equal((await line.getAttribute('d')).match(/L/g).length,13);
+  const tooltip = throughput.getByRole('tooltip');
+  for(const point of [points.first(),points.last()]){
+    await point.hover();
+    await tooltip.waitFor();
+    assert.match(await tooltip.innerText(),/UTC\s+\d+ tasks? created/);
+    assert.equal(await tooltip.evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(18, 35, 47)');
+  }
+  await overviewCard.hover();
+  await tooltip.waitFor({state:'hidden'});
+  await points.first().focus();
+  await tooltip.waitFor();
+  await page.keyboard.press('Escape');
+  await tooltip.waitFor({state:'hidden'});
   await overviewCard.hover();
   await page.waitForFunction(() => {
     const node = document.querySelector('.metric:hover');
