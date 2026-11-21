@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -986,16 +986,14 @@ test('a lost renewal reply is retried inside the lease without interrupting a ru
   assert.equal(detail.attempts[0].candidate_revision,revision);
 });
 
-test('a report aborted during connector thread startup is not sent when startup completes',
-  {skip:process.platform==='win32'?'Requires a POSIX executable fixture':false}, async t => {
+test('a report aborted during connector thread startup is not sent when startup completes', async t => {
   const root=await mkdtemp(join(tmpdir(),'aads-control-startup-'));
   t.after(()=>rm(root,{force:true,recursive:true}));
-  const executable=join(root,'fake-codex');
+  const fixture=join(root,'fake-codex.cjs');
   const ready=join(root,'thread-started');
   const release=join(root,'release-thread');
   const requests=join(root,'tool-requests');
-  await writeFile(executable,`#!${process.execPath}
-const fs=require('node:fs');
+  await writeFile(fixture,`const fs=require('node:fs');
 const rl=require('node:readline').createInterface({input:process.stdin});
 const reply=(id,result)=>process.stdout.write(JSON.stringify({id,result})+'\\n');
 rl.on('line',line=>{
@@ -1014,8 +1012,14 @@ rl.on('line',line=>{
     reply(request.id,{structuredContent:{status:200}});
   }
 });
-`,{mode:0o700});
-  const connector=openObservatoryConnector({cwd:root,executable});
+`);
+  let exited;
+  const connector=openObservatoryConnector({cwd:root,executable:process.execPath,
+    spawnProcess:(executable,_appServerArguments,options)=>{
+      const child=spawn(executable,[fixture],options);
+      exited=new Promise(resolve=>child.once('close',resolve));
+      return child;
+    }});
   try {
     const controller=new AbortController();
     const pending=connector.call({marker:'expired'}, undefined,{signal:controller.signal});
@@ -1027,7 +1031,10 @@ rl.on('line',line=>{
     await outcome;
     assert.equal((await connector.call({marker:'still-valid'})).status,200);
     assert.equal(readFileSync(requests,'utf8'),'still-valid\n');
-  } finally { connector.close(); }
+  } finally {
+    connector.close();
+    await exited;
+  }
 });
 
 test('real subprocess demo persists two artifacts before verified A admits B', async t => {
