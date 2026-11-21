@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { taskExecutionCapacity } from '../../agent-system/observatory/task-execution-capacity.mjs';
+import { taskDigest, writeSnapshot } from './context.mjs';
 import { createClaimTelemetryHooks, retainActiveClaim, reconcileAbandonedClaim } from './claim-telemetry.mjs';
 import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
@@ -15,15 +16,39 @@ import { readObservatoryConnection, recoverWorkerTelemetry } from './observatory
 const runFile = promisify(execFile);
 const verificationId = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const taskIdPattern = new RegExp('^task_' + verificationId.source.slice(1));
+const attemptIdPattern = new RegExp('^attempt_' + verificationId.source.slice(1));
 const repoUrl = /^(?:https:\/\/github\.com\/|git@github\.com:)Kgray44\/Aetherwake(?:\.git)?$/i;
 const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
-export async function checkWorkerStorage(command, cwd, run = runFile) {
+function storageReceipt(output) {
   try {
-    await run(command[0], command.slice(1), { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 8192 });
+    const data = JSON.parse(output);
+    const keys = ['cFreeBytes','dFreeBytes','estimatedCBytes','estimatedDBytes','floorBytesEach'];
+    const measured = Date.parse(data.utc);
+    const age = Date.now() - measured;
+    if (typeof data.allowed !== 'boolean' || !Number.isFinite(age) || age < -2000 || age > 60_000 ||
+        !keys.every(key => Number.isSafeInteger(data[key]) && data[key] >= 0) ||
+        data.floorBytesEach < 32_212_254_720 ||
+        data.allowed !== (data.cFreeBytes - data.estimatedCBytes > data.floorBytesEach &&
+                         data.dFreeBytes - data.estimatedDBytes > data.floorBytesEach)) return null;
+    return Object.fromEntries(keys.map(key => [key,data[key]]));
+  } catch {
+    return null;
+  }
+}
+
+export async function checkWorkerStorage(command, cwd, run = runFile) {
+  const hasReserveReceipt = command.some(arg => /(?:^|[\\/])ReserveGuard\.ps1$/i.test(arg));
+  try {
+    const output = await run(command[0], command.slice(1), { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 8192 });
+    if (hasReserveReceipt && (!storageReceipt(output?.stdout) || JSON.parse(output.stdout).allowed !== true)) {
+      throw Error('Storage receipt missing, stale or inconsistent');
+    }
   } catch (error) {
     const reason = error.killed ? 'storage_guard_timeout' : error.code === 2 ? 'storage_reserve_denied' : 'storage_guard_unavailable';
-    throw Object.assign(Error('The worker storage guard did not confirm safe writes.'), { code: reason });
+    throw Object.assign(Error('The worker storage guard did not confirm safe writes.'), {
+      code:reason, reserve:hasReserveReceipt ? storageReceipt(error.stdout) : null,
+    });
   }
 }
 
@@ -60,6 +85,28 @@ export async function checkoutIdentity(path, base, { fastReadback = process.env.
 const provisionRevision = /^[a-f0-9]{40}$/;
 const provisionOrigin = 'https://github.com/Kgray44/Aetherwake.git';
 
+// Git can report raw paths, credentials and remote output even on a local fetch.
+// Classify that output here and retain only approved descriptions.
+function checkoutFailure(operation, error) {
+  if (error?.checkoutFailure) return error;
+  const stderr = typeof error?.stderr === 'string' ? error.stderr : '';
+  let category = 'operation_failed';
+  if (error?.checkoutCategory) category = error.checkoutCategory;
+  else if (error?.killed) category = 'timeout';
+  else if (/lazy fetching disabled|from promisor remote/i.test(stderr)) category = 'incomplete_cache';
+  else if (/authentication failed|terminal prompts disabled|permission denied \(publickey\)|returned error: (401|403)\b/i.test(stderr)) category = 'authentication';
+  else if (/not our ref|couldn't find remote ref|no such ref/i.test(stderr)) category = 'revision_unavailable';
+  else if (/could not resolve host|couldn't connect|connection (?:reset|timed out)|unexpected disconnect|returned error: (429|500|502|503|504)\b/i.test(stderr)) category = 'temporary_transport';
+  else if (/\.lock['"]?: File exists|another git process/i.test(stderr)) category = 'git_lock_contention';
+  else if (['EPERM','EACCES','EBUSY'].includes(error?.code)) category = 'filesystem_access';
+  else if (error?.code === 'ENOSPC' || /no space left on device/i.test(stderr)) category = 'storage_exhausted';
+  const retryable = ['temporary_transport','timeout','git_lock_contention'].includes(category);
+  const exitCode = Number.isInteger(error?.code) ? error.code : undefined;
+  const failure = Error('Checkout ' + operation + ' failed (' + category +
+    (exitCode === undefined ? '' : ', exit ' + exitCode) + ').');
+  return Object.assign(failure, { checkoutFailure:true, operation, category, retryable, exitCode });
+}
+
 async function existingPrivateDirectory(path) {
   try {
     const info = await lstat(path);
@@ -95,50 +142,101 @@ export async function provisionTaskWorkspace({ root, task, attempt, author, sign
   const parent = await realpath(root);
   const destination = join(parent, task.id);
   const branch = 'codex/aads-task-' + task.id.slice(5);
-  const existing = await lstat(destination).catch(error => {
-    if (error.code !== 'ENOENT') throw error;
-    return null;
-  });
-  if (existing) {
-    if (!existing.isDirectory() || existing.isSymbolicLink() || await realpath(destination) !== destination) {
-      throw Error('Task checkout is not an isolated directory');
+  const checkExisting = async () => {
+    const existing = await lstat(destination).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (!existing) return false;
+    try {
+      if (!existing.isDirectory() || existing.isSymbolicLink() || await realpath(destination) !== destination) {
+        throw Error('Task checkout is not an isolated directory');
+      }
+      const identity = await checkoutIdentity(destination, attempt.revision);
+      if (identity.branch !== branch || identity.revision !== attempt.revision ||
+          (identity.dirty && (!attempt.resume_session_id || attempt.resume_requires_clean))) {
+        throw Error('Existing Task checkout requires reconciliation');
+      }
+    } catch (error) {
+      throw checkoutFailure('validate retained checkout', {code:error.code, checkoutCategory:'reconciliation_required'});
     }
-    const identity = await checkoutIdentity(destination, attempt.revision);
-    if (identity.branch !== branch) throw Error('Task checkout belongs to another branch');
-    return destination;
-  }
-  if (attempt.resume_session_id) throw Error('The original checkout is required to resume a Codex session');
+    return true;
+  };
   signal?.throwIfAborted();
+  if (await checkExisting()) return destination;
+  if (attempt.resume_session_id) {
+    throw checkoutFailure('resume existing checkout', {checkoutCategory:'original_checkout_missing'});
+  }
 
-  const staging = await mkdtemp(join(parent, '.aads-provision-'));
+  const label = attemptIdPattern.test(attempt.id ?? '') ? attempt.id.slice(8,16) : task.id.slice(5,13);
+  const staging = await mkdtemp(join(parent, '.aads-provision-' + label + '-'))
+    .catch(error => { throw checkoutFailure('allocate staging directory',error); });
   const env = { ...process.env, GIT_TERMINAL_PROMPT:'0' };
   delete env.AADS_TASK_WORKER_KEY;
-  const run = (...args) => runFile('git', args, {
-    cwd:staging, env, signal, windowsHide:true, timeout:180_000, maxBuffer:64 * 1024,
-  });
+  const run = async (operation, ...args) => {
+    try {
+      return await runFile('git', args, {
+        cwd:staging, env, signal, windowsHide:true, timeout:180_000, maxBuffer:64 * 1024,
+      });
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw checkoutFailure(operation, error);
+    }
+  };
   try {
-    await run('init', '--quiet');
-    if (process.platform==='win32') await run('config','--local','core.longpaths','true');
+    await run('initialize repository', '-c', 'core.longpaths=true', 'init', '--quiet');
+    if (process.platform==='win32') await run('configure long paths', 'config','--local','core.longpaths','true');
     await observe('checkout_fetch',async () => {
-      const available = gitCache && await git(gitCache,'cat-file','-t',attempt.revision).catch(() => null);
-      const origin = available==='commit'?pathToFileURL(gitCache).href:cloneOrigin;
-      await run('remote','add','origin',origin);
-      await run('fetch','--quiet','--depth=1','--no-tags','origin',attempt.revision);
+      const fetchPinned = (source, origin) => run(source, 'fetch','--quiet','--depth=1','--no-tags',origin,attempt.revision);
+      // A promisor clone may contain the commit but lack trees or blobs. Its
+      // upload-pack deliberately cannot fetch those objects on our behalf.
+      const completeCache = gitCache && await git(gitCache,'config','--get-regexp','^remote\\..*\\.promisor$')
+        .then(() => false, error => error.code === 1);
+      const available = completeCache && await git(gitCache,'cat-file','-t',attempt.revision).catch(() => null);
+      if (available === 'commit') {
+        try {
+          await fetchPinned('fetch from cache', pathToFileURL(gitCache).href);
+          return;
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (error.category === 'storage_exhausted' || error.category === 'filesystem_access') throw error;
+        }
+      }
+      for (let attemptNumber=1; ; attemptNumber++) {
+        try {
+          await fetchPinned('fetch from configured origin', cloneOrigin);
+          return;
+        } catch (error) {
+          error.tries = attemptNumber;
+          if (!error.retryable || attemptNumber >= 3) throw error;
+          await sleep(500 * 2 ** (attemptNumber - 1), undefined, { signal });
+        }
+      }
     });
-    await run('remote', 'set-url', 'origin', provisionOrigin);
-    await run('config', '--local', 'user.name', name);
-    await run('config', '--local', 'user.email', email);
-    await observe('checkout_materialization',() => run('-c', 'core.hooksPath=' + join(staging, '.git', 'aads-disabled-hooks'),
-      'switch', '--quiet', '-c', branch, attempt.revision));
-    const candidate = await checkoutIdentity(staging, attempt.revision);
-    if (candidate.revision !== attempt.revision || candidate.dirty) throw Error('Provisioned checkout is not clean and pinned');
+    const pinned = await run('verify pinned commit', 'cat-file', '-t', attempt.revision);
+    if (pinned.stdout.trim() !== 'commit') {
+      throw checkoutFailure('verify pinned commit', {checkoutCategory:'revision_unavailable'});
+    }
+    await run('set repository origin', 'remote', 'add', 'origin', provisionOrigin);
+    await run('set Git author name', 'config', '--local', 'user.name', name);
+    await run('set Git author email', 'config', '--local', 'user.email', email);
+    await observe('checkout_materialization',() => run('materialize pinned branch', '-c',
+      'core.hooksPath=' + join(staging, '.git', 'aads-disabled-hooks'), 'switch', '--quiet', '-c', branch, attempt.revision));
+    const candidate = await checkoutIdentity(staging, attempt.revision)
+      .catch(error=>{ throw checkoutFailure('verify materialized checkout',error); });
+    if (candidate.branch !== branch || candidate.revision !== attempt.revision || candidate.dirty) {
+      throw checkoutFailure('verify materialized checkout', {checkoutCategory:'identity_mismatch'});
+    }
     signal?.throwIfAborted();
     for (let retry = 0; ; retry++) {
       try {
         await rename(staging, destination);
         break;
       } catch (error) {
-        if (retry === 6 || !['EBUSY','EPERM'].includes(error.code)) throw error;
+        if (await checkExisting()) break;
+        if (retry === 6 || !['EBUSY','EPERM','EACCES','EEXIST','ENOTEMPTY'].includes(error.code)) {
+          throw checkoutFailure('publish staged checkout',error);
+        }
         await sleep(250, undefined, { signal });
       }
     }
@@ -178,7 +276,27 @@ function termination(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 
-export function codexTaskPrompt(task, attempt) {
+async function prepareObjectiveSource(workspace, task, attempt) {
+  if (task.objective.length <= 6000) return;
+  if (!attemptIdPattern.test(attempt.id ?? '')) throw Error('Invalid objective source identity');
+  const path = '.git/aads-objective-' + attempt.id + '.json';
+  const document = { task_id:task.id, attempt_id:attempt.id, revision:attempt.revision,
+    spec_version:attempt.spec_version, task_digest:taskDigest(task), objective:task.objective };
+  const absolute = join(workspace,path);
+  try {
+    await writeSnapshot(absolute, document);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const entry = await lstat(absolute);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.size > 1024 * 1024 ||
+        await readFile(absolute,'utf8') !== JSON.stringify(document,null,2)+'\n') {
+      throw Error('Existing objective source does not match this claim');
+    }
+  }
+  return path;
+}
+
+export function codexTaskPrompt(task, attempt, { objectiveSource, executionNotes = [] } = {}) {
   const references = [...new Set((task.requirements??[]).map(({kind,uri,revision})=>
     '- '+kind+' '+uri+(revision?' @ '+revision:'')))];
   const deliverables = [...new Set(task.deliverables??[])];
@@ -190,7 +308,12 @@ export function codexTaskPrompt(task, attempt) {
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Only when useful, share a standalone progress message: Development note [finding|warning|follow_up|decision]: <one short sentence>. Pick one category. No secrets, paths, URLs or raw outputs.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
-    task.title, task.objective,
+    task.title,
+    objectiveSource
+      ? 'Read the complete objective field from the claim-scoped JSON file '+objectiveSource+
+        ' before acting. If output is bounded, read it in consecutive chunks through the end. Retain all mandatory requirements and refer back to the same source when needed.'
+      : task.objective,
+    ...executionNotes,
     ...(references.length ? ['Task requirements and input references:', ...references,
       'Consult these references through permitted tools and existing access. A reference does not grant access.'] : []),
     ...(deliverables.length ? ['Planned deliverables:', ...deliverables.map(item=>'- '+item)] : []),
@@ -199,8 +322,8 @@ export function codexTaskPrompt(task, attempt) {
   ].join('\n');
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, onDevelopmentNote, onTurnStarted, onTurnFinished, signal }) {
-  const prompt = codexTaskPrompt(task,attempt);
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, onDevelopmentNote, onTurnStarted, onTurnFinished, signal, objectiveSource, executionNotes }) {
+  const prompt = codexTaskPrompt(task,attempt,{objectiveSource,executionNotes});
   const env = { ...process.env };
   delete env.AADS_TASK_WORKER_KEY;
   const args = [
@@ -237,7 +360,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 }
 
 export async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,onDevelopmentNote,onTurnStarted,onTurnFinished,
-  onAddendumCheckpoint,signal}) {
+  onAddendumCheckpoint,signal,objectiveSource,executionNotes}) {
   async function recordUsage(usage,method,scope) {
     if (!usage||!onUsage) return;
     const fields={total:'totalTokens',input:'inputTokens',cached_input:'cachedInputTokens',
@@ -251,7 +374,7 @@ export async function executeAppServer(connector, {cwd,task,attempt,onSession,on
     });
     if (metrics.length) await onUsage(metrics,scope);
   }
-  let result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt),
+  let result=await connector.runWorkspaceTurn({cwd,prompt:codexTaskPrompt(task,attempt,{objectiveSource,executionNotes}),
     resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
     onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
   async function publishProfile(turn, ordinal) {
@@ -379,6 +502,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let outcome;
   let executionEnd;
   let provisioning = false;
+  let provisioningStarted;
   let telemetryStarted = false;
   let liveStages = false;
   let executionState = 'failed';
@@ -406,11 +530,14 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   const guardStorage = async () => {
     try { await admitStorage(); }
     catch (error) {
-      stop({
+      const reserve = error.reserve;
+      const measurements = reserve ?
+        ' C: '+reserve.cFreeBytes+' bytes free, D: '+reserve.dFreeBytes+' bytes free; floor '+reserve.floorBytesEach+' bytes each.' : '';
+      stop(({
         storage_guard_timeout: 'The worker storage guard timed out before execution.',
         storage_reserve_denied: 'The storage reserve policy denied the worker write budget.',
         storage_guard_unavailable: 'The worker could not read storage reserve data before execution.',
-      }[error.code] ?? 'The worker storage check failed before execution.');
+      }[error.code] ?? 'The worker storage check failed before execution.') + measurements);
       throw error;
     }
   };
@@ -450,6 +577,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     })();
     if (prepareWorkspace) {
       provisioning = true;
+      provisioningStarted = performance.now();
       workspace = await measureStage('checkout_provisioning','context',
         () => prepareWorkspace({ task, attempt, signal:workerSignal,
           observe:(name,action) => measureStage(name,'context',action) }));
@@ -474,7 +602,10 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     }
     telemetryStarted = true;
     await telemetry(onTelemetryStart, { verificationNamespace, ...(providerStream ? {providerStream} : {}) });
-    outcome = await execute({ executable, cwd: workspace, task, attempt,
+    const objectiveSource = await prepareObjectiveSource(workspace,task,attempt);
+    workerSignal.throwIfAborted();
+    outcome = await execute({ executable, cwd: workspace, task, attempt, objectiveSource,
+      executionNotes:claim.execution_notes,
       onSession: async (value,observedIdentity) => {
         if (attempt.resume_session_id&&value!==attempt.resume_session_id) {
           controller.abort();
@@ -527,8 +658,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         };
       },
       signal: workerSignal });
-  } catch {
-    outcome = { ok: false };
+  } catch (error) {
+    const checkout = provisioning && (error?.checkoutFailure ? error : checkoutFailure('prepare checkout',error));
+    outcome = {ok:false, ...(checkout ? {checkout, checkoutDuration:Math.round(performance.now()-provisioningStarted)} : {})};
   } finally {
     if (telemetryStarted) executionEnd = {at:new Date().toISOString(),monotonic:performance.now()};
   }
@@ -574,11 +706,25 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       if (workerSignal.aborted) executionState = 'interrupted';
       const failure = stopReason ?? (signal.aborted ? 'The worker shut down before a candidate was submitted.'
         : workerSignal.aborted ? 'The attempt reached its execution time limit.'
-        : provisioning ? 'The worker could not provision the pinned Task checkout.'
+        : outcome?.checkout ? outcome.checkout.message +
+          (outcome.checkout.tries ? ' Fetch attempts: '+outcome.checkout.tries+'.' : '') +
+          (outcome.checkout.category === 'reconciliation_required' ? ' Retained files need reconciliation before retry.'
+            : outcome.checkout.retryable ? ' Transient failure. Check the environment before retrying.'
+            : ' Correct the reported operation before authorizing retry.')
         : outcome?.providerStatus==='disconnected' ? 'The Codex App Server disconnected before reporting a terminal turn.'
         : outcome?.providerStatus==='interrupted' ? 'Codex reported that the turn was interrupted.'
         : 'Executor or workspace failed before producing a candidate.');
-      await terminal('failed', {failure});
+      const checkout = outcome?.checkout;
+      const diagnostic = checkout && !workerSignal.aborted ? {
+        stage:checkout.operation.startsWith('fetch from ') ? 'checkout_fetch'
+          : checkout.operation==='materialize pinned branch' ? 'checkout_materialization' : 'checkout_provisioning',
+        operation:checkout.operation, category:checkout.category, retryable:checkout.retryable,
+        duration_ms:Math.min(1_800_000,outcome.checkoutDuration),
+        recovery_required:['reconciliation_required','original_checkout_missing','git_lock_contention'].includes(checkout.category),
+        ...(checkout.exitCode>=0 && checkout.exitCode<=255 ? {exit_code:checkout.exitCode} : {}),
+        ...(checkout.tries ? {fetch_attempts:checkout.tries} : {}),
+      } : null;
+      await terminal('failed', {failure, ...(diagnostic ? {checkout_diagnostic:diagnostic} : {})});
     }
   } finally {
     heartbeats.abort();
@@ -726,7 +872,7 @@ async function main(configPath) {
         try {
           await admitStorage();
           const request = { op:'claim', operation_id:randomUUID(), conversation_continuation:appServer,
-            live_addenda:appServer, ...(scope ? { task_ids:scope } : {}) };
+            live_addenda:appServer, separate_execution_notes:true, ...(scope ? { task_ids:scope } : {}) };
           const result = await send(request).catch(error => {
             if (error.status && error.status < 500) throw error;
             return send(request);

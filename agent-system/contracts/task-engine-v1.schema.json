@@ -94,6 +94,7 @@
           "type": "boolean"
         },
         "live_addenda": {"type": "boolean"},
+        "separate_execution_notes": {"type": "boolean"},
         "task_ids": {
           "type": "array",
           "maxItems": 500,
@@ -220,7 +221,7 @@
         },
         "objective": {
           "type": "string",
-          "maxLength": 6000
+          "maxLength": 100000
         },
         "primary": {
           "type": "string"
@@ -598,6 +599,21 @@
         "source": { "const": "codex_app_server_thread_start" }
       }
     },
+    "checkoutDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "operation", "category", "retryable", "duration_ms", "recovery_required"],
+      "properties": {
+        "stage": {"enum": ["checkout_provisioning", "checkout_fetch", "checkout_materialization"]},
+        "operation": {"type": "string", "minLength": 1, "maxLength": 48},
+        "category": {"type": "string", "pattern": "^[a-z_]{1,40}$"},
+        "retryable": {"type": "boolean"},
+        "duration_ms": {"type": "integer", "minimum": 0, "maximum": 1800000},
+        "recovery_required": {"type": "boolean"},
+        "exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+        "fetch_attempts": {"type": "integer", "minimum": 1, "maximum": 3}
+      }
+    },
     "report": {
       "type": "object",
       "properties": {
@@ -631,6 +647,7 @@
         "revision": {
           "$ref": "#/$defs/rid"
         },
+        "checkout_diagnostic": {"$ref": "#/$defs/checkoutDiagnostic"},
         "failure": {
           "type": "string",
           "minLength": 1,
@@ -825,6 +842,7 @@
         "branch": {
           "type": "string"
         },
+        "checkout_diagnostic": {"$ref": "#/$defs/checkoutDiagnostic"},
         "failure": {
           "type": "string"
         },

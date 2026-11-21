@@ -859,6 +859,53 @@ test('rate-limited GitHub permits private proposals bound to a known cached revi
   assert.equal(writes.length, 0);
 });
 
+test('MCP registration, Site editing and worker claims preserve the 100,000-character boundary', async t => {
+  const workerKey = 'test-only-' + 'k'.repeat(40);
+  const { call } = fixture(t,{taskKey:workerKey});
+  const headers = {...ownerHeader,origin,'content-type':'application/json'};
+  const operation = (op, fields = {}) => ({op,operation_id:crypto.randomUUID(),...fields});
+  const rpc = async (request, worker = false) => {
+    const response = await call('/mcp',{method:'POST',headers,body:JSON.stringify({
+      jsonrpc:'2.0',id:1,method:'tools/call',params:{
+        name:'task_engine_v1',arguments:{request,verification:namespace,...(worker?{worker_key:workerKey}:{})},
+      },
+    })});
+    return (await response.json()).result.structuredContent;
+  };
+  for (const length of [6000,6001,99_999,100_000,100_001]) {
+    const objective = ' \r\n' + '🧭'.repeat(length-4) + ' ';
+    const response = await rpc(operation('register',{fields:{...input,objective}}));
+    assert.equal(response.status,length<=100_000?201:400);
+    if (length<=100_000) assert.equal(response.task.objective,objective);
+  }
+  for (const objective of [null,[],1,'  ', 'Unpaired UTF-16 surrogate \ud800']) {
+    assert.equal((await rpc(operation('register',{fields:{...input,objective}}))).status,400);
+  }
+  const initial = '界'.repeat(99_999);
+  const created = await rpc(operation('register',{fields:{...input,objective:initial}}));
+  const task_id = created.task.id;
+  const command = (expected_version, action) => operation('command',{task_id,expected_version,action});
+  const admitted = await rpc(command(created.version,{type:'admit',executor:'codex'}));
+  assert.equal(admitted.status,200);
+  const objective = ' \n' + '🧭'.repeat(99_997) + ' ';
+  const action = {type:'edit',fields:{...input,objective}};
+  const response = await call('/api/task-engine/v1',{method:'POST',headers:{
+    ...headers,'x-observatory-verification':namespace,
+  },body:JSON.stringify(command(admitted.version,action))});
+  assert.equal(response.status,200,await response.clone().text().then(value=>value.slice(0,240)));
+  const reloaded = await rpc({op:'get',task_id});
+  assert.equal(reloaded.task.objective,objective);
+  const audit = reloaded.events.find(event=>event.kind==='edit').specification;
+  assert.equal(audit.before.objective,initial);
+  assert.equal(audit.after.objective,objective);
+  const claimed = await rpc(operation('claim',{task_ids:[task_id],separate_execution_notes:true}),true);
+  assert.equal(claimed.status,200);
+  assert.equal(claimed.claim.task.objective,objective);
+  assert.equal(claimed.claim.attempt.spec_version,reloaded.version);
+  const malformed = await call('/api/task-engine/v1',{method:'POST',headers,body:new Uint8Array([0x7b,0xff,0x7d])});
+  assert.equal(malformed.status,400);
+});
+
 test('Codex Task tool and Site API share registration, version, owner scope and audit events', async t => {
   const key = 'test-only-' + 'k'.repeat(40);
   const { call } = fixture(t, { taskKey: key });
@@ -881,6 +928,7 @@ test('Codex Task tool and Site API share registration, version, owner scope and 
   assert.equal(requestProperties.operation_id.format,'uuid');
   assert.equal(requestProperties.expected_version.type,'integer');
   assert.ok(requestProperties.fields.required.includes('objective'));
+  assert.equal(requestProperties.fields.properties.objective.maxLength,100_000);
   assert.ok(requestProperties.action.properties.type.enum.includes('admit'));
   assert.ok(requestProperties.action.properties.type.enum.includes('retry'));
   assert.ok(requestProperties.action.properties.type.enum.includes('addendum'));

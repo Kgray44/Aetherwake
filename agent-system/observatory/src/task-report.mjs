@@ -115,7 +115,6 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const nextAction=taskNextAction(canonical,workerAccess);
   const latestCoverage=diagnostics.coverage.at(-1);
   const latestTokens=tokens.at(-1)?.observed;
-  const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
 
   return {
     pageSize:'A4',pageMargins:[44,47,44,46],
@@ -133,7 +132,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
     content:[
       {text:'TASK DATA REPORT',style:'muted',margin:[0,0,0,7]},
       {text:task.title,style:'title'},
-      {text:objectiveExcerpt,margin:[0,0,0,10]},
+      {text:task.objective,margin:[0,0,0,10]},
       grid(['State','Owner decision','Generated (UTC)'],[[canonical?.lifecycle.state??task.state,task.owner_acceptance,generatedAt]],['*','*','*']),
       {text:'Engineering executive summary',style:'section'},
       {text:coverage??'Snapshot of the Task data available to the Observatory. Times use UTC. Unavailable readings retain their source status.',margin:[0,0,0,7]},

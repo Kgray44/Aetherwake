@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -95,6 +96,18 @@ test('storage guard permits slower verification and distinguishes timeout, reser
     [{ code:'ENOENT' },'storage_guard_unavailable']]) {
     await assert.rejects(checkWorkerStorage(command, '.', async () => { throw cause; }), { code });
   }
+  const measured = {utc:new Date().toISOString(),allowed:true,floorBytesEach:32_212_254_720,
+    cFreeBytes:40_000_000_000,dFreeBytes:50_000_000_000,estimatedCBytes:1,estimatedDBytes:1};
+  const reserveGuard = ['powershell.exe','-File','ReserveGuard.ps1'];
+  await checkWorkerStorage(reserveGuard,'.',async()=>({stdout:JSON.stringify(measured)}));
+  await assert.rejects(checkWorkerStorage(reserveGuard,'.',async()=>({
+    stdout:JSON.stringify({...measured,utc:new Date(Date.now()-120_000).toISOString()}),
+  })),{code:'storage_guard_unavailable'});
+  await assert.rejects(checkWorkerStorage(reserveGuard,'.',async()=>{
+    throw Object.assign(Error('reserve denied'),{code:2,stdout:JSON.stringify({
+      ...measured,allowed:false,cFreeBytes:measured.floorBytesEach,
+    })});
+  }),error=>error.code==='storage_reserve_denied'&&error.reserve.floorBytesEach===measured.floorBytesEach);
 });
 
 test('owner amendments preserve the claimed spec and become effective on retry', async t => {
@@ -323,10 +336,11 @@ test('verified dependency gates, independent claims, leases and retry safety', a
     assert.equal((await command(task, 'admit', { executor: 'codex' })).status, 200);
   }
   const claim = () => call({ op: 'claim', operation_id: crypto.randomUUID() }, 'worker');
-  const [first, raced] = await Promise.all([claim(), claim()]);
-  assert.ok([200, 409].includes(raced.status));
-  const second = raced.body.claim ? raced : await claim();
-  const claimed = [first.body.claim, second.body.claim];
+  const raced = await Promise.all([claim(), claim()]);
+  assert.ok(raced.every(response => [200, 409].includes(response.status)));
+  const claimed = raced.map(response => response.body.claim).filter(Boolean);
+  assert.ok(claimed.length > 0);
+  if (claimed.length === 1) claimed.push((await claim()).body.claim);
   assert.deepEqual(new Set(claimed.map(item => item.task.id)), new Set([a.task.id, c.task.id]));
   assert.equal((await get(b)).lifecycle.state, 'blocked');
   const active = claimed.find(item => item.task.id === a.task.id);
@@ -597,14 +611,59 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
   };
   const { claim } = await send({ op:'claim', operation_id:crypto.randomUUID() });
   const author = { name:'Test worker', email:'test@example.test' };
-  const provision = input => provisionTaskWorkspace({ root, author, cloneOrigin:pathToFileURL(source).href, ...input });
+  const cache = join(parent, 'partial-cache');
+  await git(source, 'config', 'uploadpack.allowFilter', 'true');
+  await git(source, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+  await git(source, 'clone', '--no-checkout', '--depth=2', '--filter=blob:none', pathToFileURL(source).href, cache);
+  assert.equal(await git(cache, 'cat-file', '-t', baseline), 'commit');
+  const provision = input => provisionTaskWorkspace({
+    root, author, cloneOrigin:pathToFileURL(source).href, gitCache:cache, ...input,
+  });
   const workspace = join(root, task.task.id);
-  const signal = AbortSignal.timeout(25_000);
+  const signal = AbortSignal.timeout(45_000);
+  // Exercise the same source handoff used by both provider transports.
+  const objective = ' \r\n' + '🧭'.repeat(99_996) + ' ';
+  claim.task.objective = objective;
+  const cancelled = new AbortController();
+  await assert.rejects(provision({
+    task:claim.task, attempt:claim.attempt, signal:cancelled.signal,
+    observe:async (name, action) => {
+      if (name === 'checkout_materialization') cancelled.abort();
+      return action();
+    },
+  }), {name:'AbortError'});
+  assert.equal(existsSync(workspace),false);
+  const independent = {...claim.task,id:'task_00000000-0000-4000-8000-000000000048'};
+  const [firstCopy,secondCopy,other] = await Promise.all([
+    provision({task:claim.task,attempt:claim.attempt,signal}),
+    provision({task:claim.task,attempt:claim.attempt,signal}),
+    provision({task:independent,attempt:claim.attempt,signal}),
+  ]);
+  assert.equal(firstCopy,workspace);
+  assert.equal(secondCopy,workspace);
+  assert.notEqual(other,workspace);
+  const absent = {...independent,id:'task_00000000-0000-4000-8000-000000000049'};
+  await assert.rejects(provision({task:absent,attempt:{revision:'f'.repeat(40)},signal}),{
+    category:'revision_unavailable', exitCode:128, retryable:false,
+  });
+  await writeFile(join(other,'retained.txt'),'existing work');
+  await assert.rejects(provision({task:independent,attempt:claim.attempt,signal}),{
+    category:'reconciliation_required',
+  });
+  assert.equal(readFileSync(join(other,'retained.txt'),'utf8'),'existing work');
   await runClaim({
     claim, send, signal, admitStorage:async () => {},
     prepareWorkspace:provision,
-    execute:async ({ cwd }) => {
+    execute:async ({ cwd, task, attempt, objectiveSource }) => {
       assert.equal(cwd, workspace);
+      assert.equal(task.objective,objective);
+      const saved = JSON.parse(readFileSync(join(cwd,objectiveSource),'utf8'));
+      assert.equal(saved.objective,objective);
+      assert.equal(saved.attempt_id,attempt.id);
+      assert.equal(saved.revision,attempt.revision);
+      const prompt = codexTaskPrompt(task,attempt,{objectiveSource});
+      assert.ok(prompt.includes(objectiveSource));
+      assert.ok(!prompt.includes(objective));
       assert.equal(await git(cwd, 'rev-parse', 'HEAD'), baseline);
       if(process.platform==='win32') {
         assert.ok(join(cwd,nested,filename).length>260);
@@ -625,6 +684,31 @@ test('an admitted Task receives an isolated pinned checkout without a workspace 
   await assert.rejects(provision({
     task:{ ...claim.task, id:'../unassigned' }, attempt:claim.attempt, signal,
   }), /Invalid Task checkout identity/);
+});
+
+test('a transient Git HTTP failure has bounded attempts and retains no remote output', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(),'aads-transient-fetch-')));
+  t.after(() => rm(root,{force:true,recursive:true}));
+  let requests = 0;
+  const server = createServer((request,response) => {
+    requests++;
+    response.writeHead(503);
+    response.end('PRIVATE upstream diagnostic');
+  });
+  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const start = Date.now();
+  await assert.rejects(provisionTaskWorkspace({
+    root,
+    task:{id:'task_00000000-0000-4000-8000-000000000050',repository:'Kgray44/Aetherwake'},
+    attempt:{id:'attempt_00000000-0000-4000-8000-000000000050',revision:'a'.repeat(40)},
+    cloneOrigin:'http://127.0.0.1:'+server.address().port+'/fixture.git',
+    author:{name:'Fixture',email:'worker@example.test'},
+    signal:AbortSignal.timeout(20_000),
+  }),error => error.category==='temporary_transport' && error.tries===3 && error.exitCode===128 &&
+    !JSON.stringify(error).includes('PRIVATE') && !error.message.includes('127.0.0.1'));
+  assert.equal(requests,3);
+  assert.ok(Date.now()-start>=1500);
 });
 
 test('a checkout failure exposes live and terminal telemetry before any Codex thread exists',async t=>{
@@ -706,9 +790,14 @@ test('lease renewals continue during pending preflight and a lost terminal ackno
   assert.equal(result.events.filter(event=>event.kind==='failed').length,1);
   const report=result.events.find(event=>event.kind==='failed');
   assert.equal(report.operation_id,receipt.operation_id);
-  assert.match(report.reason,/provision the pinned Task checkout/);
+  assert.match(report.reason,/Checkout prepare checkout failed/);
   assert.equal(result.lifecycle.state,'failed');
-  assert.match(result.attempts[0].failure,/provision the pinned Task checkout/);
+  assert.match(result.attempts[0].failure,/Checkout prepare checkout failed/);
+  const diagnostic = result.attempts[0].checkout_diagnostic;
+  assert.equal(diagnostic.stage,'checkout_provisioning');
+  assert.equal(diagnostic.operation,'prepare checkout');
+  assert.equal(diagnostic.retryable,false);
+  assert.deepEqual(result.events.find(event=>event.kind==='failed').checkout_diagnostic,diagnostic);
 });
 
 test('hung control report returns at lease expiry without submitting a stale terminal report', async t => {

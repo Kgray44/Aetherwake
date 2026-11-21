@@ -8,7 +8,7 @@ import { join, dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { proposedTask, validateNewTask } from './intake.mjs';
+import { proposedTask, validateNewTask, TASK_REQUEST_MAX_BYTES } from './intake.mjs';
 import { execFileSync } from 'node:child_process';
 
 const here=dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,6 @@ const localDir=resolve(process.env.AETHERWAKE_OBSERVATORY_DATA_DIR || join(homed
 const port=Number(process.env.PORT || 4178);
 const distDir=join(here,'dist');
 const HOST='127.0.0.1';
-const MAX_BODY=64*1024;
 const allowedTypes=new Set(['task','attempt','evidence','telemetry','context_snapshot','verification_profile']);
 const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'};
 let schema=null;
@@ -68,10 +67,16 @@ async function handler(req,res){
     return reply(res,200,{schema_version:1,revision:revision(),generated_at:new Date().toISOString(),records,source:'repository + private local records',telemetry_note:'Unavailable measurements are not zero; PR merge does not imply task acceptance.'});
   }
   if(req.method==='POST'&&url.pathname==='/api/tasks'){
-    let raw='';
+    const decoder = new TextDecoder('utf-8', { fatal:true });
+    let raw='', bytes=0;
     try{
       if(!req.headers['content-type']?.startsWith('application/json'))return reply(res,415,{error:'Expected application/json'});
-      for await(const chunk of req){raw+=chunk;if(raw.length>MAX_BODY)return reply(res,413,{error:'Payload too large'})}
+      for await(const chunk of req){
+        bytes += chunk.byteLength;
+        if(bytes>TASK_REQUEST_MAX_BYTES)return reply(res,413,{error:'Payload too large'});
+        raw += decoder.decode(chunk,{stream:true});
+      }
+      raw += decoder.decode();
       const task=await createTask(JSON.parse(raw));
       return reply(res,201,{task,storage:'private-local',note:'Task is proposed. No execution or owner approval has been initiated.'});
     }catch(e){return reply(res,400,{error:e.message})}

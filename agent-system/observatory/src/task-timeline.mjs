@@ -114,9 +114,18 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
     const identity={attemptId:attempt.id,executor:attempt.executor??attempt.provider,activityType:'attempt'};
     add({id:'start:'+attempt.id,at:attempt.started_at,type:'Attempt',...identity,title:'Attempt '+attempt.attempt_number+' started',
       description:[attempt.provider ?? attempt.executor,attempt.model].filter(Boolean).join(' · '),details:common});
+    const checkout = attempt.checkout_diagnostic;
     add({id:'end:'+attempt.id,at:attempt.finished_at,type:'Attempt',...identity,outcome:attempt.state,title:'Attempt '+attempt.attempt_number+' finished',
       description:humanize(attempt.state),details:[...common,...detail('Outcome',humanize(attempt.state)),
-        ...detail('Failure',attempt.failure_diagnosis ?? attempt.failure)]});
+        ...detail('Failure',attempt.failure_diagnosis ?? attempt.failure),
+        ...(checkout ? [
+          ...detail('Checkout',task.id),...detail('Checkout stage',humanize(checkout.stage)),
+          ...detail('Operation',checkout.operation),...detail('Category',humanize(checkout.category)),
+          ...detail('Git exit code',checkout.exit_code),...detail('Fetch attempts',checkout.fetch_attempts),
+          ...detail('Provisioning duration',checkout.duration_ms+' ms'),
+          ...detail('Retryable',checkout.retryable?'Yes':'No'),
+          ...detail('Recovery required',checkout.recovery_required?'Yes':'No'),
+        ] : [])]});
   }
   for (const receipt of audits) {
     if (receipt.target_id && receipt.target_id !== task.id) continue;
