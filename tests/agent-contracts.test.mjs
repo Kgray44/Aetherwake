@@ -2,8 +2,37 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { validateRecord } from "../scripts/agent/validate-record.mjs";
 const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../agent-system/contracts/v1.schema.json", import.meta.url)), "utf8"));
 const kinds = ["task", "attempt", "evidence", "telemetry", "context_snapshot", "verification_profile"];
+// Synthetic contract fixture; vary one timestamp at a time.
+function datedRecord(created_at) {
+  return { schema_version: 1, record_type: "telemetry", id: "telemetry_fixture",
+    created_at, repository: "example/fixture", revision: "a".repeat(40),
+    task_id: "task_fixture", attempt_id: "attempt_fixture", phase: "verification",
+    observed_at: "2026-11-16T00:00:00Z", measurements: [] };
+}
+
+test("record dates preserve UTC, offsets, fractions and Gregorian leap days", () => {
+  for (const timestamp of [
+    "2026-01-01T00:00:00Z", "2026-04-30T23:59:59.123Z",
+    "2024-02-29T00:00:00Z", "2000-02-29T00:00:00Z",
+    "2024-02-29T00:15:00+05:30", "2024-02-29T23:45:00.123-04:00",
+    "2026-01-01T00:00:00+00:00"
+  ]) assert.deepEqual(validateRecord(datedRecord(timestamp)), [], timestamp);
+});
+
+test("record dates reject impossible Gregorian days even when parsing normalizes them", () => {
+  for (const timestamp of [
+    "2026-02-30T00:00:00Z", "2026-02-29T00:00:00Z",
+    "1900-02-29T00:00:00Z", "2100-02-29T00:00:00Z",
+    "2024-02-30T00:00:00+05:30", "2026-04-31T23:45:00.123-04:00",
+    "2026-06-31T00:00:00Z", "2026-09-31T00:00:00Z", "2026-11-31T00:00:00Z"
+  ]) {
+    assert.ok(Number.isFinite(Date.parse(timestamp)), "normalization fixture: " + timestamp);
+    assert.notDeepEqual(validateRecord(datedRecord(timestamp)), [], timestamp);
+  }
+});
 test("v1 contract is a closed set of task-centric record types", () => {
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.equal(schema.oneOf.length, kinds.length);
