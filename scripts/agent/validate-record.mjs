@@ -5,6 +5,15 @@ import {canonical} from './evidence-trust.mjs';
 const schema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/v1.schema.json',import.meta.url),'utf8'));
 const traceSchema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/trace-v1.schema.json',import.meta.url),'utf8'));
 const supported=new Set(['$schema','$defs','$ref','title','description','type','const','enum','oneOf','properties','required','additionalProperties','items','minItems','maxItems','uniqueItems','minLength','maxLength','pattern','format','minimum','maximum']);
+function validDateTime(value) {
+  const match=/^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if(!match||!Number.isFinite(Date.parse(value)))return false;
+  const year=Number(match[1]),month=Number(match[2]),day=Number(match[3]);
+  const leap=year%4===0&&(year%100!==0||year%400===0);
+  const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+  // Check the written calendar date before any UTC offset conversion or normalization.
+  return month>=1&&month<=12&&day>=1&&day<=days[month-1];
+}
 function validate(value,s,path='$',depth=0) {
   if(depth>40) return [path+': depth exceeded'];
   const errors=[];
@@ -23,7 +32,7 @@ function validate(value,s,path='$',depth=0) {
     if(s.minLength&&[...value].length<s.minLength)errors.push(path+': too short');
     if(s.maxLength!==undefined&&[...value].length>s.maxLength)errors.push(path+': too long');
     if(s.pattern&&!new RegExp(s.pattern).test(value))errors.push(path+': pattern mismatch');
-    if(s.format==='date-time'&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)||!Number.isFinite(Date.parse(value))))errors.push(path+': invalid date-time');
+    if(s.format==='date-time'&&!validDateTime(value))errors.push(path+': invalid date-time');
     if(s.format&&s.format!=='date-time')errors.push(path+': unsupported format');
   }
   if(typeof value==='number'&&s.minimum!==undefined&&value<s.minimum)errors.push(path+': below minimum');
