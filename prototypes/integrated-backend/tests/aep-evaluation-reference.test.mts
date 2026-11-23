@@ -83,7 +83,7 @@ test('unsupported canonical task authority and mismatched source cannot masquera
     const changed = structuredClone(original);
     changed.tasks[0].executor = 'chatgpt.specialist';
     save(changed);
-    assert.throws(() => resolveAepEvaluationReference(f.reference, f.service, scope), /authority_unsupported/);
+    assert.throws(() => resolveAepEvaluationReference(f.reference, f.service, scope), /invalid_mission_task/);
     changed.tasks[0].executor = 'sample.cpu';
     changed.tasks[0].attempts[0].evidence.source = 'openai-api-vela:reported';
     save(changed);

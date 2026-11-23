@@ -212,6 +212,8 @@ export interface Mission {
 }
 export interface MissionProjection extends Mission {
   outcome: 'queued' | 'running' | 'paused' | 'cancelling' | 'cancelled' | 'blocked' | 'failed' | 'uncertain' | 'verified';
+  /** Persisted consequential work must be submitted through a new native review after process restart. */
+  restartReviewRequired?: true;
   answer?: string[];
   admission?: MissionAdmission;
   streamPending?: true;
